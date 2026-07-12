@@ -61,6 +61,7 @@ AI_VIDEO_MAX_WAIT_SECONDS = os.environ.get("AI_VIDEO_MAX_WAIT_SECONDS", "600")
 # Paths
 FFMPEG_PATH = os.environ.get("FFMPEG_PATH", "")
 PROJECTS_ROOT = os.environ.get("PROJECTS_ROOT", "projects")
+KNOWLEDGE_BASE_ROOT = os.environ.get("KNOWLEDGE_BASE_ROOT", "knowledge_base")
 
 def save_config(gemini_key, gemini_model, pexels_key, pixabay_key, ffmpeg_path, projects_root="projects", ai_video_keys=None):
     """Saves the configuration parameters back to the .env file and updates current state."""

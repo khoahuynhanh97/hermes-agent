@@ -10,7 +10,7 @@ import config
 from tools.video_downloader import download_video
 from tools.video_analyser import analyze_video
 
-KB_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'knowledge_base'))
+KB_DIR = os.path.abspath(getattr(config, "KNOWLEDGE_BASE_ROOT", os.path.join(os.path.dirname(__file__), '..', 'knowledge_base')))
 INDEX_FILE = os.path.join(KB_DIR, 'index.json')
 TEMP_DL_DIR = os.path.join(KB_DIR, 'temp_downloads')
 

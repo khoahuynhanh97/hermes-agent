@@ -23,10 +23,11 @@ from pathlib import Path
 from typing import Optional
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+import config
 
 logger = logging.getLogger(__name__)
 
-KB_DIR = Path(__file__).resolve().parent.parent / "knowledge_base"
+KB_DIR = Path(getattr(config, "KNOWLEDGE_BASE_ROOT", Path(__file__).resolve().parent.parent / "knowledge_base")).resolve()
 UNIFIED_INDEX_FILE = KB_DIR / "unified_index.json"
 ENTRIES_DIR = KB_DIR / "entries"
 

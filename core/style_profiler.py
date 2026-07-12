@@ -15,7 +15,7 @@ import config
 
 logger = logging.getLogger(__name__)
 
-KB_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'knowledge_base'))
+KB_DIR = os.path.abspath(getattr(config, "KNOWLEDGE_BASE_ROOT", os.path.join(os.path.dirname(__file__), '..', 'knowledge_base')))
 PROFILES_FILE = os.path.join(KB_DIR, 'style_profiles.json')
 
 

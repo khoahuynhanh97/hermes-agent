@@ -9,8 +9,9 @@ class LearningReviewStore:
     """Local approval queue for Hermes learning proposals."""
 
     def __init__(self, root=None):
+        import config
         repo_root = Path(__file__).resolve().parent.parent
-        self.root = Path(root or repo_root / "knowledge_base").resolve()
+        self.root = Path(root or getattr(config, "KNOWLEDGE_BASE_ROOT", repo_root / "knowledge_base")).resolve()
         self.queue_dir = self.root / "review_queue"
         self.approved_dir = self.root / "approved_lessons"
         self.rejected_dir = self.root / "rejected_lessons"
