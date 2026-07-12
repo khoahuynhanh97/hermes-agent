@@ -1,0 +1,42 @@
+{
+  "id": "kb_5be540618e5f",
+  "slug": "bai-hoc-hoc-tu-video-vt-tiktok-com-zscoueedv",
+  "source_url": "https://vt.tiktok.com/ZSCouEEdV/",
+  "platform": "tiktok",
+  "category": "General",
+  "status": "pending",
+  "learned_at": "2026-07-09T20:31:57",
+  "approved_at": null,
+  "approved_by": null,
+  "approval_mode": null,
+  "title": "Bài học học từ video Vt Tiktok Com Zscoueedv",
+  "hook_type": "question_hook",
+  "cta_style": "urgency",
+  "voice_tone": "warm",
+  "key_lessons": [
+    "Xem báo cáo phân tích chi tiết"
+  ],
+  "detail_file": "entries/kb_5be540618e5f.json",
+  "job_output_dir": "C:\\Work\\Code\\Hermes_download\\hermes-agent\\projects\\vt-tiktok-com-zscoueedv\\agent_outputs\\job_20260709_202528_5dd7aa",
+  "source": "telegram_job",
+  "detail": {
+    "raw_markdown": "# Knowledge Proposal\n\n## Tiêu đề: Bài học học từ video Vt Tiktok Com Zscoueedv\n- **Danh mục**: General\n- **Hook**: question_hook\n- **CTA**: urgency\n- **Giọng điệu**: warm\n- **Nguồn phân tích**: video_and_transcript | **Video downloaded**: True\n\n### Bài học cốt lõi:\n- Xem báo cáo phân tích chi tiết\n\n### Tóm tắt:\nKhông thể trích xuất JSON tri thức từ response.\n\n### Công cụ & Khái niệm:\nXem trong báo cáo phân tích chi tiết.\n\n### Quy trình:\nXem trong báo cáo phân tích chi tiết.\n\n### Ứng dụng cho Hermes:\nXem trong báo cáo phân tích chi tiết.\n\nSource: https://vt.tiktok.com/ZSCouEEdV/\nOutput folder: C:\\Work\\Code\\Hermes_download\\hermes-agent\\projects\\vt-tiktok-com-zscoueedv\\agent_outputs\\job_20260709_202528_5dd7aa\n",
+    "title": "Bài học học từ video Vt Tiktok Com Zscoueedv",
+    "category": "General",
+    "hook_type": "question_hook",
+    "cta_style": "urgency",
+    "voice_tone": "warm",
+    "key_lessons": [
+      "Xem báo cáo phân tích chi tiết"
+    ],
+    "summary": "Không thể trích xuất JSON tri thức từ response.",
+    "tools_and_concepts": "Xem trong báo cáo phân tích chi tiết.",
+    "workflow_steps": "Xem trong báo cáo phân tích chi tiết.",
+    "hermes_applications": "Xem trong báo cáo phân tích chi tiết.",
+    "validation_status": "fallback",
+    "validation_error": "[AIRouter] All providers failed. Last error: 404 Client Error: Not Found for url: http://localhost:11434/api/chat",
+    "analysis_source": "video_and_transcript",
+    "video_downloaded": true,
+    "confidence": "high"
+  }
+}

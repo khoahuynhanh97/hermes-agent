@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "name": "telegram-report-watcher",
+  "version": "0.1.0",
+  "description": "Watch Telegram reports and create reviewer prompts.",
+  "type": "cli",
+  "entrypoint": "main.py",
+  "inputs": [
+    {
+      "name": "chat_id",
+      "type": "string",
+      "required": true
+    }
+  ],
+  "outputs": [
+    "report.md",
+    "telegram_message"
+  ],
+  "permissions": {
+    "filesystem_read": [
+      "reports/**"
+    ],
+    "filesystem_write": [
+      "reports/**"
+    ],
+    "network": [
+      "telegram"
+    ],
+    "shell": false
+  },
+  "providers": [
+    "gemini",
+    "ollama",
+    "openrouter"
+  ]
+}

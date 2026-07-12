@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "name": "smoke-tool",
+  "version": "0.1.0",
+  "description": "Smoke Hermes tool",
+  "type": "cli",
+  "entrypoint": "main.py",
+  "inputs": [],
+  "outputs": [
+    "report.md"
+  ],
+  "permissions": {
+    "filesystem_read": [],
+    "filesystem_write": [
+      "output/**"
+    ],
+    "network": [],
+    "shell": false
+  },
+  "providers": [
+    "ollama",
+    "gemini",
+    "openrouter"
+  ]
+}

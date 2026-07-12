@@ -1,0 +1,33 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+.venv
+venv/
+ENV/
+
+# Project data and large media files (crucial to prevent GitHub size limit errors)
+projects/
+downloads/
+jobs/
+.agent_jobs/
+
+# IDE / Editor configs
+.vscode/
+.idea/
+.agents/
+.codex/
+
+# Log files
+*.log
+
+# Session files
+*.session
+*.session-journal
+
+# Custom directories
+scratch_test_downloads/
+reports/

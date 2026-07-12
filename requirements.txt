@@ -1,0 +1,16 @@
+customtkinter>=5.2.0
+google-generativeai>=0.5.0
+yt-dlp>=2024.3.10
+moviepy>=1.0.3
+requests>=2.31.0
+pillow>=10.0.0
+mutagen>=1.47.0
+pydub>=0.25.1
+python-dotenv>=1.0.0
+opencv-python>=4.8.0
+python-telegram-bot>=20.0
+telethon>=1.36.0
+ollama
+# v2 additions
+edge-tts>=7.0.0
+numpy>=1.24.0

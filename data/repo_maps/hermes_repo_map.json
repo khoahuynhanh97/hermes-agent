@@ -1,0 +1,4225 @@
+{
+  "schema_version": 1,
+  "repo_root": "C:\\Work\\Code\\Hermes_download\\hermes-agent",
+  "entry_count": 309,
+  "entries": [
+    {
+      "path": ".agent_jobs/done_archived/job_20260709_004453_8067b8.done.json",
+      "suffix": ".json",
+      "size_bytes": 31594,
+      "modified_at": 1783532949.3918893,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": ".agent_jobs/done_archived/job_20260709_111145_175754.done.json",
+      "suffix": ".json",
+      "size_bytes": 28498,
+      "modified_at": 1783570456.08116,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": ".agent_jobs/done_archived/job_20260709_161002_faf539.done.json",
+      "suffix": ".json",
+      "size_bytes": 28182,
+      "modified_at": 1783588322.7233043,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": ".agent_jobs/done_archived/job_20260709_202528_5dd7aa.done.json",
+      "suffix": ".json",
+      "size_bytes": 28823,
+      "modified_at": 1783603710.5031548,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": ".agent_jobs/done_archived/job_20260709_221322_7dc54f.done.json",
+      "suffix": ".json",
+      "size_bytes": 30618,
+      "modified_at": 1783610100.950882,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": ".agent_jobs/done_archived/job_20260709_223354_ce45fe.done.json",
+      "suffix": ".json",
+      "size_bytes": 28398,
+      "modified_at": 1783611301.0674314,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": ".agent_jobs/done_archived/job_20260709_223422_a4296f.done.json",
+      "suffix": ".json",
+      "size_bytes": 28204,
+      "modified_at": 1783611331.8142056,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": ".agent_jobs/done_archived/job_20260709_223655_92b8d9.done.json",
+      "suffix": ".json",
+      "size_bytes": 28794,
+      "modified_at": 1783611476.236802,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": ".agent_jobs/done_archived/job_20260709_223839_632064.done.json",
+      "suffix": ".json",
+      "size_bytes": 27320,
+      "modified_at": 1783611595.1078103,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": ".agent_jobs/failed/job_20260709_002411_1ed051.failed.json",
+      "suffix": ".json",
+      "size_bytes": 27254,
+      "modified_at": 1783531546.2099824,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": ".env.example",
+      "suffix": ".example",
+      "size_bytes": 1423,
+      "modified_at": 1783529578.9288614,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": ".gitignore",
+      "suffix": "",
+      "size_bytes": 293,
+      "modified_at": 1782658995.6389058,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "README.md",
+      "suffix": ".md",
+      "size_bytes": 13425,
+      "modified_at": 1782661248.548082,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "README_GUI.md",
+      "suffix": ".md",
+      "size_bytes": 3458,
+      "modified_at": 1782060235.9778914,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "config.py",
+      "suffix": ".py",
+      "size_bytes": 5776,
+      "modified_at": 1783529574.0392826,
+      "symbols": [
+        "save_config",
+        "verify_config"
+      ],
+      "imports": [
+        "dotenv",
+        "os"
+      ]
+    },
+    {
+      "path": "core/agent_jobs.py",
+      "suffix": ".py",
+      "size_bytes": 21693,
+      "modified_at": 1782922245.1386967,
+      "symbols": [
+        "AgentJobManager",
+        "__init__",
+        "_append_project_job",
+        "_derive_project_name",
+        "_detect_source_kind",
+        "_ensure_dirs",
+        "_new_job_id",
+        "_read_json",
+        "_resolve_target_project",
+        "_sync_manifest_artifacts",
+        "_update_project_job_status",
+        "_write_json",
+        "_write_worker_prompt",
+        "archive_done_job",
+        "complete_job",
+        "create_job",
+        "fail_job",
+        "get_outbox_results",
+        "list_jobs",
+        "load_manifest_job",
+        "mark_processing"
+      ],
+      "imports": [
+        "core.file_manager",
+        "core.manifest",
+        "core.project_manager",
+        "core.task_queue",
+        "datetime",
+        "json",
+        "os",
+        "pathlib",
+        "re",
+        "shutil",
+        "uuid"
+      ]
+    },
+    {
+      "path": "core/ai_router.py",
+      "suffix": ".py",
+      "size_bytes": 13162,
+      "modified_at": 1782842193.115545,
+      "symbols": [
+        "AIRouter",
+        "ProviderState",
+        "RateLimitError",
+        "__init__",
+        "__new__",
+        "_call_gemini",
+        "_call_ollama",
+        "_call_openai_compat",
+        "_get_api_key",
+        "_get_available_providers",
+        "chat",
+        "get_router",
+        "get_status",
+        "is_available",
+        "record_error",
+        "record_request"
+      ],
+      "imports": [
+        "config",
+        "json",
+        "logging",
+        "os",
+        "requests",
+        "sys",
+        "time",
+        "typing"
+      ]
+    },
+    {
+      "path": "core/artifact_store.py",
+      "suffix": ".py",
+      "size_bytes": 3918,
+      "modified_at": 1782658293.3085153,
+      "symbols": [
+        "ArtifactStore",
+        "__init__",
+        "_infer_type",
+        "_now",
+        "_write_meta",
+        "artifact_path",
+        "has_artifact",
+        "list_artifacts",
+        "read_artifact",
+        "register_artifact",
+        "sync_from_files",
+        "write_artifact"
+      ],
+      "imports": [
+        "datetime",
+        "json",
+        "pathlib"
+      ]
+    },
+    {
+      "path": "core/assistant_runtime.py",
+      "suffix": ".py",
+      "size_bytes": 9146,
+      "modified_at": 1783703742.5576675,
+      "symbols": [
+        "AssistantPlan",
+        "AssistantTask",
+        "HermesAssistantRuntime",
+        "__init__",
+        "_build_task",
+        "_permissions_for",
+        "_suggested_command",
+        "action_for_module",
+        "build_plan",
+        "classify",
+        "escape_for_cmd",
+        "format_markdown",
+        "normalize_text",
+        "split_request",
+        "summarize_task_title",
+        "to_dict"
+      ],
+      "imports": [
+        "__future__",
+        "dataclasses",
+        "pathlib",
+        "re",
+        "typing"
+      ]
+    },
+    {
+      "path": "core/clip_library.py",
+      "suffix": ".py",
+      "size_bytes": 7157,
+      "modified_at": 1782236881.2650948,
+      "symbols": [
+        "ClipLibrary",
+        "__init__",
+        "_ensure_subdirs",
+        "_load",
+        "_save",
+        "add_clip",
+        "get_all_clips",
+        "get_clips_by_status",
+        "get_clips_by_tag",
+        "get_stats",
+        "get_usable_clips",
+        "remove_clip",
+        "search_clips",
+        "update_clip"
+      ],
+      "imports": [
+        "cv2",
+        "datetime",
+        "json",
+        "os",
+        "sys",
+        "uuid"
+      ]
+    },
+    {
+      "path": "core/coding_agent.py",
+      "suffix": ".py",
+      "size_bytes": 12748,
+      "modified_at": 1783703817.162758,
+      "symbols": [
+        "CodingAgentPlanner",
+        "CodingPlan",
+        "SelectedFile",
+        "__init__",
+        "_blocked_paths",
+        "_default_report_path",
+        "_entry_to_selected_file",
+        "_implementation_steps",
+        "_load_or_build_map",
+        "_risks",
+        "_select_source_entries",
+        "_verification_commands",
+        "build_plan",
+        "build_search_query",
+        "candidate_score",
+        "format_markdown",
+        "is_generated_or_runtime_path",
+        "match_reason",
+        "read_preview",
+        "rerank_candidates",
+        "slugify",
+        "to_dict",
+        "write_report"
+      ],
+      "imports": [
+        "__future__",
+        "core.repo_map",
+        "dataclasses",
+        "datetime",
+        "json",
+        "pathlib",
+        "re"
+      ]
+    },
+    {
+      "path": "core/file_manager.py",
+      "suffix": ".py",
+      "size_bytes": 3100,
+      "modified_at": 1782141908.5114462,
+      "symbols": [
+        "clean_filename",
+        "create_directory_structure",
+        "list_downloaded_materials",
+        "list_generated_clips",
+        "to_slug"
+      ],
+      "imports": [
+        "os",
+        "pathlib",
+        "re",
+        "unicodedata"
+      ]
+    },
+    {
+      "path": "core/idea_engine.py",
+      "suffix": ".py",
+      "size_bytes": 5919,
+      "modified_at": 1782236822.2919588,
+      "symbols": [
+        "generate_ideas",
+        "load_ideas",
+        "load_selected_angles",
+        "save_ideas",
+        "save_selected_angles"
+      ],
+      "imports": [
+        "config",
+        "json",
+        "os",
+        "re",
+        "requests",
+        "sys"
+      ]
+    },
+    {
+      "path": "core/job_dedup.py",
+      "suffix": ".py",
+      "size_bytes": 5815,
+      "modified_at": 1783529545.907187,
+      "symbols": [
+        "JobDedup",
+        "__init__",
+        "_is_expired",
+        "_load",
+        "_parse_time",
+        "_save",
+        "cleanup_expired",
+        "create_or_duplicate",
+        "is_duplicate",
+        "lock_for",
+        "make_key",
+        "normalize_source",
+        "register"
+      ],
+      "imports": [
+        "contextlib",
+        "datetime",
+        "hashlib",
+        "json",
+        "logging",
+        "pathlib",
+        "threading",
+        "urllib.parse"
+      ]
+    },
+    {
+      "path": "core/job_watcher.py",
+      "suffix": ".py",
+      "size_bytes": 50556,
+      "modified_at": 1783541292.9759803,
+      "symbols": [
+        "JobWorker",
+        "__init__",
+        "_download_blocked",
+        "_handle_legacy_job_failure",
+        "_knowledge_learning_prompt",
+        "_load_circuit_state",
+        "_no_media_analysis",
+        "_no_media_knowledge_proposal",
+        "_no_media_learning_proposal",
+        "_notify_telegram",
+        "_now",
+        "_platform_from_url",
+        "_record_download_result",
+        "_record_validation_fallback",
+        "_resolve_media_for_analysis",
+        "_save_circuit_state",
+        "_video_learning_prompt",
+        "_write_upgrade_audit_placeholders",
+        "execute_job_tasks",
+        "extract_json_from_response",
+        "prepare_transcript_context",
+        "process_next_job",
+        "process_next_manifest_task",
+        "start_watching",
+        "validate_extracted_json"
+      ],
+      "imports": [
+        "asyncio",
+        "config",
+        "core.agent_jobs",
+        "core.ai_router",
+        "core.learning_review",
+        "core.observability",
+        "core.router",
+        "core.style_profiler",
+        "core.task_queue",
+        "datetime",
+        "json",
+        "logging",
+        "os",
+        "pathlib",
+        "re",
+        "requests",
+        "sys",
+        "time",
+        "tools.script_generator",
+        "tools.video_analyser",
+        "tools.video_downloader"
+      ]
+    },
+    {
+      "path": "core/keyword_generator.py",
+      "suffix": ".py",
+      "size_bytes": 13601,
+      "modified_at": 1782829048.3793192,
+      "symbols": [
+        "extract_keywords_from_product_page",
+        "extract_smart_keywords",
+        "generate_keywords",
+        "nlp_expand_keywords",
+        "translate_to_zh"
+      ],
+      "imports": [
+        "config",
+        "json",
+        "os",
+        "re",
+        "requests",
+        "sys"
+      ]
+    },
+    {
+      "path": "core/knowledge_base.py",
+      "suffix": ".py",
+      "size_bytes": 12678,
+      "modified_at": 1783356355.306919,
+      "symbols": [
+        "delete_learned_item",
+        "ensure_kb_dirs",
+        "get_learned_detail",
+        "learn_from_url",
+        "load_learned_list",
+        "log",
+        "save_learned_list",
+        "to_slug"
+      ],
+      "imports": [
+        "config",
+        "core.knowledge_store",
+        "json",
+        "os",
+        "re",
+        "shutil",
+        "sys",
+        "tools.video_analyser",
+        "tools.video_downloader"
+      ]
+    },
+    {
+      "path": "core/knowledge_store.py",
+      "suffix": ".py",
+      "size_bytes": 22319,
+      "modified_at": 1783587167.2917826,
+      "symbols": [
+        "UnifiedKnowledgeStore",
+        "__init__",
+        "_ensure_dirs",
+        "_execute_migration",
+        "_load_index",
+        "_now_iso",
+        "_rebuild_style_profile",
+        "_reload",
+        "_save_index",
+        "_save_index_atomic",
+        "_slug",
+        "_unique_id",
+        "add_entry",
+        "approve_entry",
+        "delete_entry",
+        "find_existing_entry",
+        "get_approved_entries",
+        "get_entry",
+        "get_pending_entries",
+        "get_store",
+        "get_style_context",
+        "get_style_context_for_script",
+        "list_entries",
+        "make_source_hash",
+        "mark_approved",
+        "mark_rejected",
+        "migrate_from_v1_index",
+        "normalize_source_url",
+        "reject_entry"
+      ],
+      "imports": [
+        "core.style_profiler",
+        "datetime",
+        "hashlib",
+        "json",
+        "logging",
+        "os",
+        "pathlib",
+        "re",
+        "shutil",
+        "sys",
+        "typing",
+        "urllib.parse",
+        "uuid"
+      ]
+    },
+    {
+      "path": "core/learning_review.py",
+      "suffix": ".py",
+      "size_bytes": 8211,
+      "modified_at": 1783356346.6909237,
+      "symbols": [
+        "LearningReviewStore",
+        "__init__",
+        "_ensure_dirs",
+        "_move",
+        "_slug",
+        "approve",
+        "create_proposal",
+        "list_pending",
+        "read",
+        "reject"
+      ],
+      "imports": [
+        "core.knowledge_store",
+        "datetime",
+        "json",
+        "pathlib",
+        "re",
+        "shutil"
+      ]
+    },
+    {
+      "path": "core/manifest.py",
+      "suffix": ".py",
+      "size_bytes": 2787,
+      "modified_at": 1782921833.7362545,
+      "symbols": [
+        "create_manifest",
+        "load_manifest",
+        "new_job_id",
+        "now_iso",
+        "save_manifest",
+        "set_manifest_status"
+      ],
+      "imports": [
+        "copy",
+        "datetime",
+        "json",
+        "pathlib",
+        "uuid"
+      ]
+    },
+    {
+      "path": "core/metadata_store.py",
+      "suffix": ".py",
+      "size_bytes": 2147,
+      "modified_at": 1782060565.2218475,
+      "symbols": [
+        "ProjectMetadata",
+        "__init__",
+        "from_dict",
+        "to_dict"
+      ],
+      "imports": []
+    },
+    {
+      "path": "core/observability.py",
+      "suffix": ".py",
+      "size_bytes": 4280,
+      "modified_at": 1783529455.4198735,
+      "symbols": [
+        "_now",
+        "cleanup_raw_response_logs",
+        "record_suspicious_instruction",
+        "send_telegram_alert",
+        "write_gemini_raw_response"
+      ],
+      "imports": [
+        "datetime",
+        "gzip",
+        "json",
+        "os",
+        "pathlib",
+        "urllib.parse",
+        "urllib.request"
+      ]
+    },
+    {
+      "path": "core/patch_executor.py",
+      "suffix": ".py",
+      "size_bytes": 5411,
+      "modified_at": 1783703901.8086174,
+      "symbols": [
+        "PatchExecutionResult",
+        "PatchExecutor",
+        "__init__",
+        "_default_report_path",
+        "_run_git_apply",
+        "check",
+        "execute",
+        "extract_patch_paths",
+        "normalize_diff_path",
+        "write_report"
+      ],
+      "imports": [
+        "__future__",
+        "core.permission_gate",
+        "dataclasses",
+        "datetime",
+        "pathlib",
+        "re",
+        "subprocess",
+        "tempfile"
+      ]
+    },
+    {
+      "path": "core/pending_store.py",
+      "suffix": ".py",
+      "size_bytes": 3809,
+      "modified_at": 1783096661.7219663,
+      "symbols": [
+        "PendingStore",
+        "__init__",
+        "_load",
+        "_now",
+        "_parse_time",
+        "_save",
+        "cleanup_expired",
+        "clear_file",
+        "clear_link",
+        "get_file",
+        "get_link",
+        "set_file",
+        "set_link"
+      ],
+      "imports": [
+        "datetime",
+        "json",
+        "pathlib",
+        "threading"
+      ]
+    },
+    {
+      "path": "core/permission_gate.py",
+      "suffix": ".py",
+      "size_bytes": 2384,
+      "modified_at": 1783703845.6207178,
+      "symbols": [
+        "PermissionDecision",
+        "PermissionGate",
+        "__init__",
+        "assert_allowed",
+        "check_many",
+        "check_write_path"
+      ],
+      "imports": [
+        "__future__",
+        "dataclasses",
+        "fnmatch",
+        "pathlib"
+      ]
+    },
+    {
+      "path": "core/planner.py",
+      "suffix": ".py",
+      "size_bytes": 14099,
+      "modified_at": 1782922079.7667434,
+      "symbols": [
+        "build_input_context",
+        "generate_master_prompt",
+        "generate_worker_prompt",
+        "plan_tasks",
+        "write_task_files"
+      ],
+      "imports": [
+        "json",
+        "pathlib"
+      ]
+    },
+    {
+      "path": "core/project_creator.py",
+      "suffix": ".py",
+      "size_bytes": 20021,
+      "modified_at": 1782755302.3601644,
+      "symbols": [
+        "extract_metadata_from_text",
+        "log",
+        "run_auto_pipeline",
+        "scrape_shopee_metadata",
+        "verify_material_prerequisites"
+      ],
+      "imports": [
+        "config",
+        "core.keyword_generator",
+        "core.project_manager",
+        "core.script_generator",
+        "core.visual_matcher",
+        "editor.clip_cutter",
+        "json",
+        "os",
+        "providers.pexels_provider",
+        "providers.pixabay_provider",
+        "providers.product_image_provider",
+        "providers.shopee_search_provider",
+        "providers.social_search_provider",
+        "re",
+        "requests",
+        "shutil",
+        "sys",
+        "tools.video_analyser",
+        "tools.video_downloader",
+        "urllib.parse"
+      ]
+    },
+    {
+      "path": "core/project_manager.py",
+      "suffix": ".py",
+      "size_bytes": 6680,
+      "modified_at": 1782234182.042861,
+      "symbols": [
+        "ProjectManager",
+        "__init__",
+        "get_metadata",
+        "get_project_folders",
+        "get_project_path",
+        "get_projects_root",
+        "initialize_project",
+        "list_projects",
+        "save_metadata"
+      ],
+      "imports": [
+        "config",
+        "core.file_manager",
+        "json",
+        "os",
+        "pathlib",
+        "sys"
+      ]
+    },
+    {
+      "path": "core/prompt_engine.py",
+      "suffix": ".py",
+      "size_bytes": 7185,
+      "modified_at": 1782236854.1521966,
+      "symbols": [
+        "generate_prompts_from_storyboard",
+        "load_prompts"
+      ],
+      "imports": [
+        "json",
+        "os",
+        "re",
+        "sys"
+      ]
+    },
+    {
+      "path": "core/prompt_library.py",
+      "suffix": ".py",
+      "size_bytes": 4227,
+      "modified_at": 1782581868.1640506,
+      "symbols": [
+        "PromptTemplateError",
+        "ensure_prompt_library",
+        "extract_variables",
+        "find_prompt_template",
+        "list_prompt_templates",
+        "load_prompt_template",
+        "parse_prompt_template",
+        "render_prompt_template",
+        "replace",
+        "save_prompt_template"
+      ],
+      "imports": [
+        "os",
+        "pathlib",
+        "re"
+      ]
+    },
+    {
+      "path": "core/repo_map.py",
+      "suffix": ".py",
+      "size_bytes": 5183,
+      "modified_at": 1783613779.3319254,
+      "symbols": [
+        "RepoMap",
+        "RepoMapEntry",
+        "__init__",
+        "_is_excluded",
+        "_iter_files",
+        "_map_file",
+        "build",
+        "extract_imports",
+        "extract_symbols",
+        "search",
+        "write"
+      ],
+      "imports": [
+        "__future__",
+        "dataclasses",
+        "json",
+        "pathlib",
+        "re",
+        "typing"
+      ]
+    },
+    {
+      "path": "core/router.py",
+      "suffix": ".py",
+      "size_bytes": 2549,
+      "modified_at": 1783527405.5158873,
+      "symbols": [
+        "get_engine",
+        "get_mode",
+        "normalize_command",
+        "resolve_route"
+      ],
+      "imports": [
+        "re"
+      ]
+    },
+    {
+      "path": "core/script_generator.py",
+      "suffix": ".py",
+      "size_bytes": 10744,
+      "modified_at": 1783590792.0692568,
+      "symbols": [
+        "generate_script",
+        "save_script_files"
+      ],
+      "imports": [
+        "config",
+        "core.knowledge_store",
+        "json",
+        "os",
+        "re",
+        "requests",
+        "sys"
+      ]
+    },
+    {
+      "path": "core/status.py",
+      "suffix": ".py",
+      "size_bytes": 1251,
+      "modified_at": 1782658291.2709966,
+      "symbols": [
+        "apply_status_to_manifest",
+        "compute_job_status",
+        "compute_progress",
+        "normalize_task_status"
+      ],
+      "imports": [
+        "core.manifest"
+      ]
+    },
+    {
+      "path": "core/storyboard_generator.py",
+      "suffix": ".py",
+      "size_bytes": 7195,
+      "modified_at": 1782066151.5488656,
+      "symbols": [
+        "generate_storyboard"
+      ],
+      "imports": [
+        "config",
+        "json",
+        "os",
+        "re",
+        "requests",
+        "sys"
+      ]
+    },
+    {
+      "path": "core/storyboard_writer.py",
+      "suffix": ".py",
+      "size_bytes": 4492,
+      "modified_at": 1782066009.3623416,
+      "symbols": [
+        "save_storyboard_outputs"
+      ],
+      "imports": [
+        "json",
+        "os"
+      ]
+    },
+    {
+      "path": "core/style_profiler.py",
+      "suffix": ".py",
+      "size_bytes": 10450,
+      "modified_at": 1783355729.7255661,
+      "symbols": [
+        "build_profile",
+        "extract_style_profile",
+        "get_profile_summary",
+        "inject_style_into_prompt",
+        "load_knowledge_base",
+        "load_profile",
+        "most_common",
+        "save_profile"
+      ],
+      "imports": [
+        "collections",
+        "config",
+        "core.knowledge_store",
+        "json",
+        "logging",
+        "os",
+        "re",
+        "sys",
+        "typing"
+      ]
+    },
+    {
+      "path": "core/task_queue.py",
+      "suffix": ".py",
+      "size_bytes": 8724,
+      "modified_at": 1782658297.2303817,
+      "symbols": [
+        "TaskQueue",
+        "__init__",
+        "_ensure_dirs",
+        "_log",
+        "_move_for_manifest_status",
+        "_read_json",
+        "_source_summary",
+        "_update_task",
+        "create_job",
+        "find_job_dir",
+        "list_jobs",
+        "load_job",
+        "load_tasks",
+        "mark_task_done",
+        "mark_task_failed",
+        "mark_task_running",
+        "save_tasks"
+      ],
+      "imports": [
+        "core.artifact_store",
+        "core.manifest",
+        "core.planner",
+        "core.status",
+        "json",
+        "pathlib",
+        "shutil"
+      ]
+    },
+    {
+      "path": "core/verification_runner.py",
+      "suffix": ".py",
+      "size_bytes": 5809,
+      "modified_at": 1783703973.374411,
+      "symbols": [
+        "VerificationCommandResult",
+        "VerificationRun",
+        "VerificationRunner",
+        "__init__",
+        "_default_report_path",
+        "_run_one",
+        "is_allowed_command",
+        "run",
+        "to_dict",
+        "write_report"
+      ],
+      "imports": [
+        "__future__",
+        "dataclasses",
+        "datetime",
+        "pathlib",
+        "shlex",
+        "subprocess"
+      ]
+    },
+    {
+      "path": "core/video_fetcher.py",
+      "suffix": ".py",
+      "size_bytes": 11635,
+      "modified_at": 1783096378.247192,
+      "symbols": [
+        "fetch_transcript",
+        "is_blocked_error",
+        "parse_vtt_to_text"
+      ],
+      "imports": [
+        "logging",
+        "os",
+        "pathlib",
+        "re",
+        "subprocess",
+        "whisper"
+      ]
+    },
+    {
+      "path": "core/visual_matcher.py",
+      "suffix": ".py",
+      "size_bytes": 5251,
+      "modified_at": 1782754167.5697024,
+      "symbols": [
+        "calculate_image_similarity",
+        "extract_sample_frame_from_video",
+        "filter_materials_by_reference",
+        "log"
+      ],
+      "imports": [
+        "cv2",
+        "numpy",
+        "os",
+        "sys"
+      ]
+    },
+    {
+      "path": "docs/hermes-assistant-architecture.md",
+      "suffix": ".md",
+      "size_bytes": 3727,
+      "modified_at": 1783613568.8659797,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "docs/hermes-assistant-rollout-plan.md",
+      "suffix": ".md",
+      "size_bytes": 4102,
+      "modified_at": 1783704016.7367656,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "docs/hermes-user-flow.md",
+      "suffix": ".md",
+      "size_bytes": 12093,
+      "modified_at": 1782922994.754207,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "docs/tool-manifest-format.md",
+      "suffix": ".md",
+      "size_bytes": 1825,
+      "modified_at": 1783613608.1243067,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "downloaders/direct_downloader.py",
+      "suffix": ".py",
+      "size_bytes": 1580,
+      "modified_at": 1782060566.8445456,
+      "symbols": [
+        "download_direct",
+        "log"
+      ],
+      "imports": [
+        "os",
+        "requests"
+      ]
+    },
+    {
+      "path": "downloaders/ytdlp_downloader.py",
+      "suffix": ".py",
+      "size_bytes": 4093,
+      "modified_at": 1782060569.8543594,
+      "symbols": [
+        "YDLLogger",
+        "__init__",
+        "debug",
+        "download_with_ytdlp",
+        "error",
+        "info",
+        "log",
+        "warning"
+      ],
+      "imports": [
+        "os",
+        "re",
+        "yt_dlp"
+      ]
+    },
+    {
+      "path": "editor/audio_helper.py",
+      "suffix": ".py",
+      "size_bytes": 864,
+      "modified_at": 1782060584.8954344,
+      "symbols": [
+        "get_audio_duration"
+      ],
+      "imports": [
+        "moviepy.editor",
+        "mutagen",
+        "os"
+      ]
+    },
+    {
+      "path": "editor/background_swapper.py",
+      "suffix": ".py",
+      "size_bytes": 8944,
+      "modified_at": 1782842305.6897707,
+      "symbols": [
+        "_read_image_safe",
+        "log",
+        "merge_audio",
+        "swap_background",
+        "swap_background_ai",
+        "swap_background_chroma"
+      ],
+      "imports": [
+        "PIL",
+        "config",
+        "cv2",
+        "logging",
+        "numpy",
+        "os",
+        "pathlib",
+        "rembg",
+        "subprocess",
+        "sys"
+      ]
+    },
+    {
+      "path": "editor/clip_analyzer.py",
+      "suffix": ".py",
+      "size_bytes": 18566,
+      "modified_at": 1782824139.466787,
+      "symbols": [
+        "analyze_clip",
+        "log",
+        "verify_final_video"
+      ],
+      "imports": [
+        "config",
+        "cv2",
+        "numpy",
+        "os",
+        "pathlib",
+        "re",
+        "subprocess",
+        "sys"
+      ]
+    },
+    {
+      "path": "editor/clip_cutter.py",
+      "suffix": ".py",
+      "size_bytes": 17548,
+      "modified_at": 1782753919.0142975,
+      "symbols": [
+        "crop_to_9_16_vertical",
+        "cut_materials_into_clips",
+        "cut_single_clip",
+        "get_next_clip_index",
+        "log"
+      ],
+      "imports": [
+        "config",
+        "datetime",
+        "editor.clip_analyzer",
+        "moviepy.editor",
+        "moviepy.video.fx.all",
+        "os",
+        "pathlib",
+        "re",
+        "sys"
+      ]
+    },
+    {
+      "path": "editor/subtitle_generator.py",
+      "suffix": ".py",
+      "size_bytes": 5102,
+      "modified_at": 1782060591.01363,
+      "symbols": [
+        "create_subtitle_overlays",
+        "draw_subtitle_frame",
+        "generate_subtitles_from_script",
+        "log",
+        "wrap_text"
+      ],
+      "imports": [
+        "PIL",
+        "moviepy.editor",
+        "numpy",
+        "os"
+      ]
+    },
+    {
+      "path": "editor/video_editor.py",
+      "suffix": ".py",
+      "size_bytes": 14690,
+      "modified_at": 1782824149.0720246,
+      "symbols": [
+        "build_tiktok_video",
+        "crop_to_9_16",
+        "log"
+      ],
+      "imports": [
+        "config",
+        "editor.audio_helper",
+        "editor.clip_analyzer",
+        "editor.subtitle_generator",
+        "json",
+        "moviepy.editor",
+        "moviepy.video.fx.all",
+        "os",
+        "random",
+        "sys"
+      ]
+    },
+    {
+      "path": "gui/app.py",
+      "suffix": ".py",
+      "size_bytes": 152016,
+      "modified_at": 1783606816.6056097,
+      "symbols": [
+        "HermesTikTokVideoFactoryApp",
+        "__init__",
+        "_build_ai_video_prompts",
+        "_ensure_clip_library",
+        "_parse_keyword_text",
+        "_post_process_downloaded_file",
+        "_refresh_router_status",
+        "_render_idea_cards",
+        "_run_all_checks",
+        "_unique_keywords",
+        "adjust_manual_time",
+        "approve_learning_review",
+        "build_tab_agent_jobs",
+        "build_tab_audio",
+        "build_tab_clip_cutting",
+        "build_tab_clip_library",
+        "build_tab_editor",
+        "build_tab_idea_engine",
+        "build_tab_knowledge_hub",
+        "build_tab_learn_and_review",
+        "build_tab_learning_review",
+        "build_tab_manual_cutting",
+        "build_tab_materials",
+        "build_tab_product",
+        "build_tab_prompt_compiler",
+        "build_tab_results",
+        "build_tab_script",
+        "build_tab_settings",
+        "build_tab_settings_merged",
+        "build_tab_storyboard",
+        "check_ffmpeg",
+        "check_gemini",
+        "check_gemini_silent",
+        "check_ytdlp",
+        "copy_script_to_clipboard",
+        "crawl_douyin",
+        "crawl_tiktok",
+        "create_quick_project",
+        "create_sidebar",
+        "create_workspace",
+        "finish_clip_cutting",
+        "finish_downloading_materials",
+        "finish_keywords_generation",
+        "finish_knowledge_learning",
+        "finish_manual_cut",
+        "finish_run",
+        "finish_script_generation",
+        "finish_video_editing",
+        "generate_project_keywords",
+        "generate_project_script",
+        "get_manual_keywords_from_ui",
+        "gui_log",
+        "import_voice_audio",
+        "kb_delete_item",
+        "kb_refresh_list",
+        "kb_view_item",
+        "lib_add_tag",
+        "lib_import_clips",
+        "lib_open_dir",
+        "lib_refresh_cards",
+        "lib_update_status",
+        "load_project_details",
+        "load_project_list",
+        "manual_browse_save_dir",
+        "manual_select_video",
+        "on_app_closing",
+        "on_learning_review_selected",
+        "on_manual_cut_failed",
+        "on_manual_end_slider_move",
+        "on_manual_entry_update",
+        "on_manual_start_slider_move",
+        "on_project_combobox_change",
+        "on_script_error",
+        "on_video_editing_failed",
+        "open_auto_pipeline_dialog",
+        "open_clips_dir",
+        "open_export_dir",
+        "read_md",
+        "refresh_clip_statistics",
+        "refresh_learning_reviews"
+      ],
+      "imports": [
+        "PIL",
+        "concurrent.futures",
+        "config",
+        "core",
+        "core.agent_jobs",
+        "core.ai_router",
+        "core.clip_library",
+        "core.file_manager",
+        "core.idea_engine",
+        "core.keyword_generator",
+        "core.knowledge_base",
+        "core.knowledge_store",
+        "core.learning_review",
+        "core.project_creator",
+        "core.project_manager",
+        "core.prompt_engine",
+        "core.script_generator",
+        "customtkinter",
+        "cv2",
+        "editor.audio_helper",
+        "editor.clip_cutter",
+        "editor.video_editor",
+        "gui.components",
+        "gui.tabs.agent_jobs_tab",
+        "gui.tabs.audio_generator_tab",
+        "gui.tabs.idea_engine_tab",
+        "gui.tabs.learn_review_tab",
+        "gui.tabs.script_generator_tab",
+        "gui.tabs.settings_tab",
+        "gui.tabs.storyboard_tab",
+        "gui.theme",
+        "json",
+        "os",
+        "pathlib",
+        "providers.ai_video_provider",
+        "providers.custom_scraper_adapter",
+        "providers.pexels_provider",
+        "providers.pixabay_provider",
+        "providers.product_image_provider",
+        "providers.shopee_search_provider",
+        "providers.smart_crawler_provider",
+        "providers.social_search_provider",
+        "providers.supplier_feed_provider",
+        "providers.url_list_provider",
+        "re",
+        "requests",
+        "shutil",
+        "subprocess",
+        "sys",
+        "threading",
+        "tkinter",
+        "yt_dlp"
+      ]
+    },
+    {
+      "path": "gui/app_staged.py",
+      "suffix": ".py",
+      "size_bytes": 248950,
+      "modified_at": 1783606390.6795511,
+      "symbols": [
+        "HermesTikTokVideoFactoryApp",
+        "__init__",
+        "_browse_ffmpeg",
+        "_browse_projects_root",
+        "_build_ai_video_prompts",
+        "_ensure_clip_library",
+        "_loop",
+        "_parse_keyword_text",
+        "_post_process_downloaded_file",
+        "_refresh_router_status",
+        "_render_idea_cards",
+        "_run_all_checks",
+        "_tts_done",
+        "_tts_error",
+        "_tts_generate",
+        "_tts_load_from_script",
+        "_unique_keywords",
+        "_update_selected_count",
+        "adjust_manual_time",
+        "agent_copy_worker_prompt",
+        "agent_create_job",
+        "agent_refresh_jobs",
+        "agent_refresh_projects",
+        "agent_select_video",
+        "agent_use_active_project",
+        "approve_learning_review",
+        "auto_select_top_n",
+        "browse_sample_video",
+        "build_tab_agent_jobs",
+        "build_tab_audio",
+        "build_tab_clip_cutting",
+        "build_tab_clip_library",
+        "build_tab_editor",
+        "build_tab_idea_engine",
+        "build_tab_knowledge_hub",
+        "build_tab_learn_and_review",
+        "build_tab_learning_review",
+        "build_tab_manual_cutting",
+        "build_tab_materials",
+        "build_tab_product",
+        "build_tab_prompt_compiler",
+        "build_tab_results",
+        "build_tab_script",
+        "build_tab_settings",
+        "build_tab_settings_merged",
+        "build_tab_storyboard",
+        "check_ffmpeg",
+        "check_gemini",
+        "check_gemini_silent",
+        "check_ytdlp",
+        "copy_all_storyboard",
+        "copy_image_prompts",
+        "copy_script_to_clipboard",
+        "copy_video_prompts",
+        "crawl_douyin",
+        "crawl_tiktok",
+        "create_quick_project",
+        "create_sidebar",
+        "create_workspace",
+        "deselect_all_ideas",
+        "export_prompts_from_storyboard",
+        "finish_clip_cutting",
+        "finish_downloading_materials",
+        "finish_export_prompts",
+        "finish_idea_generation",
+        "finish_keywords_generation",
+        "finish_knowledge_learning",
+        "finish_manual_cut",
+        "finish_prompt_extraction",
+        "finish_run",
+        "finish_script_generation",
+        "finish_storyboard_generation",
+        "generate_project_keywords",
+        "generate_project_script",
+        "get_manual_keywords_from_ui",
+        "gui_log",
+        "import_voice_audio",
+        "kb_delete_item",
+        "kb_refresh_list",
+        "kb_view_item"
+      ],
+      "imports": [
+        "PIL",
+        "concurrent.futures",
+        "config",
+        "core.agent_jobs",
+        "core.ai_router",
+        "core.clip_library",
+        "core.file_manager",
+        "core.idea_engine",
+        "core.keyword_generator",
+        "core.knowledge_base",
+        "core.knowledge_store",
+        "core.learning_review",
+        "core.project_creator",
+        "core.project_manager",
+        "core.prompt_engine",
+        "core.script_generator",
+        "core.storyboard_generator",
+        "core.storyboard_writer",
+        "customtkinter",
+        "cv2",
+        "editor.audio_helper",
+        "editor.clip_cutter",
+        "editor.video_editor",
+        "gui.components",
+        "gui.tabs.learn_review_tab",
+        "gui.tabs.settings_tab",
+        "gui.theme",
+        "json",
+        "os",
+        "pathlib",
+        "providers.ai_video_provider",
+        "providers.custom_scraper_adapter",
+        "providers.pexels_provider",
+        "providers.pixabay_provider",
+        "providers.product_image_provider",
+        "providers.shopee_search_provider",
+        "providers.smart_crawler_provider",
+        "providers.social_search_provider",
+        "providers.supplier_feed_provider",
+        "providers.url_list_provider",
+        "re",
+        "requests",
+        "shutil",
+        "subprocess",
+        "sys",
+        "threading",
+        "tkinter",
+        "tkinter.filedialog",
+        "tools.tts_engine",
+        "tools.video_analyser",
+        "yt_dlp"
+      ]
+    },
+    {
+      "path": "gui/components.py",
+      "suffix": ".py",
+      "size_bytes": 9773,
+      "modified_at": 1783591343.9595098,
+      "symbols": [
+        "CollapsibleSection",
+        "ConsoleView",
+        "LabeledEntry",
+        "LabeledTextbox",
+        "SectionHeader",
+        "StatusIndicator",
+        "__init__",
+        "_toggle",
+        "clear",
+        "collapse",
+        "expand",
+        "get",
+        "log",
+        "set",
+        "set_error",
+        "set_info",
+        "set_ok"
+      ],
+      "imports": [
+        "customtkinter",
+        "gui.theme"
+      ]
+    },
+    {
+      "path": "gui/prompt_compiler_tab.py",
+      "suffix": ".py",
+      "size_bytes": 19444,
+      "modified_at": 1782888059.919859,
+      "symbols": [
+        "PromptCompilerTab",
+        "__init__",
+        "call_gemini_directly",
+        "call_groq_directly",
+        "call_ollama_directly",
+        "call_openrouter_directly",
+        "choose_document",
+        "clear_document",
+        "compilation_error",
+        "compilation_success",
+        "copy_to_clipboard",
+        "run_compilation",
+        "save_to_library",
+        "setup_left_panel",
+        "setup_right_panel",
+        "start_compilation"
+      ],
+      "imports": [
+        "config",
+        "core.ai_router",
+        "customtkinter",
+        "gui.components",
+        "gui.theme",
+        "os",
+        "re",
+        "requests",
+        "sys",
+        "threading",
+        "tkinter"
+      ]
+    },
+    {
+      "path": "gui/tabs/agent_jobs_tab.py",
+      "suffix": ".py",
+      "size_bytes": 24030,
+      "modified_at": 1783606250.4597042,
+      "symbols": [
+        "AgentJobsTab",
+        "__init__",
+        "_loop",
+        "agent_copy_worker_prompt",
+        "agent_create_job",
+        "agent_refresh_jobs",
+        "agent_refresh_projects",
+        "agent_select_video",
+        "agent_use_active_project",
+        "load_agent_output_file",
+        "on_agent_job_selected",
+        "start_agent_jobs_auto_refresh"
+      ],
+      "imports": [
+        "core.agent_jobs",
+        "customtkinter",
+        "gui.components",
+        "gui.theme",
+        "json",
+        "os",
+        "pathlib",
+        "sys",
+        "tkinter"
+      ]
+    },
+    {
+      "path": "gui/tabs/audio_generator_tab.py",
+      "suffix": ".py",
+      "size_bytes": 10186,
+      "modified_at": 1783606197.0735047,
+      "symbols": [
+        "AudioGeneratorTab",
+        "__init__",
+        "_tts_done",
+        "_tts_error",
+        "_tts_generate",
+        "_tts_load_from_script",
+        "run_tts"
+      ],
+      "imports": [
+        "customtkinter",
+        "editor.audio_helper",
+        "gui.theme",
+        "os",
+        "sys",
+        "threading",
+        "tkinter",
+        "tools.tts_engine"
+      ]
+    },
+    {
+      "path": "gui/tabs/idea_engine_tab.py",
+      "suffix": ".py",
+      "size_bytes": 14563,
+      "modified_at": 1783606186.5976105,
+      "symbols": [
+        "IdeaEngineTab",
+        "__init__",
+        "_render_idea_cards",
+        "_update_selected_count",
+        "auto_select_top_n",
+        "deselect_all_ideas",
+        "finish_idea_generation",
+        "run",
+        "save_selected_angles_action",
+        "start_idea_generation"
+      ],
+      "imports": [
+        "config",
+        "core.idea_engine",
+        "customtkinter",
+        "gui.components",
+        "gui.theme",
+        "os",
+        "sys",
+        "threading",
+        "tkinter"
+      ]
+    },
+    {
+      "path": "gui/tabs/learn_review_tab.py",
+      "suffix": ".py",
+      "size_bytes": 8284,
+      "modified_at": 1783605867.5608704,
+      "symbols": [
+        "LearnReviewTab",
+        "__init__"
+      ],
+      "imports": [
+        "customtkinter",
+        "gui.components",
+        "gui.theme",
+        "os",
+        "sys"
+      ]
+    },
+    {
+      "path": "gui/tabs/script_generator_tab.py",
+      "suffix": ".py",
+      "size_bytes": 3801,
+      "modified_at": 1783606190.3789005,
+      "symbols": [
+        "ScriptGeneratorTab",
+        "__init__",
+        "script_refresh_learned_dropdown"
+      ],
+      "imports": [
+        "core.knowledge_base",
+        "core.script_generator",
+        "customtkinter",
+        "gui.components",
+        "gui.theme",
+        "os",
+        "sys"
+      ]
+    },
+    {
+      "path": "gui/tabs/settings_tab.py",
+      "suffix": ".py",
+      "size_bytes": 12212,
+      "modified_at": 1783605863.4954307,
+      "symbols": [
+        "SettingsTab",
+        "__init__",
+        "_browse_ffmpeg",
+        "_browse_projects_root",
+        "_build_settings_widgets",
+        "row_label"
+      ],
+      "imports": [
+        "config",
+        "customtkinter",
+        "gui.components",
+        "gui.prompt_compiler_tab",
+        "gui.theme",
+        "os",
+        "sys",
+        "tkinter.filedialog"
+      ]
+    },
+    {
+      "path": "gui/tabs/storyboard_tab.py",
+      "suffix": ".py",
+      "size_bytes": 32452,
+      "modified_at": 1783606238.1259508,
+      "symbols": [
+        "StoryboardTab",
+        "__init__",
+        "browse_sample_video",
+        "copy_all_storyboard",
+        "copy_image_prompts",
+        "copy_video_prompts",
+        "export_prompts_from_storyboard",
+        "finish_export_prompts",
+        "finish_prompt_extraction",
+        "finish_storyboard_generation",
+        "gui_log",
+        "on_sb_mode_changed",
+        "open_storyboard_dir",
+        "run",
+        "save_storyboard",
+        "start_prompt_extraction",
+        "start_storyboard_generation"
+      ],
+      "imports": [
+        "config",
+        "core.file_manager",
+        "core.prompt_engine",
+        "core.storyboard_generator",
+        "core.storyboard_writer",
+        "customtkinter",
+        "gui.components",
+        "gui.theme",
+        "os",
+        "pathlib",
+        "sys",
+        "threading",
+        "tkinter",
+        "tools.video_analyser"
+      ]
+    },
+    {
+      "path": "gui/theme.py",
+      "suffix": ".py",
+      "size_bytes": 1455,
+      "modified_at": 1782660547.9692328,
+      "symbols": [
+        "apply_theme",
+        "font",
+        "mono",
+        "primary_button_kwargs",
+        "secondary_button_kwargs"
+      ],
+      "imports": [
+        "customtkinter"
+      ]
+    },
+    {
+      "path": "jobs/done/job_20260709_221322_7dc54f/artifacts.json",
+      "suffix": ".json",
+      "size_bytes": 1348,
+      "modified_at": 1783610052.6384854,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_221322_7dc54f/artifacts/analysis.md",
+      "suffix": ".md",
+      "size_bytes": 8904,
+      "modified_at": 1783610049.437621,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_221322_7dc54f/artifacts/hermes_applications.md",
+      "suffix": ".md",
+      "size_bytes": 68,
+      "modified_at": 1783610052.4763157,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_221322_7dc54f/artifacts/knowledge_proposal.md",
+      "suffix": ".md",
+      "size_bytes": 687,
+      "modified_at": 1783610052.478209,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_221322_7dc54f/artifacts/knowledge_summary.md",
+      "suffix": ".md",
+      "size_bytes": 208,
+      "modified_at": 1783610052.4736204,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_221322_7dc54f/artifacts/tools_and_concepts.md",
+      "suffix": ".md",
+      "size_bytes": 67,
+      "modified_at": 1783610052.474616,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_221322_7dc54f/artifacts/worker_notes.md",
+      "suffix": ".md",
+      "size_bytes": 108,
+      "modified_at": 1783610052.4848087,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_221322_7dc54f/artifacts/workflow_steps.md",
+      "suffix": ".md",
+      "size_bytes": 63,
+      "modified_at": 1783610052.4752052,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_221322_7dc54f/manifest.json",
+      "suffix": ".json",
+      "size_bytes": 15338,
+      "modified_at": 1783646194.8459022,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_221322_7dc54f/metadata.json",
+      "suffix": ".json",
+      "size_bytes": 892,
+      "modified_at": 1783610100.9538813,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_221322_7dc54f/tasks/task_001.json",
+      "suffix": ".json",
+      "size_bytes": 1772,
+      "modified_at": 1783610052.6404915,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_221322_7dc54f/tasks/task_001_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 2030,
+      "modified_at": 1783610002.3765578,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_221322_7dc54f/tasks/task_002.json",
+      "suffix": ".json",
+      "size_bytes": 1782,
+      "modified_at": 1783610052.6413987,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_221322_7dc54f/tasks/task_002_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 2039,
+      "modified_at": 1783610002.3795571,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_221322_7dc54f/tasks/task_003.json",
+      "suffix": ".json",
+      "size_bytes": 1785,
+      "modified_at": 1783610052.6424198,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_221322_7dc54f/tasks/task_003_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 2040,
+      "modified_at": 1783610002.381818,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_221322_7dc54f/tasks/task_004.json",
+      "suffix": ".json",
+      "size_bytes": 1773,
+      "modified_at": 1783610052.6424198,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_221322_7dc54f/tasks/task_004_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 2036,
+      "modified_at": 1783610002.3838336,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_221322_7dc54f/tasks/task_005.json",
+      "suffix": ".json",
+      "size_bytes": 1788,
+      "modified_at": 1783610052.6434126,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_221322_7dc54f/tasks/task_005_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 2041,
+      "modified_at": 1783610002.3868356,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_221322_7dc54f/tasks/task_006.json",
+      "suffix": ".json",
+      "size_bytes": 1785,
+      "modified_at": 1783610052.6443932,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_221322_7dc54f/tasks/task_006_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 2040,
+      "modified_at": 1783610002.3888328,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_221322_7dc54f/worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1224,
+      "modified_at": 1783610002.390833,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_223839_632064/artifacts.json",
+      "suffix": ".json",
+      "size_bytes": 1348,
+      "modified_at": 1783611549.020125,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_223839_632064/artifacts/analysis.md",
+      "suffix": ".md",
+      "size_bytes": 2168,
+      "modified_at": 1783611545.803968,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_223839_632064/artifacts/hermes_applications.md",
+      "suffix": ".md",
+      "size_bytes": 68,
+      "modified_at": 1783611548.8038037,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_223839_632064/artifacts/knowledge_proposal.md",
+      "suffix": ".md",
+      "size_bytes": 630,
+      "modified_at": 1783611548.8077283,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_223839_632064/artifacts/knowledge_summary.md",
+      "suffix": ".md",
+      "size_bytes": 151,
+      "modified_at": 1783611548.7996862,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_223839_632064/artifacts/tools_and_concepts.md",
+      "suffix": ".md",
+      "size_bytes": 67,
+      "modified_at": 1783611548.8008077,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_223839_632064/artifacts/worker_notes.md",
+      "suffix": ".md",
+      "size_bytes": 108,
+      "modified_at": 1783611548.8191154,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_223839_632064/artifacts/workflow_steps.md",
+      "suffix": ".md",
+      "size_bytes": 63,
+      "modified_at": 1783611548.8027053,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_223839_632064/manifest.json",
+      "suffix": ".json",
+      "size_bytes": 14260,
+      "modified_at": 1783646194.8776546,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_223839_632064/metadata.json",
+      "suffix": ".json",
+      "size_bytes": 624,
+      "modified_at": 1783611595.1098087,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_223839_632064/tasks/task_001.json",
+      "suffix": ".json",
+      "size_bytes": 1618,
+      "modified_at": 1783611549.0231316,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_223839_632064/tasks/task_001_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1876,
+      "modified_at": 1783611519.4242835,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_223839_632064/tasks/task_002.json",
+      "suffix": ".json",
+      "size_bytes": 1628,
+      "modified_at": 1783611549.0240338,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_223839_632064/tasks/task_002_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1885,
+      "modified_at": 1783611519.4262905,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_223839_632064/tasks/task_003.json",
+      "suffix": ".json",
+      "size_bytes": 1631,
+      "modified_at": 1783611549.025082,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_223839_632064/tasks/task_003_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1886,
+      "modified_at": 1783611519.4282892,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_223839_632064/tasks/task_004.json",
+      "suffix": ".json",
+      "size_bytes": 1619,
+      "modified_at": 1783611549.027031,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_223839_632064/tasks/task_004_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1882,
+      "modified_at": 1783611519.4292915,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_223839_632064/tasks/task_005.json",
+      "suffix": ".json",
+      "size_bytes": 1634,
+      "modified_at": 1783611549.0289543,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_223839_632064/tasks/task_005_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1887,
+      "modified_at": 1783611519.4313033,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_223839_632064/tasks/task_006.json",
+      "suffix": ".json",
+      "size_bytes": 1631,
+      "modified_at": 1783611549.029689,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_223839_632064/tasks/task_006_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1886,
+      "modified_at": 1783611519.433284,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/done/job_20260709_223839_632064/worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1224,
+      "modified_at": 1783611519.4342887,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_002411_1ed051/artifacts.json",
+      "suffix": ".json",
+      "size_bytes": 2,
+      "modified_at": 1783531451.4065824,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_002411_1ed051/manifest.json",
+      "suffix": ".json",
+      "size_bytes": 12733,
+      "modified_at": 1783646194.8934226,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_002411_1ed051/metadata.json",
+      "suffix": ".json",
+      "size_bytes": 540,
+      "modified_at": 1783531451.3054483,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_002411_1ed051/tasks/task_001.json",
+      "suffix": ".json",
+      "size_bytes": 1621,
+      "modified_at": 1783531484.982224,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_002411_1ed051/tasks/task_001_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1876,
+      "modified_at": 1783531451.3081093,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_002411_1ed051/tasks/task_002.json",
+      "suffix": ".json",
+      "size_bytes": 1612,
+      "modified_at": 1783531484.982224,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_002411_1ed051/tasks/task_002_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1885,
+      "modified_at": 1783531451.3124132,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_002411_1ed051/tasks/task_003.json",
+      "suffix": ".json",
+      "size_bytes": 1615,
+      "modified_at": 1783531484.982224,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_002411_1ed051/tasks/task_003_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1886,
+      "modified_at": 1783531451.31442,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_002411_1ed051/tasks/task_004.json",
+      "suffix": ".json",
+      "size_bytes": 1603,
+      "modified_at": 1783531484.982224,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_002411_1ed051/tasks/task_004_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1882,
+      "modified_at": 1783531451.31442,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_002411_1ed051/tasks/task_005.json",
+      "suffix": ".json",
+      "size_bytes": 1618,
+      "modified_at": 1783531484.982224,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_002411_1ed051/tasks/task_005_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1887,
+      "modified_at": 1783531451.318427,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_002411_1ed051/tasks/task_006.json",
+      "suffix": ".json",
+      "size_bytes": 1615,
+      "modified_at": 1783531484.982224,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_002411_1ed051/tasks/task_006_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1886,
+      "modified_at": 1783531451.318427,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_002411_1ed051/worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1224,
+      "modified_at": 1783531451.318427,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_004453_8067b8/artifacts.json",
+      "suffix": ".json",
+      "size_bytes": 2,
+      "modified_at": 1783532693.658417,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_004453_8067b8/manifest.json",
+      "suffix": ".json",
+      "size_bytes": 12733,
+      "modified_at": 1783646194.6393096,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_004453_8067b8/metadata.json",
+      "suffix": ".json",
+      "size_bytes": 624,
+      "modified_at": 1783532949.3967142,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_004453_8067b8/tasks/task_001.json",
+      "suffix": ".json",
+      "size_bytes": 1621,
+      "modified_at": 1783532694.5810888,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_004453_8067b8/tasks/task_001_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1876,
+      "modified_at": 1783532693.4970007,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_004453_8067b8/tasks/task_002.json",
+      "suffix": ".json",
+      "size_bytes": 1612,
+      "modified_at": 1783532694.5820982,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_004453_8067b8/tasks/task_002_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1885,
+      "modified_at": 1783532693.501001,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_004453_8067b8/tasks/task_003.json",
+      "suffix": ".json",
+      "size_bytes": 1615,
+      "modified_at": 1783532694.5830812,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_004453_8067b8/tasks/task_003_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1886,
+      "modified_at": 1783532693.5040011,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_004453_8067b8/tasks/task_004.json",
+      "suffix": ".json",
+      "size_bytes": 1603,
+      "modified_at": 1783532694.5830812,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_004453_8067b8/tasks/task_004_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1882,
+      "modified_at": 1783532693.506755,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_004453_8067b8/tasks/task_005.json",
+      "suffix": ".json",
+      "size_bytes": 1618,
+      "modified_at": 1783532694.5841,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_004453_8067b8/tasks/task_005_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1887,
+      "modified_at": 1783532693.5097628,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_004453_8067b8/tasks/task_006.json",
+      "suffix": ".json",
+      "size_bytes": 1615,
+      "modified_at": 1783532694.5850825,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_004453_8067b8/tasks/task_006_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1886,
+      "modified_at": 1783532693.512776,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_004453_8067b8/worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1224,
+      "modified_at": 1783532693.5137632,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_111145_175754/artifacts.json",
+      "suffix": ".json",
+      "size_bytes": 2,
+      "modified_at": 1783570305.7980878,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_111145_175754/manifest.json",
+      "suffix": ".json",
+      "size_bytes": 12733,
+      "modified_at": 1783646194.6741297,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_111145_175754/metadata.json",
+      "suffix": ".json",
+      "size_bytes": 624,
+      "modified_at": 1783570456.085919,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_111145_175754/tasks/task_001.json",
+      "suffix": ".json",
+      "size_bytes": 1621,
+      "modified_at": 1783570306.9821699,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_111145_175754/tasks/task_001_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1876,
+      "modified_at": 1783570305.5543063,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_111145_175754/tasks/task_002.json",
+      "suffix": ".json",
+      "size_bytes": 1612,
+      "modified_at": 1783570306.983228,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_111145_175754/tasks/task_002_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1885,
+      "modified_at": 1783570305.5573065,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_111145_175754/tasks/task_003.json",
+      "suffix": ".json",
+      "size_bytes": 1615,
+      "modified_at": 1783570306.9843323,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_111145_175754/tasks/task_003_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1886,
+      "modified_at": 1783570305.5598135,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_111145_175754/tasks/task_004.json",
+      "suffix": ".json",
+      "size_bytes": 1603,
+      "modified_at": 1783570306.9843323,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_111145_175754/tasks/task_004_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1882,
+      "modified_at": 1783570305.5623226,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_111145_175754/tasks/task_005.json",
+      "suffix": ".json",
+      "size_bytes": 1618,
+      "modified_at": 1783570306.985756,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_111145_175754/tasks/task_005_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1887,
+      "modified_at": 1783570305.5646305,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_111145_175754/tasks/task_006.json",
+      "suffix": ".json",
+      "size_bytes": 1615,
+      "modified_at": 1783570306.9870312,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_111145_175754/tasks/task_006_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1886,
+      "modified_at": 1783570305.5668945,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_111145_175754/worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1224,
+      "modified_at": 1783570305.5680184,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_161002_faf539/artifacts.json",
+      "suffix": ".json",
+      "size_bytes": 2,
+      "modified_at": 1783588203.0340705,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_161002_faf539/manifest.json",
+      "suffix": ".json",
+      "size_bytes": 12733,
+      "modified_at": 1783646194.7050748,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_161002_faf539/metadata.json",
+      "suffix": ".json",
+      "size_bytes": 624,
+      "modified_at": 1783588322.7256534,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_161002_faf539/tasks/task_001.json",
+      "suffix": ".json",
+      "size_bytes": 1621,
+      "modified_at": 1783588203.833496,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_161002_faf539/tasks/task_001_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1876,
+      "modified_at": 1783588202.8773532,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_161002_faf539/tasks/task_002.json",
+      "suffix": ".json",
+      "size_bytes": 1612,
+      "modified_at": 1783588203.835507,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_161002_faf539/tasks/task_002_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1885,
+      "modified_at": 1783588202.8811195,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_161002_faf539/tasks/task_003.json",
+      "suffix": ".json",
+      "size_bytes": 1615,
+      "modified_at": 1783588203.8375177,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_161002_faf539/tasks/task_003_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1886,
+      "modified_at": 1783588202.8831325,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_161002_faf539/tasks/task_004.json",
+      "suffix": ".json",
+      "size_bytes": 1603,
+      "modified_at": 1783588203.841281,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_161002_faf539/tasks/task_004_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1882,
+      "modified_at": 1783588202.885147,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_161002_faf539/tasks/task_005.json",
+      "suffix": ".json",
+      "size_bytes": 1618,
+      "modified_at": 1783588203.841281,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_161002_faf539/tasks/task_005_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1887,
+      "modified_at": 1783588202.8871603,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_161002_faf539/tasks/task_006.json",
+      "suffix": ".json",
+      "size_bytes": 1615,
+      "modified_at": 1783588203.844506,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_161002_faf539/tasks/task_006_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1886,
+      "modified_at": 1783588202.8897293,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_161002_faf539/worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1224,
+      "modified_at": 1783588202.8897293,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_202528_5dd7aa/artifacts.json",
+      "suffix": ".json",
+      "size_bytes": 2,
+      "modified_at": 1783603528.8337257,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_202528_5dd7aa/manifest.json",
+      "suffix": ".json",
+      "size_bytes": 12733,
+      "modified_at": 1783646194.7349536,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_202528_5dd7aa/metadata.json",
+      "suffix": ".json",
+      "size_bytes": 624,
+      "modified_at": 1783603710.504099,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_202528_5dd7aa/tasks/task_001.json",
+      "suffix": ".json",
+      "size_bytes": 1621,
+      "modified_at": 1783603529.1474843,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_202528_5dd7aa/tasks/task_001_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1876,
+      "modified_at": 1783603528.6757407,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_202528_5dd7aa/tasks/task_002.json",
+      "suffix": ".json",
+      "size_bytes": 1612,
+      "modified_at": 1783603529.148484,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_202528_5dd7aa/tasks/task_002_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1885,
+      "modified_at": 1783603528.6787279,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_202528_5dd7aa/tasks/task_003.json",
+      "suffix": ".json",
+      "size_bytes": 1615,
+      "modified_at": 1783603529.1494846,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_202528_5dd7aa/tasks/task_003_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1886,
+      "modified_at": 1783603528.680729,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_202528_5dd7aa/tasks/task_004.json",
+      "suffix": ".json",
+      "size_bytes": 1603,
+      "modified_at": 1783603529.1494846,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_202528_5dd7aa/tasks/task_004_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1882,
+      "modified_at": 1783603528.682728,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_202528_5dd7aa/tasks/task_005.json",
+      "suffix": ".json",
+      "size_bytes": 1618,
+      "modified_at": 1783603529.1504846,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_202528_5dd7aa/tasks/task_005_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1887,
+      "modified_at": 1783603528.68573,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_202528_5dd7aa/tasks/task_006.json",
+      "suffix": ".json",
+      "size_bytes": 1615,
+      "modified_at": 1783603529.1504846,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_202528_5dd7aa/tasks/task_006_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1886,
+      "modified_at": 1783603528.6887305,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_202528_5dd7aa/worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1224,
+      "modified_at": 1783603528.6887305,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223354_ce45fe/artifacts.json",
+      "suffix": ".json",
+      "size_bytes": 2,
+      "modified_at": 1783611234.6580808,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223354_ce45fe/manifest.json",
+      "suffix": ".json",
+      "size_bytes": 12733,
+      "modified_at": 1783646194.7509067,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223354_ce45fe/metadata.json",
+      "suffix": ".json",
+      "size_bytes": 624,
+      "modified_at": 1783611301.0693977,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223354_ce45fe/tasks/task_001.json",
+      "suffix": ".json",
+      "size_bytes": 1621,
+      "modified_at": 1783611236.4949684,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223354_ce45fe/tasks/task_001_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1876,
+      "modified_at": 1783611234.4956696,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223354_ce45fe/tasks/task_002.json",
+      "suffix": ".json",
+      "size_bytes": 1612,
+      "modified_at": 1783611236.4949684,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223354_ce45fe/tasks/task_002_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1885,
+      "modified_at": 1783611234.4987075,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223354_ce45fe/tasks/task_003.json",
+      "suffix": ".json",
+      "size_bytes": 1615,
+      "modified_at": 1783611236.4959674,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223354_ce45fe/tasks/task_003_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1886,
+      "modified_at": 1783611234.5001156,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223354_ce45fe/tasks/task_004.json",
+      "suffix": ".json",
+      "size_bytes": 1603,
+      "modified_at": 1783611236.4969687,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223354_ce45fe/tasks/task_004_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1882,
+      "modified_at": 1783611234.502129,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223354_ce45fe/tasks/task_005.json",
+      "suffix": ".json",
+      "size_bytes": 1618,
+      "modified_at": 1783611236.4979196,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223354_ce45fe/tasks/task_005_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1887,
+      "modified_at": 1783611234.504129,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223354_ce45fe/tasks/task_006.json",
+      "suffix": ".json",
+      "size_bytes": 1615,
+      "modified_at": 1783611236.4979196,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223354_ce45fe/tasks/task_006_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1886,
+      "modified_at": 1783611234.505128,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223354_ce45fe/worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1224,
+      "modified_at": 1783611234.5061307,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223422_a4296f/artifacts.json",
+      "suffix": ".json",
+      "size_bytes": 2,
+      "modified_at": 1783611262.3914862,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223422_a4296f/manifest.json",
+      "suffix": ".json",
+      "size_bytes": 12733,
+      "modified_at": 1783646194.7827792,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223422_a4296f/metadata.json",
+      "suffix": ".json",
+      "size_bytes": 624,
+      "modified_at": 1783611331.816206,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223422_a4296f/tasks/task_001.json",
+      "suffix": ".json",
+      "size_bytes": 1621,
+      "modified_at": 1783611270.057026,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223422_a4296f/tasks/task_001_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1876,
+      "modified_at": 1783611262.149297,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223422_a4296f/tasks/task_002.json",
+      "suffix": ".json",
+      "size_bytes": 1612,
+      "modified_at": 1783611270.057026,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223422_a4296f/tasks/task_002_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1885,
+      "modified_at": 1783611262.1532993,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223422_a4296f/tasks/task_003.json",
+      "suffix": ".json",
+      "size_bytes": 1615,
+      "modified_at": 1783611270.0579827,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223422_a4296f/tasks/task_003_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1886,
+      "modified_at": 1783611262.157298,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223422_a4296f/tasks/task_004.json",
+      "suffix": ".json",
+      "size_bytes": 1603,
+      "modified_at": 1783611270.0589807,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223422_a4296f/tasks/task_004_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1882,
+      "modified_at": 1783611262.1622963,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223422_a4296f/tasks/task_005.json",
+      "suffix": ".json",
+      "size_bytes": 1618,
+      "modified_at": 1783611270.0589807,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223422_a4296f/tasks/task_005_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1887,
+      "modified_at": 1783611262.165293,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223422_a4296f/tasks/task_006.json",
+      "suffix": ".json",
+      "size_bytes": 1615,
+      "modified_at": 1783611270.060029,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223422_a4296f/tasks/task_006_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1886,
+      "modified_at": 1783611262.1689825,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223422_a4296f/worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1224,
+      "modified_at": 1783611262.170983,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223655_92b8d9/artifacts.json",
+      "suffix": ".json",
+      "size_bytes": 2,
+      "modified_at": 1783611415.8097386,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223655_92b8d9/manifest.json",
+      "suffix": ".json",
+      "size_bytes": 12733,
+      "modified_at": 1783646194.8144243,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223655_92b8d9/metadata.json",
+      "suffix": ".json",
+      "size_bytes": 624,
+      "modified_at": 1783611476.2400856,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223655_92b8d9/tasks/task_001.json",
+      "suffix": ".json",
+      "size_bytes": 1621,
+      "modified_at": 1783611416.6982138,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223655_92b8d9/tasks/task_001_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1876,
+      "modified_at": 1783611415.6696055,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223655_92b8d9/tasks/task_002.json",
+      "suffix": ".json",
+      "size_bytes": 1612,
+      "modified_at": 1783611416.69921,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223655_92b8d9/tasks/task_002_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1885,
+      "modified_at": 1783611415.6716042,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223655_92b8d9/tasks/task_003.json",
+      "suffix": ".json",
+      "size_bytes": 1615,
+      "modified_at": 1783611416.700211,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223655_92b8d9/tasks/task_003_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1886,
+      "modified_at": 1783611415.6736722,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223655_92b8d9/tasks/task_004.json",
+      "suffix": ".json",
+      "size_bytes": 1603,
+      "modified_at": 1783611416.7012155,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223655_92b8d9/tasks/task_004_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1882,
+      "modified_at": 1783611415.6756978,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223655_92b8d9/tasks/task_005.json",
+      "suffix": ".json",
+      "size_bytes": 1618,
+      "modified_at": 1783611416.7032094,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223655_92b8d9/tasks/task_005_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1887,
+      "modified_at": 1783611415.6777017,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223655_92b8d9/tasks/task_006.json",
+      "suffix": ".json",
+      "size_bytes": 1615,
+      "modified_at": 1783611416.7032094,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223655_92b8d9/tasks/task_006_worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1886,
+      "modified_at": 1783611415.6786995,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "jobs/running/job_20260709_223655_92b8d9/worker_prompt.md",
+      "suffix": ".md",
+      "size_bytes": 1224,
+      "modified_at": 1783611415.6796958,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "main.py",
+      "suffix": ".py",
+      "size_bytes": 13285,
+      "modified_at": 1782060235.9607842,
+      "symbols": [
+        "check_system_status",
+        "clean_filename",
+        "list_downloaded_files",
+        "list_report_files",
+        "main",
+        "run_analysis_option",
+        "run_download_option",
+        "run_pipeline_option",
+        "run_script_generation_option"
+      ],
+      "imports": [
+        "config",
+        "os",
+        "re",
+        "sys",
+        "tools.script_generator",
+        "tools.video_analyser",
+        "tools.video_downloader"
+      ]
+    },
+    {
+      "path": "main_gui.py",
+      "suffix": ".py",
+      "size_bytes": 135,
+      "modified_at": 1782060630.8150847,
+      "symbols": [],
+      "imports": [
+        "gui.app"
+      ]
+    },
+    {
+      "path": "prompt_library/README.md",
+      "suffix": ".md",
+      "size_bytes": 1455,
+      "modified_at": 1782581859.6487854,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "prompt_library/templates/analysis_code_perf_audit.md",
+      "suffix": ".md",
+      "size_bytes": 2791,
+      "modified_at": 1782878536.628892,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "prompt_library/templates/analysis_swot_strategy.md",
+      "suffix": ".md",
+      "size_bytes": 3221,
+      "modified_at": 1782878533.947194,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "prompt_library/templates/image_3d_disney.md",
+      "suffix": ".md",
+      "size_bytes": 1951,
+      "modified_at": 1782878525.7118876,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "prompt_library/templates/image_cinematic.md",
+      "suffix": ".md",
+      "size_bytes": 1303,
+      "modified_at": 1782878520.8130734,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "prompt_library/templates/image_interior_arch.md",
+      "suffix": ".md",
+      "size_bytes": 1665,
+      "modified_at": 1782878523.5672665,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "prompt_library/templates/promptA_voice_sales.md",
+      "suffix": ".md",
+      "size_bytes": 1282,
+      "modified_at": 1782581862.5525253,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "prompt_library/templates/promptB_image_background.md",
+      "suffix": ".md",
+      "size_bytes": 1540,
+      "modified_at": 1782581864.3866959,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "prompt_library/templates/promptC_video_ai.md",
+      "suffix": ".md",
+      "size_bytes": 927,
+      "modified_at": 1782581866.2997487,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "prompt_library/templates/video_drone_cinematic.md",
+      "suffix": ".md",
+      "size_bytes": 1726,
+      "modified_at": 1782878528.3996537,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "prompt_library/templates/video_macro_slowmotion.md",
+      "suffix": ".md",
+      "size_bytes": 1649,
+      "modified_at": 1782878531.368376,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "prompt_library/templates/writing_seo_article.md",
+      "suffix": ".md",
+      "size_bytes": 3001,
+      "modified_at": 1782878539.735892,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "providers/ai_video_provider.py",
+      "suffix": ".py",
+      "size_bytes": 9997,
+      "modified_at": 1782244072.3989923,
+      "symbols": [
+        "_build_video_prompt",
+        "_find_task_id",
+        "_find_video_url",
+        "_poll_video_task",
+        "_submit_and_download_video",
+        "_write_prompt_pack",
+        "generate_ai_video_materials",
+        "log"
+      ],
+      "imports": [
+        "config",
+        "core.file_manager",
+        "datetime",
+        "downloaders.direct_downloader",
+        "json",
+        "os",
+        "requests",
+        "time"
+      ]
+    },
+    {
+      "path": "providers/custom_scraper_adapter.py",
+      "suffix": ".py",
+      "size_bytes": 1103,
+      "modified_at": 1782060583.0859013,
+      "symbols": [
+        "log",
+        "run_custom_scraper"
+      ],
+      "imports": [
+        "os"
+      ]
+    },
+    {
+      "path": "providers/pexels_provider.py",
+      "suffix": ".py",
+      "size_bytes": 2977,
+      "modified_at": 1782060643.4269242,
+      "symbols": [
+        "log",
+        "search_and_download_pexels"
+      ],
+      "imports": [
+        "config",
+        "downloaders.direct_downloader",
+        "os",
+        "requests",
+        "sys"
+      ]
+    },
+    {
+      "path": "providers/pixabay_provider.py",
+      "suffix": ".py",
+      "size_bytes": 3088,
+      "modified_at": 1782060644.6121986,
+      "symbols": [
+        "log",
+        "search_and_download_pixabay"
+      ],
+      "imports": [
+        "config",
+        "downloaders.direct_downloader",
+        "os",
+        "requests",
+        "sys"
+      ]
+    },
+    {
+      "path": "providers/product_image_provider.py",
+      "suffix": ".py",
+      "size_bytes": 3820,
+      "modified_at": 1782753931.3983629,
+      "symbols": [
+        "log",
+        "search_and_download_product_images"
+      ],
+      "imports": [
+        "downloaders.direct_downloader",
+        "json",
+        "os",
+        "re",
+        "requests",
+        "sys",
+        "urllib.parse"
+      ]
+    },
+    {
+      "path": "providers/shopee_search_provider.py",
+      "suffix": ".py",
+      "size_bytes": 6402,
+      "modified_at": 1782865714.1607177,
+      "symbols": [
+        "log",
+        "search_and_download_shopee"
+      ],
+      "imports": [
+        "downloaders.direct_downloader",
+        "os",
+        "providers.smart_crawler_provider",
+        "requests",
+        "sys",
+        "urllib.parse"
+      ]
+    },
+    {
+      "path": "providers/smart_crawler_provider.py",
+      "suffix": ".py",
+      "size_bytes": 13019,
+      "modified_at": 1782865706.7753644,
+      "symbols": [
+        "YDLLogger",
+        "__init__",
+        "apply_quality_filter",
+        "debug",
+        "download_video_clean",
+        "error",
+        "fetch_shopee_product_details",
+        "get_browser_cookies",
+        "info",
+        "log",
+        "make_pre_filter",
+        "parse_shopee_url",
+        "pre_filter",
+        "search_duckduckgo_urls",
+        "split_audio_video",
+        "warning"
+      ],
+      "imports": [
+        "config",
+        "downloaders.direct_downloader",
+        "editor.clip_analyzer",
+        "moviepy.editor",
+        "os",
+        "pathlib",
+        "re",
+        "requests",
+        "sys",
+        "urllib.parse",
+        "yt_dlp"
+      ]
+    },
+    {
+      "path": "providers/social_search_provider.py",
+      "suffix": ".py",
+      "size_bytes": 4660,
+      "modified_at": 1782865719.2076364,
+      "symbols": [
+        "YDLLogger",
+        "__init__",
+        "debug",
+        "error",
+        "info",
+        "log",
+        "make_pre_filter",
+        "pre_filter",
+        "search_and_download_social",
+        "warning"
+      ],
+      "imports": [
+        "os",
+        "sys",
+        "yt_dlp"
+      ]
+    },
+    {
+      "path": "providers/supplier_feed_provider.py",
+      "suffix": ".py",
+      "size_bytes": 5375,
+      "modified_at": 1782060578.9130826,
+      "symbols": [
+        "log",
+        "parse_supplier_feed",
+        "run_supplier_feed_provider"
+      ],
+      "imports": [
+        "core.file_manager",
+        "csv",
+        "downloaders.direct_downloader",
+        "downloaders.ytdlp_downloader",
+        "json",
+        "os"
+      ]
+    },
+    {
+      "path": "providers/url_list_provider.py",
+      "suffix": ".py",
+      "size_bytes": 1863,
+      "modified_at": 1782060581.3605633,
+      "symbols": [
+        "download_url_list",
+        "log"
+      ],
+      "imports": [
+        "core.file_manager",
+        "downloaders.direct_downloader",
+        "downloaders.ytdlp_downloader",
+        "os"
+      ]
+    },
+    {
+      "path": "requirements.txt",
+      "suffix": ".txt",
+      "size_bytes": 280,
+      "modified_at": 1782926875.7345877,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "scripts/agent_control.py",
+      "suffix": ".py",
+      "size_bytes": 2057,
+      "modified_at": 1782925968.897469,
+      "symbols": [
+        "main"
+      ],
+      "imports": [
+        "json",
+        "os",
+        "pathlib",
+        "sys"
+      ]
+    },
+    {
+      "path": "scripts/analyze_modules.py",
+      "suffix": ".py",
+      "size_bytes": 3049,
+      "modified_at": 1782930927.7099693,
+      "symbols": [
+        "compile_check",
+        "find_py_files",
+        "main",
+        "scan_markers"
+      ],
+      "imports": [
+        "json",
+        "os",
+        "pathlib",
+        "subprocess",
+        "sys"
+      ]
+    },
+    {
+      "path": "scripts/hermes_assistant_cli.py",
+      "suffix": ".py",
+      "size_bytes": 2143,
+      "modified_at": 1783613544.9926977,
+      "symbols": [
+        "main",
+        "parse_args",
+        "print_plan",
+        "run_interactive"
+      ],
+      "imports": [
+        "__future__",
+        "argparse",
+        "core.assistant_runtime",
+        "json",
+        "pathlib",
+        "sys"
+      ]
+    },
+    {
+      "path": "scripts/hermes_code_agent.py",
+      "suffix": ".py",
+      "size_bytes": 1778,
+      "modified_at": 1783703719.8662467,
+      "symbols": [
+        "main",
+        "parse_args"
+      ],
+      "imports": [
+        "__future__",
+        "argparse",
+        "core.coding_agent",
+        "json",
+        "pathlib",
+        "sys"
+      ]
+    },
+    {
+      "path": "scripts/hermes_patch.py",
+      "suffix": ".py",
+      "size_bytes": 2003,
+      "modified_at": 1783703877.2552526,
+      "symbols": [
+        "main",
+        "parse_args",
+        "result_to_dict"
+      ],
+      "imports": [
+        "__future__",
+        "argparse",
+        "core.patch_executor",
+        "json",
+        "pathlib",
+        "sys"
+      ]
+    },
+    {
+      "path": "scripts/hermes_repo_map.py",
+      "suffix": ".py",
+      "size_bytes": 1811,
+      "modified_at": 1783613706.7898512,
+      "symbols": [
+        "main",
+        "parse_args"
+      ],
+      "imports": [
+        "__future__",
+        "argparse",
+        "core.repo_map",
+        "json",
+        "pathlib",
+        "sys"
+      ]
+    },
+    {
+      "path": "scripts/hermes_verify.py",
+      "suffix": ".py",
+      "size_bytes": 1790,
+      "modified_at": 1783703987.6758635,
+      "symbols": [
+        "main",
+        "parse_args"
+      ],
+      "imports": [
+        "__future__",
+        "argparse",
+        "core.verification_runner",
+        "json",
+        "pathlib",
+        "sys"
+      ]
+    },
+    {
+      "path": "scripts/render_prompt.py",
+      "suffix": ".py",
+      "size_bytes": 1972,
+      "modified_at": 1782581924.9741597,
+      "symbols": [
+        "main",
+        "parse_vars"
+      ],
+      "imports": [
+        "argparse",
+        "core.prompt_library",
+        "json",
+        "os",
+        "sys"
+      ]
+    },
+    {
+      "path": "scripts/run_job_worker.py",
+      "suffix": ".py",
+      "size_bytes": 505,
+      "modified_at": 1782623156.1125643,
+      "symbols": [],
+      "imports": [
+        "core.job_watcher",
+        "os",
+        "sys"
+      ]
+    },
+    {
+      "path": "scripts/script_quat_aecooly_typec.md",
+      "suffix": ".md",
+      "size_bytes": 5834,
+      "modified_at": 1782060239.2496104,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "scripts/start_telegram_review_watcher.ps1",
+      "suffix": ".ps1",
+      "size_bytes": 1381,
+      "modified_at": 1782932676.5521216,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "scripts/sync_and_listen.py",
+      "suffix": ".py",
+      "size_bytes": 679,
+      "modified_at": 1782952995.3648658,
+      "symbols": [
+        "main"
+      ],
+      "imports": [
+        "asyncio",
+        "scratch.sync_telegram_jobs",
+        "sys"
+      ]
+    },
+    {
+      "path": "scripts/telegram_review_watcher.py",
+      "suffix": ".py",
+      "size_bytes": 31430,
+      "modified_at": 1782970914.6984563,
+      "symbols": [
+        "TeeStream",
+        "__init__",
+        "analyze_target_context",
+        "build_change_request",
+        "build_prompt_suggestion",
+        "build_review_markdown",
+        "build_telegram_caption",
+        "classify_report",
+        "extract_target_hint",
+        "flush",
+        "get_bot_token",
+        "get_required_env",
+        "get_review_chat_id",
+        "is_message_allowed",
+        "is_report_payload",
+        "load_env",
+        "load_message_payload",
+        "load_state",
+        "main",
+        "message_document_name",
+        "message_state_key",
+        "message_text",
+        "parse_args",
+        "redirect_logs",
+        "resolve_target_path",
+        "review_once",
+        "run_autonomous_analysis",
+        "run_loop",
+        "save_state",
+        "scan_project_features",
+        "send_review_to_telegram",
+        "write",
+        "write_raw_report"
+      ],
+      "imports": [
+        "argparse",
+        "asyncio",
+        "config",
+        "contextlib",
+        "core.learning_review",
+        "datetime",
+        "dotenv",
+        "json",
+        "os",
+        "pathlib",
+        "re",
+        "requests",
+        "sys",
+        "telethon"
+      ]
+    },
+    {
+      "path": "scripts/telegram_userbot.py",
+      "suffix": ".py",
+      "size_bytes": 4420,
+      "modified_at": 1782925629.6655698,
+      "symbols": [
+        "main"
+      ],
+      "imports": [
+        "asyncio",
+        "dotenv",
+        "getpass",
+        "os",
+        "pathlib",
+        "sys",
+        "telethon",
+        "telethon.errors"
+      ]
+    },
+    {
+      "path": "scripts/test_knowledge_store_safety.py",
+      "suffix": ".py",
+      "size_bytes": 6761,
+      "modified_at": 1783356368.6550624,
+      "symbols": [
+        "clean_test_env",
+        "run_store_tests"
+      ],
+      "imports": [
+        "core.knowledge_store",
+        "json",
+        "os",
+        "pathlib",
+        "shutil",
+        "sys"
+      ]
+    },
+    {
+      "path": "scripts/test_reliability_integration.py",
+      "suffix": ".py",
+      "size_bytes": 5657,
+      "modified_at": 1783529680.343455,
+      "symbols": [
+        "FakeManager",
+        "__init__",
+        "_write_json",
+        "factory",
+        "fail_job",
+        "main",
+        "submit",
+        "test_circuit_breaker",
+        "test_dedup_lock",
+        "test_dlq_transition",
+        "test_raw_log_cleanup",
+        "test_suspicious_audit"
+      ],
+      "imports": [
+        "core.job_dedup",
+        "core.job_watcher",
+        "core.observability",
+        "datetime",
+        "json",
+        "os",
+        "pathlib",
+        "sys",
+        "tempfile",
+        "threading",
+        "time"
+      ]
+    },
+    {
+      "path": "scripts/test_script_generator_knowledge_injection.py",
+      "suffix": ".py",
+      "size_bytes": 6013,
+      "modified_at": 1783356376.130976,
+      "symbols": [
+        "MockResponse",
+        "__init__",
+        "clean_test_env",
+        "json",
+        "mock_post",
+        "run_script_generator_tests",
+        "text"
+      ],
+      "imports": [
+        "core.knowledge_store",
+        "core.script_generator",
+        "core.style_profiler",
+        "json",
+        "os",
+        "pathlib",
+        "requests",
+        "shutil",
+        "sys"
+      ]
+    },
+    {
+      "path": "scripts/test_worker_json_and_transcript.py",
+      "suffix": ".py",
+      "size_bytes": 6164,
+      "modified_at": 1783356372.421912,
+      "symbols": [
+        "clean_test_env",
+        "run_worker_tests"
+      ],
+      "imports": [
+        "core.agent_jobs",
+        "core.job_watcher",
+        "json",
+        "os",
+        "pathlib",
+        "shutil",
+        "sys"
+      ]
+    },
+    {
+      "path": "telegram_bot.md",
+      "suffix": ".md",
+      "size_bytes": 43013,
+      "modified_at": 1782922632.146419,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "telegram_bot.py",
+      "suffix": ".py",
+      "size_bytes": 55840,
+      "modified_at": 1783587690.3658817,
+      "symbols": [
+        "ask_gemini",
+        "ask_local_ollama",
+        "ask_video_intent",
+        "build_product_manifest_job",
+        "build_upgrade_audit_job",
+        "build_video_job",
+        "command_tail",
+        "create_learning_intake_note",
+        "create_product_job_command",
+        "create_video_job_command",
+        "datetime_now_slug",
+        "de_xuat_nang_cap_command",
+        "default_chat_handler",
+        "extract_first_url",
+        "extract_video_attachment",
+        "find_report_files",
+        "get_message_text",
+        "get_pending_video_file",
+        "get_pending_video_url",
+        "handle_callback",
+        "handle_force_reply",
+        "help_command",
+        "hoc_hook_cta_command",
+        "hoc_kien_thuc_command",
+        "hoc_video_command",
+        "htmlvideo_command",
+        "init_gemini",
+        "len_kich_ban_command",
+        "local_command",
+        "looks_like_code",
+        "luu_prompt_command",
+        "main",
+        "poll_outbox_loop",
+        "post_init",
+        "post_stop",
+        "report_command",
+        "review_command",
+        "safe_file_name",
+        "save_telegram_video_source",
+        "send_response",
+        "sort_report_files",
+        "split_message",
+        "start_command",
+        "story_command",
+        "tech_command",
+        "video_attachment_handler"
+      ],
+      "imports": [
+        "asyncio",
+        "config",
+        "core.agent_jobs",
+        "core.job_dedup",
+        "core.learning_review",
+        "core.pending_store",
+        "core.router",
+        "core.video_fetcher",
+        "datetime",
+        "dotenv",
+        "google.generativeai",
+        "json",
+        "logging",
+        "os",
+        "pathlib",
+        "re",
+        "sys",
+        "telegram",
+        "telegram.ext",
+        "tools.script_generator"
+      ]
+    },
+    {
+      "path": "test_worker.py",
+      "suffix": ".py",
+      "size_bytes": 284,
+      "modified_at": 1782974434.6732821,
+      "symbols": [
+        "greet_user",
+        "main"
+      ],
+      "imports": []
+    },
+    {
+      "path": "tools/bgm_manager.py",
+      "suffix": ".py",
+      "size_bytes": 8225,
+      "modified_at": 1782842267.2651367,
+      "symbols": [
+        "detect_tone_from_script",
+        "download_bgm",
+        "ensure_bgm_dirs",
+        "log",
+        "mix_bgm_with_video",
+        "pick_bgm"
+      ],
+      "imports": [
+        "config",
+        "json",
+        "logging",
+        "os",
+        "random",
+        "requests",
+        "subprocess",
+        "sys"
+      ]
+    },
+    {
+      "path": "tools/cookie_helper.py",
+      "suffix": ".py",
+      "size_bytes": 1327,
+      "modified_at": 1782060239.258906,
+      "symbols": [
+        "get_installed_browsers"
+      ],
+      "imports": [
+        "os"
+      ]
+    },
+    {
+      "path": "tools/custom_parsers.py",
+      "suffix": ".py",
+      "size_bytes": 3313,
+      "modified_at": 1782060239.2649145,
+      "symbols": [
+        "download_direct_mp4",
+        "extract_ecommerce_video"
+      ],
+      "imports": [
+        "os",
+        "re",
+        "requests"
+      ]
+    },
+    {
+      "path": "tools/script_generator.py",
+      "suffix": ".py",
+      "size_bytes": 5670,
+      "modified_at": 1782060239.272176,
+      "symbols": [
+        "check_ollama",
+        "generate_tiktok_script",
+        "get_ollama_client"
+      ],
+      "imports": [
+        "config",
+        "ollama",
+        "os",
+        "sys"
+      ]
+    },
+    {
+      "path": "tools/tool_manifest.example.json",
+      "suffix": ".json",
+      "size_bytes": 618,
+      "modified_at": 1783613618.3155153,
+      "symbols": [],
+      "imports": []
+    },
+    {
+      "path": "tools/tts_engine.py",
+      "suffix": ".py",
+      "size_bytes": 7306,
+      "modified_at": 1782842227.034415,
+      "symbols": [
+        "_edge_tts_async",
+        "_speed_to_rate",
+        "list_voices",
+        "synthesize",
+        "synthesize_edge_tts",
+        "synthesize_elevenlabs",
+        "synthesize_to_project"
+      ],
+      "imports": [
+        "asyncio",
+        "concurrent.futures",
+        "config",
+        "edge_tts",
+        "logging",
+        "os",
+        "requests",
+        "sys",
+        "tempfile",
+        "tools.tts_engine"
+      ]
+    },
+    {
+      "path": "tools/video_analyser.py",
+      "suffix": ".py",
+      "size_bytes": 14874,
+      "modified_at": 1782099770.8314042,
+      "symbols": [
+        "analyze_video",
+        "generate_offline_prompt",
+        "init_gemini",
+        "log",
+        "translate_action_vi_to_en"
+      ],
+      "imports": [
+        "config",
+        "cv2",
+        "google.generativeai",
+        "json",
+        "os",
+        "sys",
+        "time"
+      ]
+    },
+    {
+      "path": "tools/video_downloader.py",
+      "suffix": ".py",
+      "size_bytes": 6906,
+      "modified_at": 1783528866.391426,
+      "symbols": [
+        "YDLLogger",
+        "__init__",
+        "clean_filename",
+        "debug",
+        "download_video",
+        "error",
+        "info",
+        "log",
+        "warning"
+      ],
+      "imports": [
+        "custom_parsers",
+        "random",
+        "re",
+        "time",
+        "tools.custom_parsers",
+        "yt_dlp"
+      ]
+    },
+    {
+      "path": "workers/__init__.py",
+      "suffix": ".py",
+      "size_bytes": 111,
+      "modified_at": 1782658369.533218,
+      "symbols": [],
+      "imports": [
+        "workers.base_worker"
+      ]
+    },
+    {
+      "path": "workers/ai_studio_worker.py",
+      "suffix": ".py",
+      "size_bytes": 109,
+      "modified_at": 1782658383.1469693,
+      "symbols": [
+        "AiStudioWorker"
+      ],
+      "imports": [
+        "workers.base_worker"
+      ]
+    },
+    {
+      "path": "workers/antigravity_worker.py",
+      "suffix": ".py",
+      "size_bytes": 114,
+      "modified_at": 1782658378.1744883,
+      "symbols": [
+        "AntigravityWorker"
+      ],
+      "imports": [
+        "workers.base_worker"
+      ]
+    },
+    {
+      "path": "workers/base_worker.py",
+      "suffix": ".py",
+      "size_bytes": 727,
+      "modified_at": 1782658373.5869217,
+      "symbols": [
+        "BaseWorker",
+        "ManualWorkerResult",
+        "can_handle",
+        "run"
+      ],
+      "imports": [
+        "dataclasses",
+        "pathlib"
+      ]
+    },
+    {
+      "path": "workers/codex_worker.py",
+      "suffix": ".py",
+      "size_bytes": 102,
+      "modified_at": 1782658376.016999,
+      "symbols": [
+        "CodexWorker"
+      ],
+      "imports": [
+        "workers.base_worker"
+      ]
+    },
+    {
+      "path": "workers/html_video_worker.py",
+      "suffix": ".py",
+      "size_bytes": 111,
+      "modified_at": 1782658380.3301604,
+      "symbols": [
+        "HtmlVideoWorker"
+      ],
+      "imports": [
+        "workers.base_worker"
+      ]
+    }
+  ]
+}

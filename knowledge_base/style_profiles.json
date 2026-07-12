@@ -1,0 +1,16 @@
+{
+  "total_videos_analyzed": 4,
+  "hook_patterns": [
+    "question_hook",
+    "result_hook"
+  ],
+  "avg_scene_count": 4,
+  "pacing": "medium",
+  "voice_tone": "warm",
+  "cta_styles": [],
+  "video_structure": {
+    "intro": "Hook trong 3 giây đầu",
+    "body": "Demo sản phẩm 4 phân cảnh",
+    "outro": "CTA + hiện giá + link"
+  }
+}
