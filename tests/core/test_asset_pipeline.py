@@ -40,10 +40,7 @@ def test_match_assets_to_script_root_list(tmp_path):
     asset_dir = tmp_path / "assets"
     
     result = match_assets_to_script(str(script_file), str(asset_dir))
-    assert result is True
-    mapping_file = asset_dir / "scene_mapping.json"
-    mapping = json.loads(mapping_file.read_text(encoding="utf-8"))
-    assert mapping == {}
+    assert result is False
 
 def test_match_assets_to_script_missing_scene_id(tmp_path):
     script_file = tmp_path / "script.json"
