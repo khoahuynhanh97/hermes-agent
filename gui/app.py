@@ -57,6 +57,7 @@ from gui.tabs.audio_generator_tab import AudioGeneratorTab
 from gui.tabs.storyboard_tab import StoryboardTab
 from gui.tabs.agent_jobs_tab import AgentJobsTab
 from gui.tabs.assistant_tab import AssistantTab
+from gui.tabs.content_recycler_tab import ContentRecyclerTab
 
 class HermesTikTokVideoFactoryApp(ctk.CTk):
     def __init__(self):
@@ -262,6 +263,7 @@ class HermesTikTokVideoFactoryApp(ctk.CTk):
         self.tab_flow1.add("📦 Kho clip")
         self.tab_flow1.add("🎬 Dựng video")
         self.tab_flow1.add("✅ Kết quả")
+        self.tab_flow1.add("♻️ Content Recycler")
         
         # Tabs for Flow 2 (🧠 AI Phân Tích & Sáng Tạo)
         self.tab_flow2.add("📚 Học & Duyệt")
@@ -281,6 +283,7 @@ class HermesTikTokVideoFactoryApp(ctk.CTk):
         self.build_tab_clip_library()
         self.build_tab_editor()
         self.build_tab_results()
+        self.build_tab_content_recycler()
         
         self.build_tab_learn_and_review()   # merged: Trí Thức AI + Duyệt học hỏi
         self.build_tab_idea_engine()
@@ -1218,6 +1221,11 @@ class HermesTikTokVideoFactoryApp(ctk.CTk):
         proj = self.get_current_project_folders()
         if proj and os.path.exists(proj["root"]):
             os.startfile(proj["root"])
+
+    def build_tab_content_recycler(self):
+        tab = self.tab_flow1.tab("♻️ Content Recycler")
+        self.content_recycler_tab = ContentRecyclerTab(tab, self)
+        self.content_recycler_tab.pack(fill="both", expand=True)
 
     def build_tab_storyboard(self):
 
