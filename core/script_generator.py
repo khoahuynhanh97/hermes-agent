@@ -204,3 +204,30 @@ def save_script_files(scripts_dir, script_data):
         f.write(script_data.get('hashtags', ''))
         
     return voice_path, caption_path, hashtags_path
+
+def generate_recycled_script(source_json_path: str, output_dir: str, branch: str = "tiktok_tech") -> bool:
+    """Generates a scene-based script from source transcript."""
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # In reality, this calls Gemini API with knowledge store context
+    script_data = {
+        "title": "Recycled Video",
+        "platform": branch,
+        "scenes": [
+            {
+                "scene_id": 1,
+                "narration": "Sample voiceover",
+                "visual_keywords": ["sample", "video"],
+                "duration_hint": 3.0
+            }
+        ],
+        "caption": "Sample caption",
+        "hashtags": ["#sample"]
+    }
+    
+    out_path = os.path.join(output_dir, "script.json")
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(script_data, f, ensure_ascii=False, indent=2)
+        
+    return True
+
