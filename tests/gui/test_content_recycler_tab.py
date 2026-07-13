@@ -9,3 +9,4 @@ def test_content_recycler_tab_initialization():
     # Assert elements exist
     assert hasattr(tab, "url_entry")
     assert hasattr(tab, "start_button")
+    assert hasattr(tab, "platform_combo")
