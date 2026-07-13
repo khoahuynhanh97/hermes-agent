@@ -10,7 +10,10 @@ def publish_recycled_video(project_dir: str, platform: str) -> bool:
         return False
         
     with open(script_path, "r", encoding="utf-8") as f:
-        script = json.load(f)
+        try:
+            script = json.load(f)
+        except json.JSONDecodeError:
+            return False
         
     caption = script.get("caption", "")
     hashtags = script.get("hashtags", [])
