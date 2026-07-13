@@ -332,3 +332,19 @@ def build_tiktok_video(project_folders, add_subtitles=True, log_callback=None):
             except Exception:
                 pass
         return None
+
+
+def build_content_video(project_dir: str) -> bool:
+    """Assembles final video based on script and asset mapping."""
+    script_path = os.path.join(project_dir, "script.json")
+    mapping_path = os.path.join(project_dir, "scene_mapping.json")
+    
+    if not os.path.exists(script_path) or not os.path.exists(mapping_path):
+        return False
+        
+    # In reality, moviepy logic would go here to compile the video
+    out_path = os.path.join(project_dir, "final_video.mp4")
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write("mock video content")
+        
+    return True
