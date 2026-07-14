@@ -1,100 +1,109 @@
 {
-  "version": 2,
-  "entries": [
-    {
-      "id": "kb_1b3f938ecea3",
-      "slug": "bai-hoc-hoc-tu-video-vt-tiktok-com-zsckq5neb",
-      "source_url": "https://vt.tiktok.com/ZSCKq5Neb/",
-      "platform": "tiktok",
-      "category": "General",
-      "status": "approved",
-      "learned_at": "2026-07-09T16:06:40",
-      "approved_at": "2026-07-09T16:06:40",
-      "approved_by": "gui_user",
-      "approval_mode": "manual",
-      "title": "Bài học học từ video Vt Tiktok Com Zsckq5Neb",
-      "hook_type": "question_hook",
-      "cta_style": "urgency",
-      "voice_tone": "warm",
-      "key_lessons": [
-        "Xem báo cáo phân tích chi tiết"
-      ],
-      "detail_file": "entries/kb_1b3f938ecea3.json",
-      "job_output_dir": "C:\\Work\\Code\\Hermes_download\\hermes-agent\\projects\\vt-tiktok-com-zsckq5neb\\agent_outputs\\job_20260709_111145_175754",
-      "source": "telegram_job",
-      "updated_at": "2026-07-09T16:06:40"
-    },
-    {
-      "id": "kb_91b32246589b",
-      "slug": "huong-dan-nhan-token-ai-mien-phi-tu-xiaomi-mimo-orbit",
-      "source_url": "https://vt.tiktok.com/ZSCwtTdvf/",
-      "platform": "tiktok",
-      "category": "cong-nghe",
-      "status": "approved",
-      "learned_at": "2026-07-09T16:06:50",
-      "approved_at": "2026-07-09T16:06:50",
-      "approved_by": "gui_user",
-      "approval_mode": "manual",
-      "title": "Hướng dẫn nhận Token AI miễn phí từ Xiaomi MiMo Orbit",
-      "hook_type": "result_hook",
-      "cta_style": "urgency",
-      "voice_tone": "energetic",
-      "key_lessons": [
-        "Xiaomi đang phát miễn phí lượng lớn token AI thông qua chương trình MiMo Orbit để thúc đẩy sử dụng mô hình AI mới MiMo V2.5 Pro.",
-        "MiMo V2.5 Pro là một mô hình AI mạnh mẽ với kiến trúc MoE (1.02T tham số) và khả năng xử lý tác vụ phức tạp, ngang tầm các mô hình AI hàng đầu khác.",
-        "Việc đăng ký thành công đòi hỏi mô tả dự án (use case) rõ ràng và hấp dẫn để nhận được nhiều token hơn.",
-        "Cần theo dõi các kênh thông tin và cộng đồng để cập nhật kinh nghiệm và mẹo hữu ích từ những người đã nhận được token."
-      ],
-      "detail_file": "entries/kb_91b32246589b.json",
-      "job_output_dir": "C:\\Work\\Code\\Hermes_download\\hermes-agent\\projects\\vt-tiktok-com-zscwttdvf\\agent_outputs\\job_20260709_004453_8067b8",
-      "source": "telegram_job",
-      "updated_at": "2026-07-09T16:06:50"
-    },
-    {
-      "id": "kb_389d0b8019f1",
-      "slug": "bai-hoc-hoc-tu-video-vt-tiktok-com-zsce7mf6n",
-      "source_url": "https://vt.tiktok.com/ZSCE7mf6n/",
-      "platform": "tiktok",
-      "category": "General",
-      "status": "approved",
-      "learned_at": "2026-07-09T16:55:17",
-      "approved_at": "2026-07-09T16:55:17",
-      "approved_by": "gui_user",
-      "approval_mode": "manual",
-      "title": "Bài học học từ video Vt Tiktok Com Zsce7Mf6N",
-      "hook_type": "question_hook",
-      "cta_style": "urgency",
-      "voice_tone": "warm",
-      "key_lessons": [
-        "Xem báo cáo phân tích chi tiết"
-      ],
-      "detail_file": "entries/kb_389d0b8019f1.json",
-      "job_output_dir": "C:\\Work\\Code\\Hermes_download\\hermes-agent\\projects\\vt-tiktok-com-zsce7mf6n\\agent_outputs\\job_20260709_161002_faf539",
-      "source": "telegram_job",
-      "updated_at": "2026-07-09T16:55:17"
-    },
-    {
-      "id": "kb_5be540618e5f",
-      "slug": "bai-hoc-hoc-tu-video-vt-tiktok-com-zscoueedv",
-      "source_url": "https://vt.tiktok.com/ZSCouEEdV/",
-      "platform": "tiktok",
-      "category": "General",
-      "status": "approved",
-      "learned_at": "2026-07-09T20:31:57",
-      "approved_at": "2026-07-09T20:32:56",
-      "approved_by": "gui_user",
-      "approval_mode": "manual",
-      "title": "Bài học học từ video Vt Tiktok Com Zscoueedv",
-      "hook_type": "question_hook",
-      "cta_style": "urgency",
-      "voice_tone": "warm",
-      "key_lessons": [
-        "Xem báo cáo phân tích chi tiết"
-      ],
-      "detail_file": "entries/kb_5be540618e5f.json",
-      "job_output_dir": "C:\\Work\\Code\\Hermes_download\\hermes-agent\\projects\\vt-tiktok-com-zscoueedv\\agent_outputs\\job_20260709_202528_5dd7aa",
-      "source": "telegram_job",
-      "updated_at": "2026-07-09T20:32:56"
-    }
-  ]
+    "version": 2,
+    "entries": [
+        {
+            "id": "kb_1b3f938ecea3",
+            "slug": "bai-hoc-hoc-tu-video-vt-tiktok-com-zsckq5neb",
+            "source_url": "https://vt.tiktok.com/ZSCKq5Neb/",
+            "platform": "tiktok",
+            "category": "cong-nghe",
+            "status": "approved",
+            "learned_at": "2026-07-09T16:06:40",
+            "approved_at": "2026-07-13T15:29:32.080508",
+            "approved_by": "gui_user",
+            "approval_mode": "manual",
+            "title": "Sử dụng AI hiệu quả trong phát triển phần mềm: Quy trình 5 bước tạo code chất lượng",
+            "hook_type": "result_hook",
+            "cta_style": "soft",
+            "voice_tone": "professional",
+            "key_lessons": [
+                "Để sử dụng AI trong phát triển phần mềm hiệu quả, cần tập trung vào việc thiết kế và tuân thủ một quy trình làm việc có cấu trúc thay vì chỉ tối ưu prompt.",
+                "Quy trình 5 bước (làm rõ yêu cầu, viết PRD, chia task, phát triển hướng kiểm thử TDD, dọn dẹp code) giúp AI tạo ra code chất lượng cao, có độ phủ test và dễ bảo trì.",
+                "AI đóng vai trò trợ lý toàn diện trong chu trình phát triển, từ phân tích yêu cầu, chia task, viết code đến kiểm thử và refactor thông qua việc áp dụng các 'skills' chuyên biệt."
+            ],
+            "detail_file": "entries/kb_1b3f938ecea3.json",
+            "job_output_dir": "C:\\Work\\Code\\Hermes_download\\hermes-agent\\projects\\vt-tiktok-com-zsckq5neb\\agent_outputs\\job_20260709_111145_175754",
+            "source": "telegram_job",
+            "updated_at": "2026-07-13T15:29:32.080508",
+            "summary": "Video hướng dẫn một quy trình 5 bước hiệu quả để tích hợp AI vào phát triển phần mềm, nhấn mạnh tầm quan trọng của việc xây dựng quy trình thay vì chỉ tập trung vào prompt. Quy trình này bao gồm làm rõ yêu cầu, viết tài liệu PRD, chia nhỏ task, phát triển hướng kiểm thử (TDD) và cải thiện kiến trúc code. Áp dụng các 'skill' chuyên biệt giúp AI tạo ra code chất lượng, có tính ổn định và dễ bảo trì."
+        },
+        {
+            "id": "kb_91b32246589b",
+            "slug": "huong-dan-nhan-token-ai-mien-phi-tu-xiaomi-mimo-orbit",
+            "source_url": "https://vt.tiktok.com/ZSCwtTdvf/",
+            "platform": "tiktok",
+            "category": "cong-nghe",
+            "status": "approved",
+            "learned_at": "2026-07-09T16:06:50",
+            "approved_at": "2026-07-09T16:06:50",
+            "approved_by": "gui_user",
+            "approval_mode": "manual",
+            "title": "Hướng dẫn nhận Token AI miễn phí từ Xiaomi MiMo Orbit",
+            "hook_type": "result_hook",
+            "cta_style": "urgency",
+            "voice_tone": "energetic",
+            "key_lessons": [
+                "Xiaomi đang phát miễn phí lượng lớn token AI thông qua chương trình MiMo Orbit để thúc đẩy sử dụng mô hình AI mới MiMo V2.5 Pro.",
+                "MiMo V2.5 Pro là một mô hình AI mạnh mẽ với kiến trúc MoE (1.02T tham số) và khả năng xử lý tác vụ phức tạp, ngang tầm các mô hình AI hàng đầu khác.",
+                "Việc đăng ký thành công đòi hỏi mô tả dự án (use case) rõ ràng và hấp dẫn để nhận được nhiều token hơn.",
+                "Cần theo dõi các kênh thông tin và cộng đồng để cập nhật kinh nghiệm và mẹo hữu ích từ những người đã nhận được token."
+            ],
+            "detail_file": "entries/kb_91b32246589b.json",
+            "job_output_dir": "C:\\Work\\Code\\Hermes_download\\hermes-agent\\projects\\vt-tiktok-com-zscwttdvf\\agent_outputs\\job_20260709_004453_8067b8",
+            "source": "telegram_job",
+            "updated_at": "2026-07-09T16:06:50"
+        },
+        {
+            "id": "kb_389d0b8019f1",
+            "slug": "bai-hoc-hoc-tu-video-vt-tiktok-com-zsce7mf6n",
+            "source_url": "https://vt.tiktok.com/ZSCE7mf6n/",
+            "platform": "tiktok",
+            "category": "cong-nghe",
+            "status": "approved",
+            "learned_at": "2026-07-09T16:55:17",
+            "approved_at": "2026-07-09T16:55:17",
+            "approved_by": "gui_user",
+            "approval_mode": "manual",
+            "title": "Sử dụng WT-Shotclipp: AI tự động cắt video dài thành Shorts/TikTok viral",
+            "hook_type": "result_hook",
+            "cta_style": "soft",
+            "voice_tone": "professional",
+            "key_lessons": [
+                "WT-Shotclipp là công cụ mã nguồn mở viết bằng Python giúp tự động hóa toàn bộ quy trình cắt video dài thành Shorts/TikTok.",
+                "Sử dụng GPT-4 để tóm tắt và trích xuất phân đoạn đắt giá, có tính chất dễ viral nhất từ video thô.",
+                "Tự động nhận diện và bám sát khuôn mặt bằng MediaPipe để chuyển đổi tỷ lệ khung hình từ ngang (16:9) sang dọc (9:16) một cách mượt mà.",
+                "Hỗ trợ tạo phụ đề tự động từng chữ (Auto-subtitle) chạy theo giọng nói tương tự như ứng dụng CapCut."
+            ],
+            "detail_file": "entries/kb_389d0b8019f1.json",
+            "job_output_dir": "C:\\Work\\Code\\Hermes_download\\hermes-agent\\projects\\vt-tiktok-com-zsce7mf6n\\agent_outputs\\job_20260709_161002_faf539",
+            "source": "telegram_job",
+            "updated_at": "2026-07-13T15:13:00"
+        },
+        {
+            "id": "kb_5be540618e5f",
+            "slug": "bai-hoc-hoc-tu-video-vt-tiktok-com-zscoueedv",
+            "source_url": "https://vt.tiktok.com/ZSCouEEdV/",
+            "platform": "tiktok",
+            "category": "cong-nghe",
+            "status": "approved",
+            "learned_at": "2026-07-09T20:31:57",
+            "approved_at": "2026-07-09T20:32:56",
+            "approved_by": "gui_user",
+            "approval_mode": "manual",
+            "title": "Tiết kiệm đến 70 lần Token cho Claude Code bằng Sơ đồ Tri thức (Knowledge Graph)",
+            "hook_type": "result_hook",
+            "cta_style": "soft",
+            "voice_tone": "professional",
+            "key_lessons": [
+                "Claude Code tiêu tốn lượng token khổng lồ vì mặc định sẽ đọc lại toàn bộ codebase mỗi khi khởi tạo session mới.",
+                "Refify (hoặc Graphify) là công cụ miễn phí giúp quét codebase một lần duy nhất để dựng nên một Sơ đồ tri thức (Knowledge Graph) chi tiết về dự án.",
+                "Bằng cách cho Claude Code chạy trên sơ đồ tri thức này (thể hiện rõ mối quan hệ giữa các file, hàm, class), AI có thể định vị thông tin cần thiết mà không phải đọc lại toàn bộ mã nguồn thô, giúp tiết kiệm token đến 70 lần.",
+                "Giúp gói sử dụng $20 có thể làm việc hiệu quả tương đương gói $100 nhờ loại bỏ hao phí token vô ích."
+            ],
+            "detail_file": "entries/kb_5be540618e5f.json",
+            "job_output_dir": "C:\\Work\\Code\\Hermes_download\\hermes-agent\\projects\\vt-tiktok-com-zscoueedv\\agent_outputs\\job_20260709_202528_5dd7aa",
+            "source": "telegram_job",
+            "updated_at": "2026-07-13T15:13:00"
+        }
+    ]
 }

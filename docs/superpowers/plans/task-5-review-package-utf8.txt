@@ -1,0 +1,94 @@
+﻿335661f Fix Task 5: Handle missing/malformed script.json and update tests
+09e25d1 feat: implement mock publisher module
+Stats:
+ tests/tools/test_publisher.py | 42 ++++++++++++++++++++++++++++++++++++++++++
+ tools/__init__.py             |  1 +
+ tools/publisher.py            | 25 +++++++++++++++++++++++++
+ 3 files changed, 68 insertions(+)
+Diff:
+diff --git a/tests/tools/test_publisher.py b/tests/tools/test_publisher.py
+new file mode 100644
+index 0000000..bcb52f3
+--- /dev/null
++++ b/tests/tools/test_publisher.py
+@@ -0,0 +1,42 @@
++import json
++from tools.publisher import publish_recycled_video
++
++def test_publish_recycled_video(tmp_path):
++    project_dir = tmp_path / "project_x"
++    project_dir.mkdir()
++    
++    script_data = {"caption": "Test video", "hashtags": ["#test"]}
++    with open(project_dir / "script.json", "w", encoding="utf-8") as f:
++        json.dump(script_data, f)
++        
++    (project_dir / "final_video.mp4").write_text("mock video", encoding="utf-8")
++    
++    result = publish_recycled_video(str(project_dir), "tiktok")
++    
++    assert result is True
++
++def test_publish_recycled_video_missing_files(tmp_path):
++    project_dir = tmp_path / "project_x"
++    project_dir.mkdir()
++    
++    # Missing both
++    assert publish_recycled_video(str(project_dir), "tiktok") is False
++    
++    # Missing video
++    with open(project_dir / "script.json", "w", encoding="utf-8") as f:
++        json.dump({}, f)
++    assert publish_recycled_video(str(project_dir), "tiktok") is False
++    
++    # Missing script (but video exists)
++    (project_dir / "script.json").unlink()
++    (project_dir / "final_video.mp4").write_text("mock video", encoding="utf-8")
++    assert publish_recycled_video(str(project_dir), "tiktok") is False
++
++def test_publish_recycled_video_malformed_json(tmp_path):
++    project_dir = tmp_path / "project_x"
++    project_dir.mkdir()
++    
++    (project_dir / "script.json").write_text("invalid json", encoding="utf-8")
++    (project_dir / "final_video.mp4").write_text("mock video", encoding="utf-8")
++    
++    assert publish_recycled_video(str(project_dir), "tiktok") is False
+diff --git a/tools/__init__.py b/tools/__init__.py
+new file mode 100644
+index 0000000..2466ae7
+--- /dev/null
++++ b/tools/__init__.py
+@@ -0,0 +1 @@
++# Init file for tools
+diff --git a/tools/publisher.py b/tools/publisher.py
+new file mode 100644
+index 0000000..6a7eb9d
+--- /dev/null
++++ b/tools/publisher.py
+@@ -0,0 +1,25 @@
++import os
++import json
++
++def publish_recycled_video(project_dir: str, platform: str) -> bool:
++    """Publishes the finalized video to the target platform."""
++    video_path = os.path.join(project_dir, "final_video.mp4")
++    script_path = os.path.join(project_dir, "script.json")
++    
++    if not os.path.exists(video_path) or not os.path.exists(script_path):
++        return False
++        
++    with open(script_path, "r", encoding="utf-8") as f:
++        try:
++            script = json.load(f)
++        except json.JSONDecodeError:
++            return False
++        
++    caption = script.get("caption", "")
++    hashtags = script.get("hashtags", [])
++    
++    # In reality, API calls to TikTok/Youtube would go here
++    print(f"Mock publishing to {platform}: {video_path}")
++    print(f"Caption: {caption} {' '.join(hashtags)}")
++    
++    return True
