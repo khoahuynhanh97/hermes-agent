@@ -1,11 +1,30 @@
 from __future__ import annotations
 
+import importlib
+import os
 from pathlib import Path
 import subprocess
 
 
+def resolve_ffmpeg_path(ffmpeg_path: str = "") -> str:
+    if ffmpeg_path:
+        return ffmpeg_path
+    try:
+        config = importlib.import_module("config")
+        configured = getattr(config, "FFMPEG_PATH", "")
+        if configured and os.path.exists(configured):
+            return configured
+    except Exception:
+        pass
+    try:
+        imageio_ffmpeg = importlib.import_module("imageio_ffmpeg")
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return "ffmpeg"
+
+
 def build_ffmpeg_normalize_command(input_path: str | Path, output_path: str | Path, ffmpeg_path: str = "") -> list[str]:
-    ffmpeg = ffmpeg_path or "ffmpeg"
+    ffmpeg = resolve_ffmpeg_path(ffmpeg_path)
     vf = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1"
     return [
         ffmpeg,

@@ -7,10 +7,18 @@ from unittest.mock import patch
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from editor.ffmpeg_finalizer import build_ffmpeg_normalize_command, finalize_video
+from editor.ffmpeg_finalizer import build_ffmpeg_normalize_command, finalize_video, resolve_ffmpeg_path
 
 
 def run_tests():
+    class FakeImageioFfmpeg:
+        @staticmethod
+        def get_ffmpeg_exe():
+            return "bundled-ffmpeg"
+
+    with patch("editor.ffmpeg_finalizer.importlib.import_module", return_value=FakeImageioFfmpeg):
+        assert resolve_ffmpeg_path("") == "bundled-ffmpeg"
+
     cmd = build_ffmpeg_normalize_command("in.mp4", "out.mp4", ffmpeg_path="ffmpeg")
     assert cmd[:4] == ["ffmpeg", "-y", "-i", "in.mp4"]
     assert "scale=1080:1920:force_original_aspect_ratio=decrease" in " ".join(cmd)
