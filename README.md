@@ -164,6 +164,26 @@ Các biến cấu hình mẫu nằm trong `.env.example`.
 
 ---
 
+## Remotion MVP Renderer
+
+Hermes can generate a small Remotion MVP render contract without replacing the existing MoviePy renderer:
+
+```powershell
+.venv\Scripts\python.exe scripts\remotion_mvp_demo.py --project remotion-demo --skip-render
+```
+
+When Node dependencies are installed in `remotion_renderer/`, omit `--skip-render` to try rendering. The command writes `render/remotion_input.json`, `assets/comfyui_prompts.json`, `exports/remotion_final.mp4`, and `exports/final.mp4` when rendering and FFmpeg finalization succeed.
+
+Optional environment values for local runs:
+
+```text
+REMOTION_RENDERER_DIR=remotion_renderer
+NODE_PATH=node
+CRAWL4AI_ENABLED=0
+```
+
+---
+
 ## Telegram Video Intake
 
 Bot Telegram có thể nhận link video rồi hỏi bạn muốn xử lý theo hướng nào:
