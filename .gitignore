@@ -8,6 +8,7 @@ __pycache__/
 .venv
 venv/
 ENV/
+node_modules/
 
 # Project data and large media files (crucial to prevent GitHub size limit errors)
 projects/
