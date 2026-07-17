@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import json
+import os
 import sys
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -38,6 +39,28 @@ def run_tests():
         assert result["ok"] is True
         assert mocked.call_args.args[0][0] == "node"
         assert str(paths.remotion_input_json) in mocked.call_args.args[0]
+
+    original_cwd = Path.cwd()
+    with TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            paths = ensure_video_mvp_paths(Path(tmp) / "project")
+            write_remotion_input(paths, {"width": 1080})
+            relative_renderer = Path("renderer")
+            relative_renderer.mkdir()
+            (relative_renderer / "render.mjs").write_text("", encoding="utf-8")
+
+            class Completed:
+                returncode = 0
+                stdout = "rendered"
+                stderr = ""
+
+            with patch("core.remotion_renderer.subprocess.run", return_value=Completed()) as mocked:
+                result = render_with_remotion(paths, renderer_dir=relative_renderer, node_executable="node")
+            assert result["ok"] is True
+            assert Path(mocked.call_args.args[0][1]).is_absolute()
+        finally:
+            os.chdir(original_cwd)
     print("remotion renderer adapter tests: PASS")
 
 

@@ -22,7 +22,7 @@ def render_with_remotion(
     node_executable: str = "node",
     timeout_seconds: int = 300,
 ) -> dict[str, Any]:
-    renderer = Path(renderer_dir or "remotion_renderer")
+    renderer = Path(renderer_dir or "remotion_renderer").resolve()
     render_script = renderer / "render.mjs"
     if not renderer.exists():
         return _write_status(paths, {"ok": False, "reason": "renderer_dir_missing", "renderer_dir": str(renderer)})
@@ -31,8 +31,8 @@ def render_with_remotion(
     command = [
         node_executable,
         str(render_script),
-        str(paths.remotion_input_json),
-        str(paths.remotion_final_mp4),
+        str(paths.remotion_input_json.resolve()),
+        str(paths.remotion_final_mp4.resolve()),
     ]
     try:
         completed = subprocess.run(
