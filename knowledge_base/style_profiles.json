@@ -1,12 +1,12 @@
 {
-  "total_videos_analyzed": 4,
+  "total_videos_analyzed": 5,
   "hook_patterns": [
     "question_hook",
     "result_hook"
   ],
   "avg_scene_count": 4,
   "pacing": "medium",
-  "voice_tone": "warm",
+  "voice_tone": "energetic",
   "cta_styles": [],
   "video_structure": {
     "intro": "Hook trong 3 giây đầu",

@@ -138,5 +138,38 @@ Random trailing footer text
     clean_test_env()
     print("✨ --- TẤT CẢ WORKER HARDENING TESTS ĐỀU ĐẠT (PASS) --- ✨")
 
+    # ----------------------------------------------------
+    # Test 7: Storage-full failures must fail immediately without a retry.
+    # ----------------------------------------------------
+    print("[*] Test 7: Storage-full failures skip retry...")
+    assert worker.is_non_retryable_failure("[Errno 28] No space left on device")
+    assert worker.is_non_retryable_failure("ENOSPC: no space left on device")
+    assert not worker.is_non_retryable_failure("temporary TikTok network timeout")
+    class FailureManager:
+        def __init__(self):
+            self.processing_dir = TEST_OUTPUT_DIR
+            self.inbox_dir = TEST_OUTPUT_DIR / "inbox"
+            self.written_job = None
+            self.failed_job = None
+
+        def _write_json(self, _path, job):
+            self.written_job = dict(job)
+
+        def fail_job(self, job_id, error_message):
+            self.failed_job = (job_id, error_message)
+
+    original_manager = worker.manager
+    worker.manager = FailureManager()
+    worker._handle_legacy_job_failure(
+        {"job_id": "job_storage_full", "source": {"value": "https://vt.tiktok.com/example"}},
+        "[Errno 28] No space left on device",
+    )
+    assert worker.manager.written_job["status"] == "failed"
+    assert worker.manager.written_job.get("retry_count") in (None, 0)
+    assert "Non-retryable" in worker.manager.failed_job[1]
+    worker.manager = original_manager
+    print("  -> OK: Storage-full failure moves directly to failed without retry.")
+
+
 if __name__ == "__main__":
     run_worker_tests()

@@ -10,8 +10,7 @@ if getattr(config, "FFMPEG_PATH", "") and os.path.exists(config.FFMPEG_PATH):
     os.environ["IMAGEIO_DICT"] = "{}"
     os.environ["FFMPEG_BINARY"] = config.FFMPEG_PATH
 
-from moviepy.editor import VideoFileClip, ImageClip
-import moviepy.video.fx.all as vfx
+from editor.moviepy_compat import ImageClip, VideoFileClip, vfx
 
 from editor.clip_analyzer import analyze_clip
 

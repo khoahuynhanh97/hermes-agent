@@ -12,8 +12,14 @@ if getattr(config, "FFMPEG_PATH", "") and os.path.exists(config.FFMPEG_PATH):
     os.environ["IMAGEIO_DICT"] = "{}"  # Avoid imageio override issues
     os.environ["FFMPEG_BINARY"] = config.FFMPEG_PATH
 
-from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips, CompositeVideoClip, ImageClip
-import moviepy.video.fx.all as vfx
+from editor.moviepy_compat import (
+    AudioFileClip,
+    CompositeVideoClip,
+    ImageClip,
+    VideoFileClip,
+    concatenate_videoclips,
+    vfx,
+)
 
 from editor.subtitle_generator import generate_subtitles_from_script, create_subtitle_overlays
 from editor.audio_helper import get_audio_duration

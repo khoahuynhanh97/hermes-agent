@@ -1,7 +1,19 @@
 # Hermes Assistant Architecture
 
+## Current Priority
+
+Hermes is a personal Telegram assistant first. Learning from user-provided
+TikTok/YouTube links and files, concise reporting, and approved knowledge are
+the active scope. Video production is an optional later capability and must
+not drive current module boundaries or operational complexity.
+
 Hermes Assistant is the umbrella system. Hermes TikTok / video factory is one
 application inside it, not the whole product.
+
+The current product direction is documented in
+`docs/hermes-learning-production-roadmap.md`: focus first on Telegram learning
+from video, then use approved knowledge to power production planning and later
+paid video generation.
 
 ## Product shape
 
@@ -78,8 +90,8 @@ Hermes Assistant
 | Knowledge learner | `core/knowledge_store.py`, `core/learning_review.py`, `knowledge_base/` | Exists |
 | Assistant runtime | `core/assistant_runtime.py` | Added as foundation |
 | Assistant CLI | `scripts/hermes_assistant_cli.py` | Added as foundation |
-| Coding executor | Future `core/coding_agent.py` | Not implemented yet |
-| Tool registry | Future `core/tool_registry.py` | Not implemented yet |
+| Coding executor | `core/coding_agent.py` | Planning and review helpers exist; direct execution remains intentionally gated/deferred |
+| Tool registry | `core/tool_registry.py`, `core/repository_search.py` | Manifest validation, bounded GitHub search, and shell-free generated-tool CLI execution exist; Telegram confirmation remains deferred |
 
 ## Permission model
 

@@ -1,7 +1,7 @@
 import os
 from PIL import Image, ImageDraw, ImageFont
 import numpy as np
-from moviepy.editor import ImageClip
+from editor.moviepy_compat import ImageClip
 
 def wrap_text(text, font, max_width):
     """Wraps text so it doesn't exceed max_width when drawn with font."""

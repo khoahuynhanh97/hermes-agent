@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 
 REQUIRED_FIELDS = [
@@ -38,6 +40,10 @@ class ToolManifest:
     def name(self) -> str:
         return str(self.data.get("name", ""))
 
+    @property
+    def root(self) -> Path:
+        return Path(self.path).resolve().parent
+
 
 class ToolRegistry:
     """Load and validate Hermes tool manifests."""
@@ -45,12 +51,14 @@ class ToolRegistry:
     def __init__(self, repo_root: str | Path):
         self.repo_root = Path(repo_root).resolve()
         self.manifest_dir = self.repo_root / "tools" / "manifests"
+        self.generated_dir = self.repo_root / "tools" / "generated"
 
     def list_manifests(self) -> list[ToolManifest]:
         manifests = []
-        if not self.manifest_dir.exists():
-            return manifests
-        for path in sorted(self.manifest_dir.glob("*.json")):
+        paths = list(self.manifest_dir.glob("*.json")) if self.manifest_dir.exists() else []
+        if self.generated_dir.exists():
+            paths.extend(self.generated_dir.glob("*/manifest.json"))
+        for path in sorted(paths):
             manifests.append(self.load_manifest(path))
         return manifests
 
@@ -73,6 +81,60 @@ class ToolRegistry:
             if manifest.name == name:
                 return manifest
         return None
+
+    def run(self, name: str, inputs: dict[str, str] | None = None, timeout_seconds: int = 30) -> dict:
+        """Run a generated Python tool with a bounded, shell-free process."""
+        manifest = self.get(name)
+        if manifest is None:
+            raise ValueError(f"tool not found: {name}")
+        if not manifest.valid:
+            raise ValueError(f"invalid tool manifest: {manifest.errors}")
+        generated_root = self.generated_dir.resolve()
+        tool_root = manifest.root
+        if generated_root not in tool_root.parents:
+            raise PermissionError("only tools under tools/generated may be executed")
+
+        entrypoint = (tool_root / str(manifest.data.get("entrypoint", ""))).resolve()
+        if tool_root not in entrypoint.parents or entrypoint.suffix.lower() != ".py":
+            raise PermissionError("tool entrypoint must be a Python file inside its tool directory")
+        if not entrypoint.exists():
+            raise FileNotFoundError(f"tool entrypoint not found: {entrypoint}")
+
+        provided = {str(key): str(value) for key, value in (inputs or {}).items()}
+        declared = {str(item.get("name")): item for item in manifest.data.get("inputs", []) if isinstance(item, dict)}
+        unknown = sorted(set(provided) - set(declared))
+        if unknown:
+            raise ValueError(f"unknown tool inputs: {', '.join(unknown)}")
+        missing = sorted(
+            name for name, spec in declared.items()
+            if spec.get("required") and name not in provided
+        )
+        if missing:
+            raise ValueError(f"missing required tool inputs: {', '.join(missing)}")
+
+        command = [sys.executable, str(entrypoint)]
+        for key, value in provided.items():
+            command.extend([f"--{key.replace('_', '-')}", value])
+        timeout = max(1, min(60, int(timeout_seconds)))
+        completed = subprocess.run(
+            command,
+            cwd=str(tool_root),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            shell=False,
+            check=False,
+        )
+        result = {
+            "ok": completed.returncode == 0,
+            "tool": manifest.name,
+            "returncode": completed.returncode,
+            "stdout": completed.stdout[-12000:],
+            "stderr": completed.stderr[-4000:],
+        }
+        if not result["ok"]:
+            raise RuntimeError(f"tool exited with code {completed.returncode}: {result['stderr']}")
+        return result
 
 
 def validate_manifest(data: dict) -> list[str]:

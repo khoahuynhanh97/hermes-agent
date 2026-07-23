@@ -1,6 +1,6 @@
 import os
 import mutagen
-from moviepy.editor import AudioFileClip
+from editor.moviepy_compat import AudioFileClip
 
 def get_audio_duration(audio_path):
     """

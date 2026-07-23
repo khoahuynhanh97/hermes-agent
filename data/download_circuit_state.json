@@ -1,9 +1,14 @@
 {
   "tiktok": {
-    "failure_count": 0,
-    "first_failure_at": "",
-    "last_failure_at": "2026-07-09T00:25:46",
+    "failure_count": 2,
+    "first_failure_at": "2026-07-14T12:51:52",
+    "last_failure_at": "2026-07-14T12:52:31",
     "blocked_until": "",
-    "last_success_at": "2026-07-09T22:39:25"
+    "last_success_at": "2026-07-14T11:30:08"
+  },
+  "generic": {
+    "failure_count": 1,
+    "first_failure_at": "2026-07-12T16:46:14",
+    "last_failure_at": "2026-07-12T16:46:14"
   }
 }

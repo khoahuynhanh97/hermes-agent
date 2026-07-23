@@ -33,10 +33,11 @@ class AgentJobManager:
         self.processing_dir = self.jobs_root / "processing"
         self.outbox_dir = self.jobs_root / "outbox"
         self.failed_dir = self.jobs_root / "failed"
+        self.cancelled_dir = self.jobs_root / "cancelled"
         self._ensure_dirs()
 
     def _ensure_dirs(self):
-        for folder in [self.inbox_dir, self.processing_dir, self.outbox_dir, self.failed_dir]:
+        for folder in [self.inbox_dir, self.processing_dir, self.outbox_dir, self.failed_dir, self.cancelled_dir]:
             folder.mkdir(parents=True, exist_ok=True)
 
     def create_job(
@@ -250,6 +251,125 @@ class AgentJobManager:
         self._update_project_job_status(job["target"]["project_slug"], job_id, "failed")
         return job
 
+    def recover_processing_jobs(self):
+        """Requeue legacy jobs left in processing after a worker restart."""
+        recovered = []
+        for processing_file in self.processing_dir.glob("*.json"):
+            try:
+                job = self._read_json(processing_file)
+            except Exception:
+                continue
+            job_id = job.get("job_id") or processing_file.stem
+            done_file = self.outbox_dir / f"{job_id}.done.json"
+            if done_file.exists():
+                processing_file.unlink(missing_ok=True)
+                continue
+            job["status"] = "pending"
+            job["recovery_count"] = int(job.get("recovery_count") or 0) + 1
+            job["recovered_at"] = datetime.now().isoformat(timespec="seconds")
+            self._write_json(self.inbox_dir / f"{job_id}.json", job)
+            processing_file.unlink(missing_ok=True)
+            output_dir = Path(job.get("target", {}).get("output_dir", ""))
+            if output_dir.exists():
+                self._write_json(output_dir / "job.json", job)
+            recovered.append(job_id)
+        return recovered
+
+    def retry_job(self, job_id, owner_user_id=None):
+        """Requeue one failed legacy job after checking its Telegram owner."""
+        failed_file = self.failed_dir / f"{job_id}.failed.json"
+        if not failed_file.exists():
+            return {"ok": False, "reason": "failed_job_not_found"}
+        job = self._read_json(failed_file)
+        if not self._owner_matches(job, owner_user_id):
+            return {"ok": False, "reason": "not_owner"}
+        job["status"] = "pending"
+        job["retry_count"] = 0
+        job["manual_retry_count"] = int(job.get("manual_retry_count") or 0) + 1
+        job["updated_at"] = datetime.now().isoformat(timespec="seconds")
+        job.pop("error", None)
+        job.pop("dlq_reason", None)
+        inbox_file = self.inbox_dir / f"{job_id}.json"
+        self._write_json(inbox_file, job)
+        failed_file.unlink()
+        output_dir = Path(job.get("target", {}).get("output_dir", ""))
+        if output_dir.exists():
+            self._write_json(output_dir / "job.json", job)
+        return {"ok": True, "job": job}
+
+    def cancel_job(self, job_id, owner_user_id=None):
+        """Cancel a queued job. Running jobs require cooperative cancellation."""
+        inbox_file = self.inbox_dir / f"{job_id}.json"
+        if not inbox_file.exists():
+            if (self.processing_dir / f"{job_id}.json").exists():
+                return {"ok": False, "reason": "running_not_cancellable"}
+            return {"ok": False, "reason": "queued_job_not_found"}
+        job = self._read_json(inbox_file)
+        if not self._owner_matches(job, owner_user_id):
+            return {"ok": False, "reason": "not_owner"}
+        job["status"] = "cancelled"
+        job["cancelled_at"] = datetime.now().isoformat(timespec="seconds")
+        cancelled_file = self.cancelled_dir / f"{job_id}.cancelled.json"
+        self._write_json(cancelled_file, job)
+        inbox_file.unlink()
+        self._update_project_job_status(job.get("target", {}).get("project_slug", ""), job_id, "cancelled")
+        return {"ok": True, "job": job}
+
+    @staticmethod
+    def _owner_matches(job, owner_user_id):
+        if owner_user_id is None:
+            return True
+        stored = job.get("telegram", {}).get("user_id")
+        return stored is None or str(stored) == str(owner_user_id)
+
+    def check_job_access(self, job_id, owner_user_id=None):
+        """Return (found, allowed) for a job before exposing its artifacts."""
+        job_id = (job_id or "").strip()
+        if not job_id:
+            return False, False
+        candidates = []
+        for folder in [self.inbox_dir, self.processing_dir, self.outbox_dir, self.failed_dir, self.cancelled_dir]:
+            candidates.extend(folder.glob(f"{job_id}*.json"))
+        manifest_dir = self.task_queue.find_job_dir(job_id)
+        if manifest_dir:
+            candidates.append(Path(manifest_dir) / "metadata.json")
+        if not candidates:
+            return False, False
+        for path in candidates:
+            try:
+                data = self._read_json(path)
+            except Exception:
+                continue
+            telegram = data.get("telegram", {}) if path.name != "metadata.json" else data.get("telegram", {})
+            stored = telegram.get("user_id")
+            if owner_user_id is None or stored in (None, "", owner_user_id, str(owner_user_id)):
+                return True, True
+            return True, False
+        return True, False
+
+    def get_completed_job(self, job_id, owner_user_id=None):
+        """Load one completed legacy job without allowing archive-path traversal."""
+        job_id = (job_id or "").strip()
+        if not re.fullmatch(r"job_[A-Za-z0-9_]+", job_id):
+            return {"ok": False, "reason": "invalid_job_id"}
+
+        archive_dir = self.jobs_root / "done_archived"
+        candidates = [
+            self.outbox_dir / f"{job_id}.done.json",
+            archive_dir / f"{job_id}.done.json",
+        ]
+        for path in candidates:
+            if not path.exists():
+                continue
+            try:
+                job = self._read_json(path)
+            except Exception:
+                return {"ok": False, "reason": "completed_job_unreadable"}
+            if not self._owner_matches(job, owner_user_id):
+                return {"ok": False, "reason": "not_owner"}
+            return {"ok": True, "job": job}
+        return {"ok": False, "reason": "completed_job_not_found"}
+
     def get_outbox_results(self):
         """Get all unarchived done jobs from outbox."""
         results = []
@@ -333,14 +453,22 @@ class AgentJobManager:
         except Exception:
             pass
 
-    def list_jobs(self, limit=30):
+    def list_jobs(self, limit=30, owner_user_id=None):
         rows = []
         seen = set()
         for item in self.task_queue.list_jobs(limit=limit):
             seen.add(item["job_id"])
+            owner = None
+            metadata_path = Path(item.get("path", "")) / "metadata.json"
+            if metadata_path.exists():
+                metadata = self._read_json(metadata_path)
+                owner = metadata.get("telegram", {}).get("user_id")
+            if owner_user_id is not None and owner not in (None, "", owner_user_id, str(owner_user_id)):
+                continue
             rows.append({
                 "job_id": item["job_id"],
-                "status": item["status"],
+                "status": self._public_status(item["status"]),
+                "legacy_status": item["status"],
                 "queue_status": item.get("queue_status", ""),
                 "created_at": item.get("created_at", ""),
                 "project_slug": item.get("project_slug", ""),
@@ -348,6 +476,7 @@ class AgentJobManager:
                 "engine": item.get("engine", ""),
                 "path": item.get("path", ""),
                 "progress": item.get("progress", {}),
+                "owner_user_id": owner,
                 "manifest_job": True,
             })
         for status, folder in [
@@ -355,6 +484,7 @@ class AgentJobManager:
             ("processing", self.processing_dir),
             ("done", self.outbox_dir),
             ("failed", self.failed_dir),
+            ("cancelled", self.cancelled_dir),
         ]:
             for path in folder.glob("*.json"):
                 try:
@@ -363,16 +493,33 @@ class AgentJobManager:
                     continue
                 if data.get("job_id") in seen:
                     continue
+                owner = data.get("telegram", {}).get("user_id")
+                if owner_user_id is not None and owner not in (None, "", owner_user_id, str(owner_user_id)):
+                    continue
                 rows.append({
                     "job_id": data.get("job_id", path.stem.replace(".done", "")),
-                    "status": data.get("status", status),
+                    "status": self._public_status(data.get("status", status)),
+                    "legacy_status": data.get("status", status),
                     "created_at": data.get("created_at", ""),
                     "project_slug": data.get("target", {}).get("project_slug", ""),
                     "source": data.get("source", {}).get("value", ""),
                     "path": str(path.resolve()),
+                    "owner_user_id": owner,
                 })
         rows.sort(key=lambda item: item.get("created_at", ""), reverse=True)
         return rows[:limit]
+
+    @staticmethod
+    def _public_status(status):
+        return {
+            "pending": "queued",
+            "processing": "running",
+            "running": "running",
+            "done": "completed",
+            "completed": "completed",
+            "failed": "failed",
+            "cancelled": "cancelled",
+        }.get(status, status or "unknown")
 
     def load_manifest_job(self, job_id, sync=True):
         return self.task_queue.load_job(job_id, sync=sync)

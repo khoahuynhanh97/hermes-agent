@@ -302,7 +302,7 @@ def split_audio_video(video_path, output_dir_audio, output_dir_video, log_callba
         os.environ["IMAGEIO_DICT"] = "{}"
         os.environ["FFMPEG_BINARY"] = config.FFMPEG_PATH
         
-    from moviepy.editor import VideoFileClip
+    from editor.moviepy_compat import VideoFileClip
     
     try:
         clip = VideoFileClip(video_path)

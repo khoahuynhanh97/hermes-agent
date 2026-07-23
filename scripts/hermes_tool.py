@@ -26,6 +26,11 @@ def parse_args() -> argparse.Namespace:
     create.add_argument("name", help="Tool name")
     create.add_argument("--description", default="", help="Tool description")
 
+    run = sub.add_parser("run", help="Run a generated Python tool")
+    run.add_argument("name", help="Tool name")
+    run.add_argument("--input", action="append", default=[], metavar="KEY=VALUE", help="Declared tool input")
+    run.add_argument("--timeout", type=int, default=30, help="Timeout in seconds, capped at 60")
+
     export = sub.add_parser("export", help="Export a generated tool as zip")
     export.add_argument("name", help="Tool name")
 
@@ -46,6 +51,21 @@ def main() -> int:
     if args.command == "export":
         path = exporter.export(args.name)
         print(f"Exported: {path}")
+        return 0
+
+    if args.command == "run":
+        inputs = {}
+        for item in args.input:
+            if "=" not in item:
+                raise SystemExit(f"Invalid --input {item!r}; use KEY=VALUE")
+            key, value = item.split("=", 1)
+            if not key.strip():
+                raise SystemExit("Input key cannot be empty")
+            inputs[key.strip()] = value
+        result = registry.run(args.name, inputs=inputs, timeout_seconds=args.timeout)
+        print(result.get("stdout", "").rstrip())
+        if result.get("stderr"):
+            print(result["stderr"].rstrip(), file=sys.stderr)
         return 0
 
     manifests = registry.list_manifests()

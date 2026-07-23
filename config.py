@@ -13,6 +13,20 @@ else:
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
+# Text LLM gateway. 9Router is primary; the existing provider router is the
+# controlled compatibility fallback during migration.
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "router")
+LLM_ROUTER_BASE_URL = os.environ.get("LLM_ROUTER_BASE_URL", "http://127.0.0.1:20128/v1")
+LLM_ROUTER_API_KEY = os.environ.get("LLM_ROUTER_API_KEY", "")
+LLM_DEFAULT_MODEL = os.environ.get("LLM_DEFAULT_MODEL", "fast")
+LLM_MODEL_CHAT = os.environ.get("LLM_MODEL_CHAT", "")
+LLM_MODEL_LEARNING = os.environ.get("LLM_MODEL_LEARNING", "")
+LLM_MODEL_CODE = os.environ.get("LLM_MODEL_CODE", "")
+LLM_TIMEOUT_SECONDS = os.environ.get("LLM_TIMEOUT_SECONDS", "60")
+LLM_RETRY_COUNT = os.environ.get("LLM_RETRY_COUNT", "1")
+LLM_ENABLE_LEGACY_PROVIDER_FALLBACK = os.environ.get("LLM_ENABLE_LEGACY_PROVIDER_FALLBACK", "1")
+TELEGRAM_MAX_FILE_MB = os.environ.get("TELEGRAM_MAX_FILE_MB", "200")
+
 # Multi-Provider AI Router Keys (9router-style)
 GROQ_API_KEY       = os.environ.get("GROQ_API_KEY", "")
 CEREBRAS_API_KEY   = os.environ.get("CEREBRAS_API_KEY", "")
@@ -28,6 +42,7 @@ DEFAULT_LOCAL_MODEL  = os.environ.get("DEFAULT_LOCAL_MODEL", "llama3.2:3b")
 
 # Telegram Bot Config
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_ALLOWED_USER_IDS = os.environ.get("TELEGRAM_ALLOWED_USER_IDS", "")
 TELEGRAM_REVIEW_CHAT_ID = os.environ.get("TELEGRAM_REVIEW_CHAT_ID", "")
 TELEGRAM_REVIEW_SOURCE_CHAT = os.environ.get("TELEGRAM_REVIEW_SOURCE_CHAT", "")
 HERMES_ALERTS_ENABLED = os.environ.get("HERMES_ALERTS_ENABLED", "0")

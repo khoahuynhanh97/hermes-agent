@@ -56,7 +56,15 @@ def is_blocked_error(output: str) -> bool:
     if not output:
         return False
     lower_out = output.lower()
-    return "403" in lower_out or "blocked" in lower_out or "ip" in lower_out or "denied" in lower_out
+    return any(
+        re.search(pattern, lower_out)
+        for pattern in (
+            r"\b403\b",
+            r"\bblocked\b",
+            r"\bdenied\b",
+            r"\bip\s+(?:address|filter|ban|blocked)\b",
+        )
+    )
 
 def fetch_transcript(url: str, output_dir: str) -> dict:
     """
@@ -72,7 +80,9 @@ def fetch_transcript(url: str, output_dir: str) -> dict:
         "method": "",
         "transcript": "",
         "language": "vi",
-        "error": ""
+        "error": "",
+        "metadata": {},
+        "confidence": "needs_source",
     }
     
     # Check if the url is actually a local file path
@@ -93,7 +103,8 @@ def fetch_transcript(url: str, output_dir: str) -> dict:
                     "method": "whisper",
                     "transcript": transcript,
                     "language": detected_lang,
-                    "error": ""
+                    "error": "",
+                    "confidence": "high",
                 })
                 # TASK 3: No-speech detection
                 if len(transcript.strip()) < 20:
@@ -182,7 +193,8 @@ def fetch_transcript(url: str, output_dir: str) -> dict:
                     "method": "caption",
                     "transcript": transcript,
                     "language": lang,
-                    "error": ""
+                    "error": "",
+                    "confidence": "medium",
                 })
                 # TASK 3: No-speech detection
                 if len(transcript.strip()) < 20:
@@ -261,7 +273,8 @@ def fetch_transcript(url: str, output_dir: str) -> dict:
                     "method": "whisper",
                     "transcript": transcript,
                     "language": detected_lang,
-                    "error": ""
+                    "error": "",
+                    "confidence": "medium",
                 })
                 # TASK 3: No-speech detection
                 if len(transcript.strip()) < 20:
@@ -300,4 +313,49 @@ def fetch_transcript(url: str, output_dir: str) -> dict:
             except Exception:
                 pass
                 
+    if not os.path.exists(url) and re.match(r"^https?://", url, re.IGNORECASE):
+        metadata = _fetch_metadata(url)
+        if metadata:
+            result.update({
+                "status": "partial",
+                "method": "metadata",
+                "metadata": metadata,
+                "confidence": "low",
+            })
     return result
+
+
+def _fetch_metadata(url: str) -> dict:
+    """Fetch bounded public metadata without downloading media."""
+    try:
+        process = subprocess.run(
+            [
+                "python", "-m", "yt_dlp", "--dump-single-json",
+                "--skip-download", "--no-warnings", url,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=45,
+        )
+        if process.returncode != 0 or not process.stdout.strip():
+            return {}
+        import json
+        raw = json.loads(process.stdout)
+        if not isinstance(raw, dict):
+            return {}
+        fields = {
+            "title": raw.get("title"),
+            "description": raw.get("description"),
+            "uploader": raw.get("uploader") or raw.get("channel"),
+            "duration_seconds": raw.get("duration"),
+            "webpage_url": raw.get("webpage_url") or url,
+        }
+        return {
+            key: (str(value)[:8000] if key == "description" else value)
+            for key, value in fields.items()
+            if value not in (None, "")
+        }
+    except Exception as exc:
+        logger.info("Metadata fallback unavailable: %s", exc)
+        return {}
