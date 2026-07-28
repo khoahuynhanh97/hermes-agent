@@ -1,54 +1,16 @@
 @echo off
-chcp 65001 >nul 2>&1
-title Hermes - Telegram Bot + Worker
+cd /d "%~dp0"
+if not exist "runtime_logs" mkdir "runtime_logs"
 
-echo ========================================
-echo    HERMES - Telegram Bot + Worker
-echo ========================================
-echo.
+echo Starting Hermes Telegram Bot...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:PYTHONUTF8='1'; Start-Process -FilePath 'python' -ArgumentList 'telegram_bot.py' -WorkingDirectory '%CD%' -RedirectStandardOutput 'runtime_logs\telegram_bot.stdout.log' -RedirectStandardError 'runtime_logs\telegram_bot.stderr.log' -WindowStyle Hidden"
 
-:: Check Python
-python --version >nul 2>&1
-if errorlevel 1 (
-    echo [ERROR] Python not found. Install Python 3.12+
-    pause
-    exit /b 1
-)
-
-:: Check .env
-if not exist .env (
-    echo [WARNING] .env file not found. Copying from .env.example...
-    if exist .env.example (
-        copy .env.example .env >nul 2>&1
-    ) else (
-        echo [ERROR] No .env or .env.example found
-        pause
-        exit /b 1
-    )
-)
-
-:: Install requirements if needed
-if not exist venv (
-    echo [INFO] Creating virtual environment...
-    python -m venv venv
-    call venv\Scripts\activate.bat
-    pip install -r requirements.txt
-) else (
-    call venv\Scripts\activate.bat
-)
+echo Starting Hermes Job Worker...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:PYTHONUTF8='1'; Start-Process -FilePath 'python' -ArgumentList '-m workers.job_worker' -WorkingDirectory '%CD%' -RedirectStandardOutput 'runtime_logs\worker.stdout.log' -RedirectStandardError 'runtime_logs\worker.stderr.log' -WindowStyle Hidden"
 
 echo.
-echo [1/2] Starting Telegram Bot...
-echo [2/2] Starting Worker...
+echo Da chay 2 tien trinh:
+echo - Telegram Bot: runtime_logs\telegram_bot.stderr.log
+echo - Worker: runtime_logs\worker.stderr.log
 echo.
-
-:: Start worker in background
-start "Hermes Worker" /min python -m workers.job_worker
-
-:: Start telegram bot in foreground
-python telegram_bot.py
-
-echo.
-echo [INFO] Bot stopped. Stopping worker...
-taskkill /FI "WINDOWTITLE eq Hermes Worker" /F >nul 2>&1
-echo Done.
+timeout /t 3 >nul
