@@ -1261,13 +1261,47 @@ async def knowledge_decision_command(update: Update, context: ContextTypes.DEFAU
         return
 
     if action == "approve":
-        updated = store.mark_approved(entry_id, approved_by=str(user_id), approval_mode="telegram_command")
-        message = "Đã approve lesson và đưa vào approved knowledge."
+        # Kiem tra trung lap truoc khi duyet
+        result = store.mark_approved(entry_id, approved_by=str(user_id), approval_mode="telegram_command")
+        
+        # Kiem tra neu co canh bao trung lap
+        if result and result.get("duplicate_warning", {}).get("has_duplicates"):
+            similar = result["duplicate_warning"]["similar_entries"]
+            warning_lines = [
+                f"<b>Canh bao trung lap!</b>",
+                f"Entry nay co title/tong quat tuong tu voi <b>{len(similar)}</b> bai da duyet:",
+                "",
+            ]
+            for i, s in enumerate(similar[:5], 1):
+                sim_pct = s.get('similarity', 0)
+                match_type = s.get('match_type', 'unknown')
+                keywords = ', '.join(s.get('common_keywords', [])[:5])
+                warning_lines.append(
+                    f"  {i}. <b>{s.get('title', 'N/A')}</b> "
+                    f"(tuong tu {sim_pct}% - {match_type})"
+                )
+                if keywords:
+                    warning_lines.append(f"     Keywords chung: {keywords}")
+            
+            warning_lines.extend([
+                "",
+                "Ban co the:",
+                f"  - /approve_force {entry_id}  (duyet bat chap)",
+                f"  - /merge {entry_id}          (gop voi bai cu)",
+                f"  - /reject {entry_id}         (tu choi)",
+                "",
+                "Neu khong co van de, hay /approve_force de duyet binh thuong.",
+            ])
+            message = "\n".join(warning_lines)
+        elif result:
+            message = "Da approve lesson va dua vao approved knowledge."
+        else:
+            message = "Lesson khong ton tai hoac da duoc duyet."
     else:
         reason = " ".join(context.args[1:]).strip() or "Rejected via Telegram command"
         updated = store.mark_rejected(entry_id, rejected_by=str(user_id), rejection_reason=reason)
-        message = "Đã reject lesson."
-    await reply_html(update.message, message if updated else "Lesson không còn tồn tại.")
+        message = "Da reject lesson."
+    await reply_html(update.message, message if result else "Lesson khong ton tai.")
 
 
 async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1278,21 +1312,150 @@ async def reject_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await knowledge_decision_command(update, context, "reject")
 
 
+async def approve_force_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Approve bat chap, bo qua canh bao trung lap."""
+    entry_id = (context.args[0] if context.args else "").strip()
+    if not entry_id:
+        await reply_html(update.message, "Dung /approve_force <knowledge_id>")
+        return
+    user_id = update.effective_user.id if update.effective_user else None
+    store = get_store()
+    if entry_id.isdecimal():
+        position = int(entry_id)
+        visible_pending = _visible_pending_entries(store, user_id)
+        if position < 1 or position > len(visible_pending):
+            await reply_html(update.message, "So thu tu khong ton tai trong /knowledge pending.")
+            return
+        entry_id = str(visible_pending[position - 1]["id"])
+    entry = store.get_entry(entry_id)
+    if not entry:
+        await reply_html(update.message, "Khong tim thay knowledge entry nay.")
+        return
+    owner_user_id = entry.get("owner_user_id")
+    if owner_user_id and str(owner_user_id) != str(user_id):
+        await reply_html(update.message, "Ban khong so huu knowledge entry nay.")
+        return
+
+    updated = store.mark_approved(entry_id, approved_by=str(user_id), approval_mode="force_approve", force=True)
+    if updated:
+        await reply_html(update.message, "Da approve (bat chap) lesson va dua vao approved knowledge.")
+    else:
+        await reply_html(update.message, "Lesson khong ton tai hoac da duoc duyet.")
+
+
+async def merge_knowledge_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gop entry moi voi entry cu da approved ton tai."""
+    from datetime import datetime
+    entry_id = (context.args[0] if context.args else "").strip()
+    if not entry_id:
+        await reply_html(update.message, "Dung /merge <knowledge_id>")
+        return
+    user_id = update.effective_user.id if update.effective_user else None
+    store = get_store()
+    if entry_id.isdecimal():
+        position = int(entry_id)
+        visible_pending = _visible_pending_entries(store, user_id)
+        if position < 1 or position > len(visible_pending):
+            await reply_html(update.message, "So thu tu khong ton tai trong /knowledge pending.")
+            return
+        entry_id = str(visible_pending[position - 1]["id"])
+    entry = store.get_entry(entry_id)
+    if not entry:
+        await reply_html(update.message, "Khong tim thay knowledge entry nay.")
+        return
+    owner_user_id = entry.get("owner_user_id")
+    if owner_user_id and str(owner_user_id) != str(user_id):
+        await reply_html(update.message, "Ban khong so huu knowledge entry nay.")
+        return
+
+    # Tim entry tuong tu de gop
+    title = entry.get("title", "")
+    summary = " ".join(entry.get("key_lessons", []))
+    similar = store.find_similar_entries(title, summary, threshold=0.5)
+
+    if not similar:
+        await reply_html(update.message, "Khong tim thay bai hoc nao tuong tu de gop. Dung /approve_force de duyet binh thuong.")
+        return
+
+    # Gop vao entry dau tien tuong tu nhat
+    target = similar[0]
+    target_id = target.get("id")
+    target_entry = store.get_entry(target_id)
+
+    if not target_entry:
+        await reply_html(update.message, "Khong tim thay entry muc tieu de gop.")
+        return
+
+    # Gop key_lessons
+    existing_lessons = set(target_entry.get("key_lessons", []))
+    new_lessons = set(entry.get("key_lessons", []))
+    merged_lessons = list(existing_lessons | new_lessons)
+
+    # Gop hook_type, cta_style, voice_tone
+    merged_hooks = list(set([target_entry.get("hook_type", ""), entry.get("hook_type", "")]) - {""})
+    merged_ctas = list(set([target_entry.get("cta_style", ""), entry.get("cta_style", "")]) - {""})
+    merged_tones = list(set([target_entry.get("voice_tone", ""), entry.get("voice_tone", "")]) - {""})
+
+    # Cap nhat entry cu
+    target_entry["key_lessons"] = merged_lessons
+    target_entry["hook_type"] = " / ".join(merged_hooks) if merged_hooks else target_entry.get("hook_type", "")
+    target_entry["cta_style"] = " / ".join(merged_ctas) if merged_ctas else target_entry.get("cta_style", "")
+    target_entry["voice_tone"] = " / ".join(merged_tones) if merged_tones else target_entry.get("voice_tone", "")
+    target_entry["updated_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+
+    # Danh dau entry moi da gop
+    entry["status"] = "merged"
+    entry["merged_into"] = target_id
+    entry["updated_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+
+    store._save_index_atomic()
+
+    await reply_html(update.message,
+        f"Da gop vao bai hoc: <b>{target_entry.get('title', target_id)}</b>\n"
+        f"  - Tong so bai hoc: {len(merged_lessons)}\n"
+        f"  - Hook: {target_entry.get('hook_type', 'N/A')}\n"
+        f"  - CTA: {target_entry.get('cta_style', 'N/A')}\n\n"
+        f"Entry goc da danh dau la 'merged'."
+
+
 async def approve_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Approve every pending lesson currently displayed to this Telegram user."""
     user_id = update.effective_user.id if update.effective_user else None
     store = get_store()
     pending_entries = _visible_pending_entries(store, user_id)
     approved = 0
+    skipped = []
     for entry in pending_entries:
-        if store.mark_approved(
+        result = store.mark_approved(
             entry["id"], approved_by=str(user_id), approval_mode="telegram_command_bulk"
-        ):
-            approved += 1
-    if approved:
-        await reply_html(update.message, f"Đã approve {approved} lesson đang hiển thị.")
+        )
+        if result:
+            if result.get("duplicate_warning", {}).get("has_duplicates"):
+                skipped.append({
+                    "title": entry.get("title", "N/A"),
+                    "similar_count": result["duplicate_warning"]["similar_count"],
+                })
+            else:
+                approved += 1
+    if approved and skipped:
+        msg = f"Da approve {approved} lesson."
+        msg += f"\nBo qua {len(skipped)} lesson co trung lap:"
+        for s in skipped[:5]:
+            msg += f"\n  - {s['title']} (trung voi {s['similar_count']} bai)"
+        if len(skipped) > 5:
+            msg += f"\n  ... va {len(skipped) - 5} bai khac"
+        msg += "\nDung /approve_force <id> de duyet bat chap."
+        await reply_html(update.message, msg)
+    elif approved:
+        await reply_html(update.message, f"Da approve {approved} lesson dang hien thi.")
+    elif skipped:
+        msg = f"Tat ca {len(skipped)} lesson deu co trung lap:"
+        for s in skipped[:5]:
+            msg += f"\n  - {s['title']} (trung voi {s['similar_count']} bai)"
+        msg += "\nDung /approve_force <id> de duyet bat chap."
+        await reply_html(update.message, msg)
     else:
-        await reply_html(update.message, "Không có lesson pending để approve.")
+        await reply_html(update.message, "Khong co lesson pending de approve.")
 
 
 async def clear_memory_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1429,7 +1592,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "   • `/hoc_video` = alias của `/hoc_kien_thuc`\n"
         "   • `/len_kich_ban` = phân tích và lên kịch bản mới\n\n"
         "⚙️ **Vận hành**: `/status`, `/knowledge [pending|approved|rejected]`, `/retry <job_id>`, `/cancel <job_id>`\n"
-        "✅ **Duyệt knowledge**: `/approve <knowledge_id>`, `/reject <knowledge_id>`\n"
+        "✅ **Duyệt knowledge**: `/approve <id>`, `/reject <id>`, `/approve_force <id>`, `/merge <id>`\n"
         "🧭 **Trợ lý lập kế hoạch**: `/assistant <yêu cầu>`, `/code_plan <yêu cầu>`\n\n"
         "🧠 **Lưu prompt học hỏi**: `/luu_prompt Tên prompt | nội dung prompt`\n\n"
         "💬 Ngoài ra, bạn có thể **chat trực tiếp** không cần lệnh, tôi sẽ trả lời như một người bạn ảo!"
@@ -2049,7 +2212,9 @@ def main():
     app.add_handler(CommandHandler("knowledge", knowledge_command))
     app.add_handler(CommandHandler("approve", approve_command))
     app.add_handler(CommandHandler("approve_all", approve_all_command))
+    app.add_handler(CommandHandler("approve_force", approve_force_command))
     app.add_handler(CommandHandler("reject", reject_command))
+    app.add_handler(CommandHandler("merge", merge_knowledge_command))
     app.add_handler(CommandHandler("recover", recover_command))
     app.add_handler(CommandHandler("clear_memory", clear_memory_command))
     app.add_handler(CommandHandler("retry", retry_command))

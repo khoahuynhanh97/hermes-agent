@@ -196,6 +196,117 @@ class UnifiedKnowledgeStore:
         import hashlib
         return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
+    def find_similar_entries(self, title: str, summary: str = "", threshold: float = 0.6) -> list[dict]:
+        """
+        Tim cac entry da approved co title hoac summary tuong tu.
+        Dung simple string matching + keyword overlap de detect duplicate.
+
+        Args:
+            title: Title cua entry can check
+            summary: Summary/key_lessons cua entry can check (optional)
+            threshold: Ngưỡng similarity (0.0 - 1.0), mac dinh 0.6 (60% overlap)
+
+        Returns:
+            List cac entry da approved co do tuong tu cao
+        """
+        self._reload()
+
+        if not title:
+            return []
+
+        title_lower = title.lower().strip()
+        title_words = set(title_lower.split())
+
+        # Lay keywords tu title (loai bo stop words tieng Viet co ban)
+        stop_words = {"cach", "lam", "cho", "va", "cua", "trong", "voi", "tu", "de", "mot",
+                      "cac", "nay", "do", "duoc", "khong", "con", "neu", "hay", "hoac",
+                      "the", "how", "to", "and", "for", "with", "from", "a", "an", "is", "in"}
+        title_keywords = title_words - stop_words
+
+        similar_entries = []
+
+        for entry in self._index["entries"]:
+            if entry.get("status") != "approved":
+                continue
+
+            entry_title = (entry.get("title") or "").lower().strip()
+            entry_words = set(entry_title.split())
+            entry_keywords = entry_words - stop_words
+
+            # 1. Exact title match
+            if title_lower == entry_title:
+                similar_entries.append({
+                    **entry,
+                    "match_type": "exact_title",
+                    "similarity": 1.0,
+                })
+                continue
+
+            # 2. High overlap title (>= threshold)
+            if title_keywords and entry_keywords:
+                intersection = title_keywords & entry_keywords
+                union = title_keywords | entry_keywords
+                jaccard = len(intersection) / len(union) if union else 0
+                if jaccard >= threshold:
+                    similar_entries.append({
+                        **entry,
+                        "match_type": "similar_title",
+                        "similarity": jaccard,
+                        "common_keywords": list(intersection),
+                    })
+                    continue
+
+            # 3. Title contains in entry or vice versa
+            if (len(title_lower) > 10 and title_lower in entry_title) or \
+               (len(entry_title) > 10 and entry_title in title_lower):
+                similarity = min(len(title_lower), len(entry_title)) / max(len(title_lower), len(entry_title))
+                if similarity >= threshold:
+                    similar_entries.append({
+                        **entry,
+                        "match_type": "contained_title",
+                        "similarity": similarity,
+                    })
+                    continue
+
+            # 4. Summary overlap (if summary provided)
+            if summary:
+                summary_lower = summary.lower().strip()
+                # Clean punctuation from summary words
+                import string
+                summary_clean = summary_lower.translate(str.maketrans('', '', string.punctuation))
+                summary_words = set(summary_clean.split()) - stop_words
+
+                # Also include entry's key_lessons in comparison
+                entry_lessons = entry.get("key_lessons", [])
+                entry_lesson_words = set()
+                for lesson in entry_lessons:
+                    lesson_clean = lesson.lower().translate(str.maketrans('', '', string.punctuation))
+                    entry_lesson_words.update(lesson_clean.split())
+                entry_lesson_words = entry_lesson_words - stop_words
+
+                # Combine entry keywords and lesson keywords
+                all_entry_keywords = entry_keywords | entry_lesson_words
+
+                if summary_words and all_entry_keywords:
+                    summary_intersection = summary_words & all_entry_keywords
+                    summary_union = summary_words | all_entry_keywords
+                    summary_jaccard = len(summary_intersection) / len(summary_union) if summary_union else 0
+                    # Combine title and summary similarity
+                    title_sim = (jaccard if title_keywords and entry_keywords else 0)
+                    combined = title_sim * 0.5 + summary_jaccard * 0.5
+                    if combined >= threshold:
+                        similar_entries.append({
+                            **entry,
+                            "match_type": "similar_summary",
+                            "similarity": combined,
+                            "common_keywords": list(summary_intersection),
+                        })
+
+        # Sort by similarity descending
+        similar_entries.sort(key=lambda x: x.get("similarity", 0), reverse=True)
+
+        return similar_entries
+
     def find_existing_entry(self, source_url: str) -> Optional[dict]:
         if not source_url:
             return None
@@ -319,6 +430,108 @@ class UnifiedKnowledgeStore:
                 return e
         return None
 
+    def get_entry_detail(self, identifier: str) -> dict:
+        """Return the stored detail payload for an entry, or an empty dict."""
+        entry = self.get_entry(identifier)
+        if not entry:
+            return {}
+
+        return self._read_entry_detail(entry)
+
+    def _read_entry_detail(self, entry: dict) -> dict:
+        """Read detail without reloading the index during a write operation."""
+
+        detail_file = entry.get("detail_file")
+        if not detail_file:
+            return {}
+        detail_path = KB_DIR / detail_file
+        try:
+            payload = json.loads(detail_path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("[KnowledgeStore] Could not read detail for %s: %s", entry.get("id"), exc)
+            return {}
+        detail = payload.get("detail")
+        return detail if isinstance(detail, dict) else {}
+
+    def mark_needs_reanalysis(
+        self,
+        identifier: str,
+        validation_error: str,
+        detail_updates: dict = None,
+    ) -> Optional[dict]:
+        """Flag a pending placeholder lesson for an explicit re-analysis."""
+        self._reload()
+        entry = next(
+            (
+                item for item in self._index["entries"]
+                if item.get("id") == identifier or item.get("slug") == identifier
+            ),
+            None,
+        )
+        if not entry or entry.get("status") != "pending":
+            return None
+
+        detail = self._read_entry_detail(entry)
+        detail.update(detail_updates or {})
+        detail["needs_reanalysis"] = True
+        detail["validation_error"] = validation_error
+        detail.setdefault("reanalysis_count", 0)
+
+        entry["needs_reanalysis"] = True
+        entry["updated_at"] = _now_iso()
+        detail_path = KB_DIR / entry["detail_file"]
+        detail_path.write_text(
+            json.dumps({**entry, "detail": detail}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self._save_index_atomic()
+        return entry
+
+    def replace_pending_lesson(
+        self,
+        identifier: str,
+        lesson: dict,
+        detail_data: dict = None,
+    ) -> Optional[dict]:
+        """Replace a pending placeholder in place after successful re-analysis."""
+        self._reload()
+        entry = next(
+            (
+                item for item in self._index["entries"]
+                if item.get("id") == identifier or item.get("slug") == identifier
+            ),
+            None,
+        )
+        if not entry or entry.get("status") != "pending":
+            return None
+
+        for field in (
+            "title",
+            "category",
+            "hook_type",
+            "cta_style",
+            "voice_tone",
+            "key_lessons",
+            "job_output_dir",
+        ):
+            if field in lesson:
+                entry[field] = lesson[field]
+        entry["needs_reanalysis"] = False
+        entry["learned_at"] = _now_iso()
+        entry["updated_at"] = _now_iso()
+
+        detail = self._read_entry_detail(entry)
+        detail.update(detail_data or {})
+        detail["needs_reanalysis"] = False
+        detail.pop("validation_error", None)
+        detail_path = KB_DIR / entry["detail_file"]
+        detail_path.write_text(
+            json.dumps({**entry, "detail": detail}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self._save_index_atomic()
+        return entry
+
     def list_entries(self, status: str = None, category: str = None) -> list:
         """Lấy danh sách entries, có thể filter theo status và/hoặc category."""
         self._reload()
@@ -425,13 +638,17 @@ class UnifiedKnowledgeStore:
     # Lifecycle management
     # ------------------------------------------------------------------
 
-    def mark_approved(self, identifier: str, approved_by: str = None, approval_mode: str = None) -> Optional[dict]:
+    def mark_approved(self, identifier: str, approved_by: str = None, approval_mode: str = None, force: bool = False) -> Optional[dict]:
         """
-        Duyệt một entry: status → approved.
-        Tự động trigger rebuild style profile.
+        Duyet mot entry: status -> approved.
+        Tu dong trigger rebuild style profile.
+        
+        Kiem tra trung lap dua tren title/summary truoc khi duyet.
+        Neu tim thay entry tuong tu da approved, tra ve entry voi warning.
+        Dung force=True de bo qua kiem tra trung lap.
         """
         self._reload()
-        # Ưu tiên ID trước, sau đó slug
+        # Uu tien ID truoc, sau do slug
         matched_entry = None
         for entry in self._index["entries"]:
             if entry.get("id") == identifier:
@@ -443,28 +660,56 @@ class UnifiedKnowledgeStore:
                     matched_entry = entry
                     break
 
-        if matched_entry:
-            if matched_entry.get("status") != "approved":
-                matched_entry.setdefault("approval_history", []).append({
-                    "status": "approved",
-                    "at": _now_iso(),
-                    "actor": approved_by,
-                    "mode": approval_mode,
-                })
-            matched_entry["status"] = "approved"
-            matched_entry["approved_at"] = _now_iso()
-            matched_entry["approved_by"] = approved_by
-            matched_entry["approval_mode"] = approval_mode
-            matched_entry["updated_at"] = _now_iso()
-            self._save_index_atomic()
-            logger.info(f"[KnowledgeStore] ✅ Approved: {matched_entry['title']} (by={approved_by}, mode={approval_mode})")
-            try:
-                self._rebuild_style_profile()
-            except Exception as e:
-                logger.warning(f"[KnowledgeStore] Không thể rebuild style profile: {e}")
-            return matched_entry
+        if not matched_entry:
+            logger.warning(f"[KnowledgeStore] Khong tim thay entry de duyet: {identifier}")
+            return None
 
-        logger.warning(f"[KnowledgeStore] Không tìm thấy entry để duyệt: {identifier}")
+        # Kiem tra trung lap title/summary voi cac entry da approved
+        if not force:
+            title = matched_entry.get("title", "")
+            summary = " ".join(matched_entry.get("key_lessons", []))
+            similar = self.find_similar_entries(title, summary, threshold=0.5)
+            if similar:
+                # Tra ve entry voi thong tin canh bao trung lap
+                matched_entry["duplicate_warning"] = {
+                    "has_duplicates": True,
+                    "similar_count": len(similar),
+                    "similar_entries": [
+                        {
+                            "id": s.get("id"),
+                            "title": s.get("title"),
+                            "similarity": round(s.get("similarity", 0) * 100, 1),
+                            "match_type": s.get("match_type"),
+                            "common_keywords": s.get("common_keywords", []),
+                        }
+                        for s in similar[:5]  # Chi lay 5 entry gan nhat
+                    ],
+                }
+                return matched_entry
+
+        # Khong co trung lap hoac force=True -> duyet binh thuong
+        matched_entry.pop("duplicate_warning", None)
+        if matched_entry.get("status") != "approved":
+            matched_entry.setdefault("approval_history", []).append({
+                "status": "approved",
+                "at": _now_iso(),
+                "actor": approved_by,
+                "mode": approval_mode,
+            })
+        matched_entry["status"] = "approved"
+        matched_entry["approved_at"] = _now_iso()
+        matched_entry["approved_by"] = approved_by
+        matched_entry["approval_mode"] = approval_mode
+        matched_entry["updated_at"] = _now_iso()
+        self._save_index_atomic()
+        logger.info(f"[KnowledgeStore] Approved: {matched_entry['title']} (by={approved_by}, mode={approval_mode})")
+        try:
+            self._rebuild_style_profile()
+        except Exception as e:
+            logger.warning(f"[KnowledgeStore] Khong the rebuild style profile: {e}")
+        return matched_entry
+
+        logger.warning(f"[KnowledgeStore] Khong tim thay entry de duyet: {identifier}")
         return None
 
     def mark_rejected(self, identifier: str, rejected_by: str = None, rejection_reason: str = None) -> Optional[dict]:
@@ -654,8 +899,15 @@ class UnifiedKnowledgeStore:
 # Module-level convenience functions
 # ---------------------------------------------------------------------------
 
-def get_store() -> UnifiedKnowledgeStore:
-    """Factory function — trả về một instance mới của store."""
+def get_store():
+    """Return the configured knowledge backend."""
+    backend = os.environ.get("HERMES_STORAGE_BACKEND", "json").strip().lower()
+    if backend == "sqlite":
+        from hermes.knowledge import SQLiteKnowledgeStore
+
+        return SQLiteKnowledgeStore()
+    if backend != "json":
+        raise ValueError(f"Unsupported HERMES_STORAGE_BACKEND: {backend}")
     return UnifiedKnowledgeStore()
 
 
@@ -664,14 +916,14 @@ def get_style_context(category: str = None) -> str:
     Convenience: lấy context string để inject vào script generation.
     Trả về "" nếu chưa có approved knowledge.
     """
-    return UnifiedKnowledgeStore().get_style_context_for_script(category=category)
+    return get_store().get_style_context_for_script(category=category)
 
 
 def approve_entry(slug_or_id: str, approved_by: str = None, approval_mode: str = None) -> Optional[dict]:
     """Convenience: approve một entry và rebuild style profile."""
-    return UnifiedKnowledgeStore().mark_approved(slug_or_id, approved_by=approved_by, approval_mode=approval_mode)
+    return get_store().mark_approved(slug_or_id, approved_by=approved_by, approval_mode=approval_mode)
 
 
 def reject_entry(slug_or_id: str, rejected_by: str = None, rejection_reason: str = None) -> Optional[dict]:
     """Convenience: reject một entry."""
-    return UnifiedKnowledgeStore().mark_rejected(slug_or_id, rejected_by=rejected_by, rejection_reason=rejection_reason)
+    return get_store().mark_rejected(slug_or_id, rejected_by=rejected_by, rejection_reason=rejection_reason)
