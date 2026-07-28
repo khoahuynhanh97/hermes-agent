@@ -6,6 +6,7 @@ import re
 import sqlite3
 import urllib.parse
 import uuid
+from collections.abc import Mapping
 from typing import Any, Sequence
 
 from .application.knowledge_lifecycle import (
@@ -46,6 +47,39 @@ def _json_load(value: str | None, fallback: Any) -> Any:
     except (TypeError, json.JSONDecodeError):
         return fallback
     return parsed
+
+
+def _fts_items(value: str | None) -> list[str]:
+    parsed = _json_load(value, [])
+    if isinstance(parsed, dict):
+        items = [parsed[key] for key in sorted(parsed)]
+    elif isinstance(parsed, list):
+        items = parsed
+    elif parsed in (None, ""):
+        items = []
+    else:
+        items = [parsed]
+    return [
+        (
+            json.dumps(item, ensure_ascii=False, sort_keys=True)
+            if isinstance(item, (dict, list))
+            else str(item)
+        )
+        for item in items
+    ]
+
+
+def build_lesson_fts_values(row: Mapping[str, Any]) -> tuple[str, ...]:
+    tags = " ".join(_fts_items(row["tags_json"]))
+    key_lessons = "\n".join(_fts_items(row["key_lessons_json"]))
+    return (
+        str(row["id"]),
+        str(row["owner_user_id"]),
+        str(row["title"]),
+        str(row["summary"]),
+        f"{row['content']}\n{key_lessons}",
+        tags,
+    )
 
 
 def _slug(text: str) -> str:
@@ -592,21 +626,12 @@ class SQLiteKnowledgeStore:
         row = connection.execute("SELECT * FROM lessons WHERE id = ?", (lesson_id,)).fetchone()
         if not row or row["status"] != "approved":
             return
-        tags = " ".join(str(item) for item in _json_load(row["tags_json"], []))
-        key_lessons = "\n".join(str(item) for item in _json_load(row["key_lessons_json"], []))
         connection.execute(
             """
             INSERT INTO lesson_fts(lesson_id, owner_user_id, title, summary, content, tags)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (
-                row["id"],
-                row["owner_user_id"],
-                row["title"],
-                row["summary"],
-                f"{row['content']}\n{key_lessons}",
-                tags,
-            ),
+            build_lesson_fts_values(row),
         )
 
     def _apply_lifecycle_command(

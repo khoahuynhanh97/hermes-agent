@@ -552,6 +552,165 @@ class DataHealthTests(unittest.TestCase):
             expected_subjects,
         )
 
+    def test_timestamp_repair_only_sets_approved_at_and_reports_touched_field(
+        self,
+    ) -> None:
+        lesson = self.add_lesson("Timestamp field isolation")
+        self.approve(lesson)
+        sentinel = "2035-01-02T03:04:05+00:00"
+        with self.database.transaction(immediate=True) as connection:
+            connection.execute(
+                """
+                UPDATE lessons
+                SET approved_at = NULL, updated_at = ?
+                WHERE id = ?
+                """,
+                (sentinel, lesson["id"]),
+            )
+        health = DataHealth(self.database)
+        action = next(
+            action
+            for action in health.audit().repair_plan.actions
+            if action.kind == "set_approved_at"
+        )
+
+        report = health.repair(RepairPlan((action,)))
+
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT approved_at, updated_at FROM lessons WHERE id = ?",
+                (lesson["id"],),
+            ).fetchone()
+        self.assertEqual(row["approved_at"], action.expected["event_created_at"])
+        self.assertEqual(row["updated_at"], sentinel)
+        outcome = report.outcomes[0]
+        self.assertEqual(
+            outcome.before,
+            {"subject_present": True, "approved_at_missing": True},
+        )
+        self.assertEqual(
+            outcome.after,
+            {"subject_present": True, "approved_at_missing": False},
+        )
+
+    def test_stale_plan_does_not_recreate_deleted_or_modify_replaced_database(
+        self,
+    ) -> None:
+        for replacement in ("deleted", "empty"):
+            with self.subTest(replacement=replacement):
+                path = self.root / f"stale-{replacement}.db"
+                database = Database(path)
+                store = SQLiteKnowledgeStore(database)
+                lifecycle = KnowledgeLifecycle(store)
+                lesson = store.add_entry(
+                    title=f"Stale {replacement}",
+                    category="error",
+                    owner_user_id="42",
+                )
+                lifecycle.approve(
+                    lesson["id"],
+                    LifecycleActor.owner("42"),
+                    mode="test",
+                    force=True,
+                )
+                health = DataHealth(database, store=store)
+                plan = health.audit().repair_plan
+                self.assertTrue(plan.actions)
+                path.unlink()
+                for suffix in ("-wal", "-shm"):
+                    Path(str(path) + suffix).unlink(missing_ok=True)
+                if replacement == "empty":
+                    path.write_bytes(b"")
+                    before = hashlib.sha256(path.read_bytes()).hexdigest()
+
+                report = health.repair(plan)
+
+                self.assertEqual(report.applied_count, 0)
+                self.assertEqual(report.skipped_count, len(plan.actions))
+                self.assertTrue(
+                    all(
+                        outcome.reason == "precondition_failed"
+                        for outcome in report.outcomes
+                    )
+                )
+                if replacement == "deleted":
+                    self.assertFalse(path.exists())
+                else:
+                    after = hashlib.sha256(path.read_bytes()).hexdigest()
+                    self.assertEqual(before, after)
+
+    def test_fts_rebuild_converges_for_valid_json_with_unexpected_types(
+        self,
+    ) -> None:
+        lesson = self.add_lesson("Malformed valid JSON")
+        self.approve(lesson)
+        with self.database.transaction(immediate=True) as connection:
+            connection.execute(
+                """
+                UPDATE lessons
+                SET tags_json = '{"topic":"agents"}',
+                    key_lessons_json = '"One coherent lesson"'
+                WHERE id = ?
+                """,
+                (lesson["id"],),
+            )
+        health = DataHealth(self.database)
+        plan = health.audit().repair_plan
+        action = next(
+            action
+            for action in plan.actions
+            if action.kind == "rebuild_fts"
+        )
+
+        first = health.repair(RepairPlan((action,)))
+        post_audit = health.audit()
+        replay = health.repair(RepairPlan((action,)))
+
+        self.assertEqual(first.applied_count, 1)
+        self.assertFalse(
+            any(
+                finding.code.startswith("fts_")
+                for finding in post_audit.findings
+            )
+        )
+        self.assertEqual(replay.applied_count, 0)
+        self.assertEqual(replay.outcomes[0].reason, "already_applied")
+
+    def test_fts_rebuild_rechecks_finding_count_precondition(self) -> None:
+        lesson = self.add_lesson("FTS finding count")
+        self.approve(lesson)
+        with self.database.transaction(immediate=True) as connection:
+            connection.execute(
+                "DELETE FROM lesson_fts WHERE lesson_id = ?",
+                (lesson["id"],),
+            )
+        health = DataHealth(self.database)
+        action = next(
+            action
+            for action in health.audit().repair_plan.actions
+            if action.kind == "rebuild_fts"
+        )
+        forged_expected = dict(action.expected)
+        forged_expected["finding_count"] = int(
+            forged_expected["finding_count"]
+        ) + 1
+        stale_count = dataclasses.replace(
+            action,
+            action_id=self.action_id(
+                action.kind,
+                action.subject_id,
+                forged_expected,
+            ),
+            expected=forged_expected,
+        )
+        before = self.snapshot()
+
+        report = health.repair(RepairPlan((stale_count,)))
+
+        self.assertEqual(report.applied_count, 0)
+        self.assertEqual(report.outcomes[0].reason, "precondition_failed")
+        self.assertEqual(before, self.snapshot())
+
 
 if __name__ == "__main__":
     unittest.main()

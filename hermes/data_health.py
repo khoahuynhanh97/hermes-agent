@@ -10,7 +10,7 @@ from typing import Literal
 
 from .application.knowledge_lifecycle import LifecycleActor, LifecycleCommand
 from .db import SCHEMA_VERSION, Database
-from .knowledge import SQLiteKnowledgeStore
+from .knowledge import SQLiteKnowledgeStore, build_lesson_fts_values
 
 
 Severity = Literal["info", "warning", "error"]
@@ -133,14 +133,6 @@ def _empty_counts() -> dict[str, int]:
     return {key: 0 for key in COUNT_KEYS}
 
 
-def _json_list(value: str | None) -> list:
-    try:
-        parsed = json.loads(value or "[]")
-    except (TypeError, json.JSONDecodeError):
-        return []
-    return parsed if isinstance(parsed, list) else []
-
-
 def _action(
     kind: RepairKind,
     subject_id_hash: str,
@@ -199,18 +191,7 @@ class DataHealth:
 
     @staticmethod
     def _expected_fts(row: sqlite3.Row) -> tuple[str, ...]:
-        tags = " ".join(str(item) for item in _json_list(row["tags_json"]))
-        key_lessons = "\n".join(
-            str(item) for item in _json_list(row["key_lessons_json"])
-        )
-        return (
-            str(row["id"]),
-            str(row["owner_user_id"]),
-            str(row["title"]),
-            str(row["summary"]),
-            f"{row['content']}\n{key_lessons}",
-            tags,
-        )
+        return build_lesson_fts_values(row)
 
     @classmethod
     def _fts_drift(
@@ -756,6 +737,15 @@ class DataHealth:
         }
 
     @staticmethod
+    def _timestamp_metadata(row: sqlite3.Row | None) -> Metadata:
+        if row is None:
+            return {"subject_present": False}
+        return {
+            "subject_present": True,
+            "approved_at_missing": row["approved_at"] is None,
+        }
+
+    @staticmethod
     def _outcome(
         action: RepairAction,
         *,
@@ -779,7 +769,7 @@ class DataHealth:
         action: RepairAction,
     ) -> ActionOutcome:
         row = self._lesson_for_hash(connection, action.subject_id)
-        before = self._lesson_metadata(row)
+        before = self._timestamp_metadata(row)
         if row is None:
             return self._outcome(
                 action,
@@ -837,12 +827,12 @@ class DataHealth:
             )
         connection.execute(
             """
-            UPDATE lessons SET approved_at = ?, updated_at = ?
+            UPDATE lessons SET approved_at = ?
             WHERE id = ? AND approved_at IS NULL
             """,
-            (event_created_at, event_created_at, row["id"]),
+            (event_created_at, row["id"]),
         )
-        after = self._lesson_metadata(
+        after = self._timestamp_metadata(
             self._lesson_for_hash(connection, action.subject_id)
         )
         return self._outcome(
@@ -933,7 +923,10 @@ class DataHealth:
                 before=before,
                 after=before,
             )
-        if drift_hash != action.expected.get("drift_hash"):
+        if (
+            drift_hash != action.expected.get("drift_hash")
+            or len(drift) != action.expected.get("finding_count")
+        ):
             return self._outcome(
                 action,
                 status="skipped",
@@ -1029,6 +1022,110 @@ class DataHealth:
                 ):
                     raise ValueError("FTS action has invalid preconditions")
 
+    @staticmethod
+    def _schema_precondition(
+        connection: sqlite3.Connection,
+    ) -> tuple[bool, Metadata]:
+        try:
+            schema_version = int(
+                connection.execute("PRAGMA user_version").fetchone()[0]
+            )
+            table_names = {
+                str(row["name"])
+                for row in connection.execute(
+                    """
+                    SELECT name FROM sqlite_master
+                    WHERE type IN ('table', 'view')
+                    """
+                ).fetchall()
+            }
+        except sqlite3.Error:
+            return False, {
+                "database_exists": True,
+                "database_readable": False,
+                "schema_compatible": False,
+            }
+        missing_tables = REQUIRED_TABLES - table_names
+        compatible = (
+            not missing_tables and schema_version == SCHEMA_VERSION
+        )
+        return compatible, {
+            "database_exists": True,
+            "database_readable": True,
+            "schema_compatible": compatible,
+            "schema_version": schema_version,
+            "missing_table_count": len(missing_tables),
+        }
+
+    def _repair_preflight(
+        self,
+    ) -> tuple[bool, Metadata, tuple[int, int, int, int] | None]:
+        if not self.database.path.is_file():
+            return False, {
+                "database_exists": False,
+                "database_readable": False,
+                "schema_compatible": False,
+            }, None
+        try:
+            identity = self.database.path.stat()
+            connection = self._read_only_connection()
+        except (OSError, sqlite3.Error):
+            return False, {
+                "database_exists": True,
+                "database_readable": False,
+                "schema_compatible": False,
+            }, None
+        try:
+            compatible, metadata = self._schema_precondition(connection)
+        finally:
+            connection.close()
+        signature = (
+            int(identity.st_dev),
+            int(identity.st_ino),
+            int(identity.st_size),
+            int(identity.st_mtime_ns),
+        )
+        return compatible, metadata, signature
+
+    @staticmethod
+    def _precondition_report(
+        actions: tuple[RepairAction, ...],
+        metadata: Metadata,
+    ) -> RepairReport:
+        outcomes = tuple(
+            ActionOutcome(
+                action_id=action.action_id,
+                kind=action.kind,
+                status="skipped",
+                reason="precondition_failed",
+                before=dict(metadata),
+                after=dict(metadata),
+            )
+            for action in actions
+        )
+        return RepairReport(
+            planned_count=len(actions),
+            applied_count=0,
+            skipped_count=len(actions),
+            applied_action_ids=(),
+            skipped_action_ids=tuple(
+                action.action_id for action in actions
+            ),
+            outcomes=outcomes,
+        )
+
+    def _open_existing_write_connection(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(
+            f"file:{self.database.path.as_posix()}?mode=rw",
+            uri=True,
+            timeout=self.database.busy_timeout_ms / 1000,
+            isolation_level=None,
+        )
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute(f"PRAGMA busy_timeout = {self.database.busy_timeout_ms}")
+        return connection
+
     def repair(self, plan: RepairPlan) -> RepairReport:
         actions = tuple(plan.actions)
         self._validate_plan(actions)
@@ -1041,6 +1138,12 @@ class DataHealth:
                 skipped_action_ids=(),
                 outcomes=(),
             )
+        preflight_ok, preflight_metadata, preflight_signature = (
+            self._repair_preflight()
+        )
+        if not preflight_ok:
+            return self._precondition_report(actions, preflight_metadata)
+
         priority = {
             "rebuild_fts": 0,
             "set_approved_at": 1,
@@ -1052,7 +1155,73 @@ class DataHealth:
             key=lambda item: (priority[item[1].kind], item[0]),
         )
         outcomes_by_index: dict[int, ActionOutcome] = {}
-        with self.database.transaction(immediate=True) as connection:
+        try:
+            connection = self._open_existing_write_connection()
+        except sqlite3.Error:
+            return self._precondition_report(
+                actions,
+                {
+                    "database_exists": self.database.path.is_file(),
+                    "database_readable": False,
+                    "schema_compatible": False,
+                },
+            )
+        try:
+            compatible, writable_metadata = self._schema_precondition(connection)
+            try:
+                current = self.database.path.stat()
+                current_signature = (
+                    int(current.st_dev),
+                    int(current.st_ino),
+                    int(current.st_size),
+                    int(current.st_mtime_ns),
+                )
+            except OSError:
+                current_signature = None
+            if (
+                not compatible
+                or current_signature is None
+                or current_signature != preflight_signature
+            ):
+                return self._precondition_report(
+                    actions,
+                    {
+                        **writable_metadata,
+                        "database_identity_matches": (
+                            current_signature == preflight_signature
+                        ),
+                    },
+                )
+
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+            except sqlite3.Error:
+                return self._precondition_report(
+                    actions,
+                    {
+                        **writable_metadata,
+                        "database_identity_matches": False,
+                    },
+                )
+            try:
+                locked = self.database.path.stat()
+                locked_signature = (
+                    int(locked.st_dev),
+                    int(locked.st_ino),
+                    int(locked.st_size),
+                    int(locked.st_mtime_ns),
+                )
+            except OSError:
+                locked_signature = None
+            if locked_signature != preflight_signature:
+                connection.rollback()
+                return self._precondition_report(
+                    actions,
+                    {
+                        **writable_metadata,
+                        "database_identity_matches": False,
+                    },
+                )
             for index, action in execution_order:
                 if action.kind == "set_approved_at":
                     outcome = self._apply_timestamp(connection, action)
@@ -1061,6 +1230,13 @@ class DataHealth:
                 else:
                     outcome = self._apply_fts_rebuild(connection, action)
                 outcomes_by_index[index] = outcome
+            connection.commit()
+        except Exception:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+        finally:
+            connection.close()
 
         outcomes = tuple(
             outcomes_by_index[index] for index in range(len(actions))
