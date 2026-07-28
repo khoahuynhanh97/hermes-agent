@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Literal
 
 from .application.knowledge_lifecycle import LifecycleActor, LifecycleCommand
-from .db import Database
+from .db import SCHEMA_VERSION, Database
 from .knowledge import SQLiteKnowledgeStore
 
 
@@ -17,6 +17,31 @@ Severity = Literal["info", "warning", "error"]
 RepairClass = Literal["safe", "review", "forbidden"]
 RepairKind = Literal["rebuild_fts", "set_approved_at", "reject_lesson"]
 Metadata = dict[str, int | str | bool]
+ActionStatus = Literal["applied", "skipped"]
+
+COUNT_KEYS = (
+    "lessons",
+    "pending",
+    "approved",
+    "rejected",
+    "sources",
+    "evidence",
+    "lesson_events",
+    "fts_rows",
+)
+REQUIRED_TABLES = {
+    "evidence",
+    "lesson_evidence",
+    "lesson_events",
+    "lesson_fts",
+    "lessons",
+    "sources",
+}
+DEFECT_MARKERS = {
+    "needs_reanalysis",
+    "unknown_title",
+    "error_category",
+}
 
 
 @dataclass(frozen=True)
@@ -53,12 +78,32 @@ class AuditReport:
 
 
 @dataclass(frozen=True)
+class ActionOutcome:
+    action_id: str
+    kind: RepairKind
+    status: ActionStatus
+    reason: Literal["applied", "already_applied", "precondition_failed"]
+    before: Metadata
+    after: Metadata
+
+
+@dataclass(frozen=True)
 class RepairReport:
     planned_count: int
     applied_count: int
     skipped_count: int
     applied_action_ids: tuple[str, ...]
     skipped_action_ids: tuple[str, ...]
+    outcomes: tuple[ActionOutcome, ...]
+
+
+@dataclass(frozen=True)
+class _FtsDrift:
+    code: Literal["fts_missing", "fts_mismatch", "fts_orphan", "fts_extra"]
+    subject_id: str
+    row_count: int
+    actual_hash: str
+    expected_hash: str
 
 
 def _subject_hash(value: str) -> str:
@@ -67,6 +112,25 @@ def _subject_hash(value: str) -> str:
 
 def _normalized(value: str | None) -> str:
     return unicodedata.normalize("NFKC", value or "").strip().casefold()
+
+
+def _is_unknown_title(value: str | None) -> bool:
+    target = _normalized("Không xác định")
+    raw = value or ""
+    if _normalized(raw) == target:
+        return True
+    for encoding in ("cp1252", "latin1"):
+        try:
+            repaired = raw.encode(encoding).decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            continue
+        if _normalized(repaired) == target:
+            return True
+    return False
+
+
+def _empty_counts() -> dict[str, int]:
+    return {key: 0 for key in COUNT_KEYS}
 
 
 def _json_list(value: str | None) -> list:
@@ -152,7 +216,7 @@ class DataHealth:
     def _fts_drift(
         cls,
         connection: sqlite3.Connection,
-    ) -> tuple[list[tuple[str, str]], str]:
+    ) -> tuple[list[_FtsDrift], str]:
         lesson_rows = connection.execute(
             """
             SELECT id, owner_user_id, title, summary, content, tags_json,
@@ -174,8 +238,7 @@ class DataHealth:
                 tuple(str(row[key] or "") for key in row.keys()[1:])
             )
 
-        drift: list[tuple[str, str]] = []
-        drift_preconditions: list[tuple[str, str, str, str]] = []
+        drift: list[_FtsDrift] = []
         approved_ids = {
             lesson_id
             for lesson_id, row in lessons.items()
@@ -184,53 +247,68 @@ class DataHealth:
         for lesson_id in sorted(approved_ids):
             actual = actual_by_id.get(lesson_id, [])
             expected = cls._expected_fts(lessons[lesson_id])
+            expected_hash = _subject_hash(
+                json.dumps(expected, ensure_ascii=False)
+            )
             if not actual:
-                drift.append(("fts_missing", lesson_id))
-                drift_preconditions.append(
-                    (
+                drift.append(
+                    _FtsDrift(
                         "fts_missing",
-                        _subject_hash(lesson_id),
+                        lesson_id,
+                        0,
                         "",
-                        _subject_hash(json.dumps(expected, ensure_ascii=False)),
+                        expected_hash,
                     )
                 )
             elif len(actual) != 1 or actual[0] != expected:
-                drift.append(("fts_mismatch", lesson_id))
-                drift_preconditions.append(
-                    (
+                drift.append(
+                    _FtsDrift(
                         "fts_mismatch",
-                        _subject_hash(lesson_id),
-                        _subject_hash(json.dumps(actual, ensure_ascii=False)),
-                        _subject_hash(json.dumps(expected, ensure_ascii=False)),
+                        lesson_id,
+                        len(actual),
+                        _subject_hash(
+                            json.dumps(actual, ensure_ascii=False)
+                        ),
+                        expected_hash,
                     )
                 )
 
         for lesson_id in sorted(actual_by_id):
+            actual = actual_by_id[lesson_id]
+            actual_hash = _subject_hash(
+                json.dumps(actual, ensure_ascii=False)
+            )
             if lesson_id not in lessons:
-                drift.append(("fts_orphan", lesson_id))
-                drift_preconditions.append(
-                    (
+                drift.append(
+                    _FtsDrift(
                         "fts_orphan",
-                        _subject_hash(lesson_id),
-                        _subject_hash(
-                            json.dumps(actual_by_id[lesson_id], ensure_ascii=False)
-                        ),
+                        lesson_id,
+                        len(actual),
+                        actual_hash,
                         "",
                     )
                 )
             elif lesson_id not in approved_ids:
-                drift.append(("fts_extra", lesson_id))
-                drift_preconditions.append(
-                    (
+                drift.append(
+                    _FtsDrift(
                         "fts_extra",
-                        _subject_hash(lesson_id),
-                        _subject_hash(
-                            json.dumps(actual_by_id[lesson_id], ensure_ascii=False)
-                        ),
+                        lesson_id,
+                        len(actual),
+                        actual_hash,
                         "",
                     )
                 )
 
+        drift_preconditions = [
+            (
+                item.code,
+                _subject_hash(item.subject_id),
+                item.row_count,
+                item.actual_hash,
+                item.expected_hash,
+            )
+            for item in drift
+        ]
         fingerprint = hashlib.sha256(
             json.dumps(
                 drift_preconditions,
@@ -293,15 +371,56 @@ class DataHealth:
             )
         ]
 
+    def _forbidden_audit(
+        self,
+        code: str,
+        *,
+        integrity: str = "unavailable",
+        foreign_key_violations: int = 0,
+        schema_version: int = 0,
+        metadata: Metadata | None = None,
+    ) -> AuditReport:
+        return AuditReport(
+            integrity=integrity,
+            foreign_key_violations=foreign_key_violations,
+            schema_version=schema_version,
+            counts=_empty_counts(),
+            findings=(
+                self._finding(
+                    code,
+                    "error",
+                    "database",
+                    str(self.database.path),
+                    "forbidden",
+                    metadata,
+                ),
+            ),
+            repair_plan=RepairPlan(),
+        )
+
     def audit(self) -> AuditReport:
+        if not self.database.path.is_file():
+            return self._forbidden_audit(
+                "database_missing",
+                metadata={"exists": False},
+            )
+
         findings: list[Finding] = []
         timestamp_actions: list[RepairAction] = []
         rejection_actions: list[RepairAction] = []
         rebuild_actions: list[RepairAction] = []
 
-        connection = self._read_only_connection()
         try:
-            integrity_rows = connection.execute("PRAGMA integrity_check").fetchall()
+            connection = self._read_only_connection()
+        except sqlite3.Error:
+            return self._forbidden_audit(
+                "database_unreadable",
+                metadata={"readable": False},
+            )
+        try:
+            integrity_rows = connection.execute(
+                "PRAGMA integrity_check"
+            ).fetchall()
             integrity_messages = [str(row[0]) for row in integrity_rows]
             integrity = (
                 "ok"
@@ -339,6 +458,42 @@ class DataHealth:
             schema_version = int(
                 connection.execute("PRAGMA user_version").fetchone()[0]
             )
+            table_names = {
+                str(row["name"])
+                for row in connection.execute(
+                    """
+                    SELECT name FROM sqlite_master
+                    WHERE type IN ('table', 'view')
+                    """
+                ).fetchall()
+            }
+            missing_tables = REQUIRED_TABLES - table_names
+            if missing_tables or schema_version != SCHEMA_VERSION:
+                findings.append(
+                    self._finding(
+                        "schema_incompatible",
+                        "error",
+                        "database",
+                        str(self.database.path),
+                        "forbidden",
+                        {
+                            "missing_table_count": len(missing_tables),
+                            "schema_version_matches": (
+                                schema_version == SCHEMA_VERSION
+                            ),
+                        },
+                    )
+                )
+                findings.sort(key=lambda item: item.code)
+                return AuditReport(
+                    integrity=integrity,
+                    foreign_key_violations=foreign_key_violations,
+                    schema_version=schema_version,
+                    counts=_empty_counts(),
+                    findings=tuple(findings),
+                    repair_plan=RepairPlan(),
+                )
+
             counts = {
                 "lessons": int(
                     connection.execute("SELECT COUNT(*) FROM lessons").fetchone()[0]
@@ -375,15 +530,15 @@ class DataHealth:
             }
 
             drift, drift_hash = self._fts_drift(connection)
-            for code, lesson_id in drift:
+            for item in drift:
                 findings.append(
                     self._finding(
-                        code,
+                        item.code,
                         "error",
                         "lesson_fts",
-                        lesson_id,
+                        item.subject_id,
                         "safe",
-                        {"row_count": 1},
+                        {"row_count": item.row_count},
                     )
                 )
             if drift:
@@ -407,51 +562,6 @@ class DataHealth:
             for row in lesson_rows:
                 lesson_id = str(row["id"])
                 status = str(row["status"])
-                if status == "approved" and row["approved_at"] is None:
-                    approved_events = connection.execute(
-                        """
-                        SELECT created_at FROM lesson_events
-                        WHERE lesson_id = ? AND action = 'approved'
-                        ORDER BY id
-                        """,
-                        (lesson_id,),
-                    ).fetchall()
-                    if len(approved_events) == 1:
-                        event_created_at = str(approved_events[0]["created_at"])
-                        findings.append(
-                            self._finding(
-                                "approved_at_missing_unambiguous",
-                                "error",
-                                "lesson",
-                                lesson_id,
-                                "safe",
-                                {"approved_event_count": 1},
-                            )
-                        )
-                        timestamp_actions.append(
-                            _action(
-                                "set_approved_at",
-                                _subject_hash(lesson_id),
-                                {
-                                    "status": "approved",
-                                    "approved_at_missing": True,
-                                    "approved_event_count": 1,
-                                    "event_created_at": event_created_at,
-                                },
-                            )
-                        )
-                    else:
-                        findings.append(
-                            self._finding(
-                                "approved_at_missing_ambiguous",
-                                "warning",
-                                "lesson",
-                                lesson_id,
-                                "review",
-                                {"approved_event_count": len(approved_events)},
-                            )
-                        )
-
                 defect_expected: Metadata = {"status": status}
                 if bool(row["needs_reanalysis"]):
                     findings.append(
@@ -465,7 +575,7 @@ class DataHealth:
                         )
                     )
                     defect_expected["needs_reanalysis"] = True
-                if _normalized(row["title"]) == _normalized("Không xác định"):
+                if _is_unknown_title(row["title"]):
                     findings.append(
                         self._finding(
                             "defect_unknown_title",
@@ -489,7 +599,8 @@ class DataHealth:
                         )
                     )
                     defect_expected["error_category"] = True
-                if len(defect_expected) > 1 and status != "rejected":
+                has_deterministic_defect = len(defect_expected) > 1
+                if has_deterministic_defect and status != "rejected":
                     rejection_actions.append(
                         _action(
                             "reject_lesson",
@@ -497,6 +608,52 @@ class DataHealth:
                             defect_expected,
                         )
                     )
+
+                if status == "approved" and row["approved_at"] is None:
+                    approved_events = connection.execute(
+                        """
+                        SELECT created_at FROM lesson_events
+                        WHERE lesson_id = ? AND action = 'approved'
+                        ORDER BY id
+                        """,
+                        (lesson_id,),
+                    ).fetchall()
+                    if len(approved_events) == 1:
+                        event_created_at = str(approved_events[0]["created_at"])
+                        findings.append(
+                            self._finding(
+                                "approved_at_missing_unambiguous",
+                                "error",
+                                "lesson",
+                                lesson_id,
+                                "safe",
+                                {"approved_event_count": 1},
+                            )
+                        )
+                        if not has_deterministic_defect:
+                            timestamp_actions.append(
+                                _action(
+                                    "set_approved_at",
+                                    _subject_hash(lesson_id),
+                                    {
+                                        "status": "approved",
+                                        "approved_at_missing": True,
+                                        "approved_event_count": 1,
+                                        "event_created_at": event_created_at,
+                                    },
+                                )
+                            )
+                    else:
+                        findings.append(
+                            self._finding(
+                                "approved_at_missing_ambiguous",
+                                "warning",
+                                "lesson",
+                                lesson_id,
+                                "review",
+                                {"approved_event_count": len(approved_events)},
+                            )
+                        )
 
                 if status == "approved":
                     evidence_count = int(
@@ -521,6 +678,11 @@ class DataHealth:
                         )
 
             findings.extend(self._legacy_findings(counts["lessons"]))
+        except sqlite3.Error:
+            return self._forbidden_audit(
+                "database_unreadable",
+                metadata={"readable": False},
+            )
         finally:
             connection.close()
 
@@ -531,7 +693,9 @@ class DataHealth:
                 item.subject_id_hash,
             )
         )
-        actions = tuple(timestamp_actions + rejection_actions + rebuild_actions)
+        actions = tuple(rebuild_actions + timestamp_actions + rejection_actions)
+        if any(finding.repair_class == "forbidden" for finding in findings):
+            actions = ()
         return AuditReport(
             integrity=integrity,
             foreign_key_violations=foreign_key_violations,
@@ -568,9 +732,9 @@ class DataHealth:
             row["needs_reanalysis"]
         ):
             return False
-        if expected.get("unknown_title") is True and _normalized(
+        if expected.get("unknown_title") is True and not _is_unknown_title(
             row["title"]
-        ) != _normalized("Không xác định"):
+        ):
             return False
         if expected.get("error_category") is True and _normalized(
             row["category"]
@@ -578,17 +742,74 @@ class DataHealth:
             return False
         return True
 
+    @staticmethod
+    def _lesson_metadata(row: sqlite3.Row | None) -> Metadata:
+        if row is None:
+            return {"subject_present": False}
+        return {
+            "subject_present": True,
+            "status": str(row["status"]),
+            "approved_at_missing": row["approved_at"] is None,
+            "needs_reanalysis": bool(row["needs_reanalysis"]),
+            "unknown_title": _is_unknown_title(row["title"]),
+            "error_category": _normalized(row["category"]) == "error",
+        }
+
+    @staticmethod
+    def _outcome(
+        action: RepairAction,
+        *,
+        status: ActionStatus,
+        reason: Literal["applied", "already_applied", "precondition_failed"],
+        before: Metadata,
+        after: Metadata,
+    ) -> ActionOutcome:
+        return ActionOutcome(
+            action_id=action.action_id,
+            kind=action.kind,
+            status=status,
+            reason=reason,
+            before=before,
+            after=after,
+        )
+
     def _apply_timestamp(
         self,
         connection: sqlite3.Connection,
         action: RepairAction,
-    ) -> bool:
+    ) -> ActionOutcome:
         row = self._lesson_for_hash(connection, action.subject_id)
-        if row is None or row["approved_at"] is not None:
-            return False
+        before = self._lesson_metadata(row)
+        if row is None:
+            return self._outcome(
+                action,
+                status="skipped",
+                reason="precondition_failed",
+                before=before,
+                after=before,
+            )
         expected = action.expected
+        if row["approved_at"] is not None:
+            reason = (
+                "already_applied"
+                if str(row["approved_at"]) == expected.get("event_created_at")
+                else "precondition_failed"
+            )
+            return self._outcome(
+                action,
+                status="skipped",
+                reason=reason,
+                before=before,
+                after=before,
+            )
         if row["status"] != expected.get("status"):
-            return False
+            return self._outcome(
+                action,
+                status="skipped",
+                reason="precondition_failed",
+                before=before,
+                after=before,
+            )
         events = connection.execute(
             """
             SELECT created_at FROM lesson_events
@@ -598,10 +819,22 @@ class DataHealth:
             (row["id"],),
         ).fetchall()
         if len(events) != expected.get("approved_event_count"):
-            return False
+            return self._outcome(
+                action,
+                status="skipped",
+                reason="precondition_failed",
+                before=before,
+                after=before,
+            )
         event_created_at = str(events[0]["created_at"]) if len(events) == 1 else ""
         if event_created_at != expected.get("event_created_at"):
-            return False
+            return self._outcome(
+                action,
+                status="skipped",
+                reason="precondition_failed",
+                before=before,
+                after=before,
+            )
         connection.execute(
             """
             UPDATE lessons SET approved_at = ?, updated_at = ?
@@ -609,18 +842,48 @@ class DataHealth:
             """,
             (event_created_at, event_created_at, row["id"]),
         )
-        return True
+        after = self._lesson_metadata(
+            self._lesson_for_hash(connection, action.subject_id)
+        )
+        return self._outcome(
+            action,
+            status="applied",
+            reason="applied",
+            before=before,
+            after=after,
+        )
 
     def _apply_rejection(
         self,
         connection: sqlite3.Connection,
         action: RepairAction,
-    ) -> bool:
+    ) -> ActionOutcome:
         row = self._lesson_for_hash(connection, action.subject_id)
-        if row is None or row["status"] == "rejected":
-            return False
+        before = self._lesson_metadata(row)
+        if row is None:
+            return self._outcome(
+                action,
+                status="skipped",
+                reason="precondition_failed",
+                before=before,
+                after=before,
+            )
+        if row["status"] == "rejected":
+            return self._outcome(
+                action,
+                status="skipped",
+                reason="already_applied",
+                before=before,
+                after=before,
+            )
         if not self._reject_precondition_matches(row, action.expected):
-            return False
+            return self._outcome(
+                action,
+                status="skipped",
+                reason="precondition_failed",
+                before=before,
+                after=before,
+            )
         results = self.store.apply_lifecycle_commands_in_transaction(
             connection,
             [
@@ -633,48 +896,191 @@ class DataHealth:
                 )
             ],
         )
-        return bool(results[0].changed)
+        after = self._lesson_metadata(
+            self._lesson_for_hash(connection, action.subject_id)
+        )
+        if not results[0].changed:
+            return self._outcome(
+                action,
+                status="skipped",
+                reason="already_applied",
+                before=before,
+                after=after,
+            )
+        return self._outcome(
+            action,
+            status="applied",
+            reason="applied",
+            before=before,
+            after=after,
+        )
 
     def _apply_fts_rebuild(
         self,
         connection: sqlite3.Connection,
         action: RepairAction,
-    ) -> bool:
+    ) -> ActionOutcome:
         drift, drift_hash = self._fts_drift(connection)
-        if not drift or drift_hash != action.expected.get("drift_hash"):
-            return False
+        before: Metadata = {
+            "finding_count": len(drift),
+            "drift_hash": drift_hash,
+        }
+        if not drift:
+            return self._outcome(
+                action,
+                status="skipped",
+                reason="already_applied",
+                before=before,
+                after=before,
+            )
+        if drift_hash != action.expected.get("drift_hash"):
+            return self._outcome(
+                action,
+                status="skipped",
+                reason="precondition_failed",
+                before=before,
+                after=before,
+            )
         connection.execute("DELETE FROM lesson_fts")
         rows = connection.execute(
             "SELECT id FROM lessons WHERE status = 'approved' ORDER BY id"
         ).fetchall()
         for row in rows:
             self.store._sync_fts(connection, str(row["id"]))
-        return True
+        after_drift, after_hash = self._fts_drift(connection)
+        return self._outcome(
+            action,
+            status="applied",
+            reason="applied",
+            before=before,
+            after={
+                "finding_count": len(after_drift),
+                "drift_hash": after_hash,
+            },
+        )
 
-    def repair(self, plan: RepairPlan) -> RepairReport:
-        actions = tuple(plan.actions)
+    @staticmethod
+    def _validate_plan(actions: tuple[RepairAction, ...]) -> None:
         allowed = {"set_approved_at", "reject_lesson", "rebuild_fts"}
         if any(action.kind not in allowed for action in actions):
             raise ValueError("Repair plan contains a forbidden action")
         if len({action.action_id for action in actions}) != len(actions):
             raise ValueError("Repair plan contains duplicate action IDs")
+        for action in actions:
+            if (
+                len(action.subject_id) != 64
+                or any(character not in "0123456789abcdef" for character in action.subject_id)
+            ):
+                raise ValueError("Repair action subject must be a hashed ID")
+            try:
+                computed_id = _action(
+                    action.kind,
+                    action.subject_id,
+                    action.expected,
+                ).action_id
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Repair action metadata is invalid") from exc
+            if action.action_id != computed_id:
+                raise ValueError("Repair action ID does not match its payload")
 
-        applied: list[str] = []
-        skipped: list[str] = []
+            keys = set(action.expected)
+            if action.kind == "reject_lesson":
+                allowed_keys = {"status"} | DEFECT_MARKERS
+                recognized = {
+                    marker
+                    for marker in DEFECT_MARKERS
+                    if action.expected.get(marker) is True
+                }
+                if not recognized:
+                    raise ValueError(
+                        "Reject action requires a deterministic defect marker"
+                    )
+                if keys - allowed_keys:
+                    raise ValueError("Reject action has unknown preconditions")
+                if action.expected.get("status") not in {
+                    "pending",
+                    "approved",
+                }:
+                    raise ValueError("Reject action has an invalid status")
+            elif action.kind == "set_approved_at":
+                if keys != {
+                    "status",
+                    "approved_at_missing",
+                    "approved_event_count",
+                    "event_created_at",
+                }:
+                    raise ValueError("Timestamp action has invalid preconditions")
+                if (
+                    action.expected.get("status") != "approved"
+                    or action.expected.get("approved_at_missing") is not True
+                    or action.expected.get("approved_event_count") != 1
+                    or not isinstance(action.expected.get("event_created_at"), str)
+                ):
+                    raise ValueError("Timestamp action has invalid preconditions")
+            else:
+                if keys != {"drift_hash", "finding_count"}:
+                    raise ValueError("FTS action has invalid preconditions")
+                drift_hash = action.expected.get("drift_hash")
+                if (
+                    not isinstance(drift_hash, str)
+                    or len(drift_hash) != 64
+                    or not isinstance(action.expected.get("finding_count"), int)
+                    or int(action.expected["finding_count"]) <= 0
+                ):
+                    raise ValueError("FTS action has invalid preconditions")
+
+    def repair(self, plan: RepairPlan) -> RepairReport:
+        actions = tuple(plan.actions)
+        self._validate_plan(actions)
+        if not actions:
+            return RepairReport(
+                planned_count=0,
+                applied_count=0,
+                skipped_count=0,
+                applied_action_ids=(),
+                skipped_action_ids=(),
+                outcomes=(),
+            )
+        priority = {
+            "rebuild_fts": 0,
+            "set_approved_at": 1,
+            "reject_lesson": 2,
+        }
+        indexed_actions = list(enumerate(actions))
+        execution_order = sorted(
+            indexed_actions,
+            key=lambda item: (priority[item[1].kind], item[0]),
+        )
+        outcomes_by_index: dict[int, ActionOutcome] = {}
         with self.database.transaction(immediate=True) as connection:
-            for action in actions:
+            for index, action in execution_order:
                 if action.kind == "set_approved_at":
-                    changed = self._apply_timestamp(connection, action)
+                    outcome = self._apply_timestamp(connection, action)
                 elif action.kind == "reject_lesson":
-                    changed = self._apply_rejection(connection, action)
+                    outcome = self._apply_rejection(connection, action)
                 else:
-                    changed = self._apply_fts_rebuild(connection, action)
-                (applied if changed else skipped).append(action.action_id)
+                    outcome = self._apply_fts_rebuild(connection, action)
+                outcomes_by_index[index] = outcome
+
+        outcomes = tuple(
+            outcomes_by_index[index] for index in range(len(actions))
+        )
+        applied = tuple(
+            outcome.action_id
+            for outcome in outcomes
+            if outcome.status == "applied"
+        )
+        skipped = tuple(
+            outcome.action_id
+            for outcome in outcomes
+            if outcome.status == "skipped"
+        )
 
         return RepairReport(
             planned_count=len(actions),
             applied_count=len(applied),
             skipped_count=len(skipped),
-            applied_action_ids=tuple(applied),
-            skipped_action_ids=tuple(skipped),
+            applied_action_ids=applied,
+            skipped_action_ids=skipped,
+            outcomes=outcomes,
         )

@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 from hermes.application.knowledge_lifecycle import KnowledgeLifecycle, LifecycleActor
-from hermes.data_health import DataHealth
+from hermes.data_health import DataHealth, RepairAction, RepairPlan
 from hermes.db import Database
 from hermes.knowledge import SQLiteKnowledgeStore
 
@@ -77,6 +77,24 @@ class DataHealthTests(unittest.TestCase):
                 ]
                 for table in ("lessons", "lesson_events", "lesson_fts")
             }
+
+    @staticmethod
+    def action_id(
+        kind: str,
+        subject_id: str,
+        expected: dict[str, int | str | bool],
+    ) -> str:
+        canonical = json.dumps(
+            {
+                "kind": kind,
+                "subject_id": subject_id,
+                "expected": expected,
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     def build_defective_fixture(self) -> tuple[dict, dict, dict, dict]:
         missing_timestamp = self.add_lesson("Missing approval timestamp")
@@ -176,6 +194,16 @@ class DataHealthTests(unittest.TestCase):
         self.assertEqual(first.skipped_count, 0)
         self.assertEqual(second.applied_count, 0)
         self.assertEqual(second.skipped_count, len(plan.actions))
+        self.assertTrue(
+            all(outcome.status == "applied" for outcome in first.outcomes)
+        )
+        self.assertTrue(
+            all(
+                outcome.status == "skipped"
+                and outcome.reason == "already_applied"
+                for outcome in second.outcomes
+            )
+        )
         self.assertEqual(after_first, self.snapshot())
         with self.database.connect() as connection:
             timestamp = connection.execute(
@@ -253,6 +281,11 @@ class DataHealthTests(unittest.TestCase):
 
         self.assertEqual(report.applied_count, 0)
         self.assertEqual(report.skipped_count, 1)
+        self.assertEqual(report.outcomes[0].reason, "precondition_failed")
+        self.assertEqual(
+            report.outcomes[0].before,
+            report.outcomes[0].after,
+        )
         self.assertEqual(before, self.snapshot())
 
     def test_ambiguous_approval_history_is_review_only(self) -> None:
@@ -312,6 +345,212 @@ class DataHealthTests(unittest.TestCase):
             if finding.code == "foreign_key_violation"
         )
         self.assertEqual(finding.repair_class, "forbidden")
+
+    def test_repair_rejects_forged_action_ids_and_markerless_rejections(
+        self,
+    ) -> None:
+        lesson = self.add_lesson("Forged repair target", category="error")
+        self.approve(lesson)
+        health = DataHealth(self.database)
+        valid = next(
+            action
+            for action in health.audit().repair_plan.actions
+            if action.kind == "reject_lesson"
+        )
+        before = self.snapshot()
+
+        forged_id = dataclasses.replace(valid, action_id="0" * 64)
+        with self.assertRaisesRegex(ValueError, "action ID"):
+            health.repair(RepairPlan((forged_id,)))
+
+        expected = {"status": "approved"}
+        markerless = RepairAction(
+            action_id=self.action_id(
+                "reject_lesson",
+                valid.subject_id,
+                expected,
+            ),
+            kind="reject_lesson",
+            subject_id=valid.subject_id,
+            expected=expected,
+        )
+        with self.assertRaisesRegex(ValueError, "defect marker"):
+            health.repair(RepairPlan((markerless,)))
+
+        self.assertEqual(before, self.snapshot())
+
+    def test_fts_rebuild_precondition_survives_rejection_in_same_plan(self) -> None:
+        lesson = self.add_lesson("Rejected FTS drift", category="error")
+        self.approve(lesson)
+        with self.database.transaction(immediate=True) as connection:
+            connection.execute(
+                "UPDATE lesson_fts SET title = 'drifted' WHERE lesson_id = ?",
+                (lesson["id"],),
+            )
+        health = DataHealth(self.database)
+        plan = health.audit().repair_plan
+        self.assertEqual(
+            {action.kind for action in plan.actions},
+            {"reject_lesson", "rebuild_fts"},
+        )
+
+        repaired = health.repair(plan)
+
+        self.assertEqual(repaired.applied_count, 2)
+        self.assertEqual(
+            {outcome.kind for outcome in repaired.outcomes},
+            {"reject_lesson", "rebuild_fts"},
+        )
+        self.assertFalse(
+            any(
+                finding.code.startswith("fts_")
+                for finding in health.audit().findings
+            )
+        )
+        self.assertEqual(self.store.get_entry(lesson["id"])["status"], "rejected")
+
+    def test_missing_database_returns_forbidden_structured_audit_read_only(
+        self,
+    ) -> None:
+        missing_path = self.root / "does-not-exist.db"
+
+        health = DataHealth(Database(missing_path))
+        report = health.audit()
+        repair_report = health.repair(report.repair_plan)
+
+        self.assertFalse(missing_path.exists())
+        self.assertEqual(report.integrity, "unavailable")
+        self.assertEqual(report.foreign_key_violations, 0)
+        self.assertEqual(report.schema_version, 0)
+        self.assertTrue(all(value == 0 for value in report.counts.values()))
+        self.assertEqual(report.repair_plan.actions, ())
+        self.assertEqual(repair_report.planned_count, 0)
+        self.assertEqual(repair_report.outcomes, ())
+        self.assertEqual(
+            [finding.code for finding in report.findings],
+            ["database_missing"],
+        )
+        self.assertEqual(report.findings[0].repair_class, "forbidden")
+
+    def test_incompatible_schema_returns_forbidden_structured_audit_read_only(
+        self,
+    ) -> None:
+        incompatible_path = self.root / "incompatible.db"
+        connection = sqlite3.connect(incompatible_path)
+        try:
+            connection.execute("CREATE TABLE unrelated(id INTEGER PRIMARY KEY)")
+            connection.commit()
+        finally:
+            connection.close()
+        before = hashlib.sha256(incompatible_path.read_bytes()).hexdigest()
+
+        report = DataHealth(Database(incompatible_path)).audit()
+
+        after = hashlib.sha256(incompatible_path.read_bytes()).hexdigest()
+        self.assertEqual(before, after)
+        self.assertEqual(report.integrity, "ok")
+        self.assertEqual(report.schema_version, 0)
+        self.assertTrue(all(value == 0 for value in report.counts.values()))
+        self.assertEqual(report.repair_plan.actions, ())
+        finding = next(
+            finding
+            for finding in report.findings
+            if finding.code == "schema_incompatible"
+        )
+        self.assertEqual(finding.repair_class, "forbidden")
+        self.assertGreater(finding.metadata["missing_table_count"], 0)
+
+    def test_action_outcomes_are_redacted_and_include_before_after_metadata(
+        self,
+    ) -> None:
+        lesson = self.add_lesson("Outcome metadata", category="error")
+        self.approve(lesson)
+        health = DataHealth(self.database)
+
+        report = health.repair(health.audit().repair_plan)
+
+        outcome = next(
+            outcome
+            for outcome in report.outcomes
+            if outcome.kind == "reject_lesson"
+        )
+        self.assertEqual(outcome.status, "applied")
+        self.assertEqual(outcome.reason, "applied")
+        self.assertEqual(outcome.before["status"], "approved")
+        self.assertEqual(outcome.after["status"], "rejected")
+        serialized = json.dumps(dataclasses.asdict(report), ensure_ascii=False)
+        self.assertNotIn(lesson["id"], serialized)
+        self.assertNotIn("Outcome metadata", serialized)
+        self.assertNotIn("private.example", serialized)
+
+    def test_fts_findings_report_actual_row_counts(self) -> None:
+        missing = self.add_lesson("Missing FTS row")
+        duplicate = self.add_lesson("Duplicate FTS row")
+        self.approve(missing)
+        self.approve(duplicate)
+        with self.database.transaction(immediate=True) as connection:
+            connection.execute(
+                "DELETE FROM lesson_fts WHERE lesson_id = ?",
+                (missing["id"],),
+            )
+            row = connection.execute(
+                """
+                SELECT lesson_id, owner_user_id, title, summary, content, tags
+                FROM lesson_fts WHERE lesson_id = ?
+                """,
+                (duplicate["id"],),
+            ).fetchone()
+            connection.execute(
+                """
+                INSERT INTO lesson_fts(
+                    lesson_id, owner_user_id, title, summary, content, tags
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                tuple(row),
+            )
+
+        findings = DataHealth(self.database).audit().findings
+        missing_finding = next(
+            finding
+            for finding in findings
+            if finding.code == "fts_missing"
+            and finding.subject_id_hash
+            == hashlib.sha256(missing["id"].encode("utf-8")).hexdigest()
+        )
+        duplicate_finding = next(
+            finding
+            for finding in findings
+            if finding.code == "fts_mismatch"
+            and finding.subject_id_hash
+            == hashlib.sha256(duplicate["id"].encode("utf-8")).hexdigest()
+        )
+        self.assertEqual(missing_finding.metadata["row_count"], 0)
+        self.assertEqual(duplicate_finding.metadata["row_count"], 2)
+
+    def test_unknown_title_rule_recognizes_vietnamese_and_known_mojibake(
+        self,
+    ) -> None:
+        intended = "Không xác định"
+        mojibake = intended.encode("utf-8").decode("cp1252")
+        intended_lesson = self.add_lesson(f" {intended} ")
+        mojibake_lesson = self.add_lesson(mojibake)
+
+        report = DataHealth(self.database).audit()
+
+        findings = [
+            finding
+            for finding in report.findings
+            if finding.code == "defect_unknown_title"
+        ]
+        self.assertEqual(len(findings), 2)
+        expected_subjects = {
+            hashlib.sha256(lesson["id"].encode("utf-8")).hexdigest()
+            for lesson in (intended_lesson, mojibake_lesson)
+        }
+        self.assertEqual(
+            {finding.subject_id_hash for finding in findings},
+            expected_subjects,
+        )
 
 
 if __name__ == "__main__":
