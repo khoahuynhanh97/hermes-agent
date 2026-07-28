@@ -96,6 +96,7 @@ class BackupTests(unittest.TestCase):
                     "lesson_fts": 1,
                 },
                 "sha256": self._sha256(paths[-1]),
+                "file_identity": mock.ANY,
                 "detail": "ok",
             },
         )
@@ -318,6 +319,37 @@ class BackupTests(unittest.TestCase):
         self.assertIn("immutable=1", uri)
         self.assertEqual(self._sha256(backup), digest_before)
         self.assertEqual(backup.stat().st_mtime_ns, mtime_before)
+
+    def test_verify_rejects_replacement_between_digest_and_sqlite_open(
+        self,
+    ) -> None:
+        manager = self._backup_manager()
+        backup = manager.create_backup(label="snapshot-race")
+        replacement = manager.create_backup(label="replacement")
+        with closing(sqlite3.connect(replacement)) as connection:
+            connection.execute("CREATE TABLE replacement_marker(value TEXT)")
+            connection.commit()
+
+        def replace_candidate(boundary: str, candidate: Path) -> None:
+            if boundary != "after_digest_before_sqlite":
+                return
+            candidate.unlink()
+            replacement.replace(candidate)
+
+        from hermes.backup import SQLiteBackupManager
+
+        racing_manager = SQLiteBackupManager(
+            self.database,
+            self.root / "backups",
+            verification_hook=replace_candidate,
+        )
+        verification = racing_manager.verify(backup)
+
+        self.assertFalse(verification["ok"])
+        self.assertEqual(
+            verification["detail"],
+            "backup changed during verification",
+        )
 
     def test_verify_reports_missing_required_table_with_exact_type_check(self) -> None:
         manager = self._backup_manager()

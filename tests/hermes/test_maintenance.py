@@ -254,6 +254,7 @@ class FakeBackupManager:
                 "lesson_fts": 8,
             },
             "sha256": "",
+            "file_identity": "a" * 64,
             "detail": "ok",
         }
         self.verifications = list(verifications or [])
@@ -453,6 +454,7 @@ class MaintenanceRunnerTests(unittest.TestCase):
                 "validate_offline",
                 "audit",
                 "validate_offline",
+                "verify_backup",
                 "repair",
                 "validate_offline",
                 "validate_offline",
@@ -793,7 +795,7 @@ class MaintenanceRunnerTests(unittest.TestCase):
             mock.patch("hermes.maintenance.datetime") as clock,
             mock.patch(
                 "hermes.maintenance.secrets.token_hex",
-                return_value="a" * 16,
+                return_value="a" * 32,
             ),
         ):
             clock.now.return_value = fixed
@@ -804,6 +806,52 @@ class MaintenanceRunnerTests(unittest.TestCase):
         self.assertTrue(first_result.run_id.startswith("run-"))
         self.assertTrue(second_result.run_id.startswith("run-"))
         self.assertNotEqual(first_result.report_json, second_result.report_json)
+
+    def test_generated_run_id_round_trips_through_resume_id(self) -> None:
+        crash = CrashOnce("after_report_reservation")
+        runner, process, backup, health = self.make_runner(crash_hook=crash)
+
+        with self.assertRaises(KeyboardInterrupt):
+            runner.run()
+        generated_id = runner.run_id
+        self.assertRegex(generated_id, r"^run-[0-9a-f]{32}$")
+
+        resumed, _, _, _ = self.make_runner(
+            process=process,
+            backup=backup,
+            health=health,
+        )
+        result = resumed.run(resume_id=generated_id)
+
+        self.assertEqual(result.run_id, generated_id)
+        self.assertTrue(
+            (self.report_dir / f"maintenance-{generated_id}.state.json").exists()
+        )
+
+    def test_external_alias_round_trips_via_canonical_resume_id(self) -> None:
+        crash = CrashOnce("after_report_reservation")
+        runner, process, backup, health = self.make_runner(
+            run_id="operator-alias",
+            crash_hook=crash,
+        )
+
+        with self.assertRaises(KeyboardInterrupt):
+            runner.run()
+        canonical_id = runner.run_id
+        self.assertNotEqual(canonical_id, "operator-alias")
+
+        resumed, _, _, _ = self.make_runner(
+            process=process,
+            backup=backup,
+            health=health,
+        )
+        result = resumed.run(resume_id=canonical_id)
+
+        self.assertEqual(result.run_id, canonical_id)
+        with self.assertRaises(ValueError):
+            resumed.run(resume_id="operator-alias")
+        with self.assertRaises(ValueError):
+            resumed.run(resume_id="run-secret-token")
 
     def test_offline_lease_is_revalidated_before_backup_and_repair(self) -> None:
         lease = FakeOfflineLease(self.events, [True, False])
@@ -846,7 +894,11 @@ class MaintenanceRunnerTests(unittest.TestCase):
             "ok": False,
             "integrity": "failed",
         }
-        backup.verifications = [dict(backup.verification), invalid]
+        backup.verifications = [
+            dict(backup.verification),
+            dict(backup.verification),
+            invalid,
+        ]
         health = FakeDataHealth(
             self.events,
             [
@@ -1130,6 +1182,44 @@ class MaintenanceRunnerTests(unittest.TestCase):
 
         self.assertEqual(result.status, "completed")
 
+    def test_database_lock_contends_for_hard_links_and_path_spellings(
+        self,
+    ) -> None:
+        database = self.root / "db" / "hermes.db"
+        database.parent.mkdir(parents=True)
+        database.write_bytes(b"database")
+        hard_link = self.root / "db-alias.db"
+        hard_link.hardlink_to(database)
+        spelling = database.parent / "." / database.name
+        lock_root = self.root / "shared-locks"
+
+        owner = DatabaseRunLock(
+            database_path=database,
+            lock_root=lock_root,
+        )
+        hard_link_lock = DatabaseRunLock(
+            database_path=hard_link,
+            lock_root=lock_root,
+        )
+        spelling_lock = DatabaseRunLock(
+            database_path=spelling,
+            lock_root=lock_root,
+        )
+
+        try:
+            owner.acquire()
+            with self.assertRaises(MaintenanceBusyError):
+                hard_link_lock.acquire()
+            with self.assertRaises(MaintenanceBusyError):
+                spelling_lock.acquire()
+            owner.close()
+
+            hard_link_lock.acquire()
+        finally:
+            owner.close()
+            hard_link_lock.close()
+            spelling_lock.close()
+
     def test_report_artifacts_reconcile_crashes_without_repeating_start(
         self,
     ) -> None:
@@ -1401,6 +1491,54 @@ class MaintenanceRunnerTests(unittest.TestCase):
             Path(rebuilt.report_json).read_text(encoding="utf-8"),
             "foreign historical artifact",
         )
+
+    def test_terminal_report_status_tamper_with_owner_hash_is_rejected(self) -> None:
+        runner, process, backup, health = self.make_runner(
+            run_id="terminal-status-tamper",
+        )
+        result = runner.run()
+        report_path = Path(result.report_json)
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+        payload["status"] = "failed"
+        report_path.write_text(
+            json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        tampered = report_path.read_text(encoding="utf-8")
+
+        resumed, _, _, _ = self.make_runner(
+            process=process,
+            backup=backup,
+            health=health,
+        )
+        with self.assertRaises(ArtifactCollisionError):
+            resumed.run(resume_id=result.run_id)
+        self.assertEqual(report_path.read_text(encoding="utf-8"), tampered)
+
+    def test_terminal_report_count_tamper_with_owner_hash_is_rejected(self) -> None:
+        runner, process, backup, health = self.make_runner(
+            run_id="terminal-count-tamper",
+        )
+        result = runner.run()
+        report_path = Path(result.report_json)
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+        payload["post_audit"]["counts"]["lessons"] += 1
+        report_path.write_text(
+            json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        tampered = report_path.read_text(encoding="utf-8")
+
+        resumed, _, _, _ = self.make_runner(
+            process=process,
+            backup=backup,
+            health=health,
+        )
+        with self.assertRaises(ArtifactCollisionError):
+            resumed.run(resume_id=result.run_id)
+        self.assertEqual(report_path.read_text(encoding="utf-8"), tampered)
 
 
 if __name__ == "__main__":

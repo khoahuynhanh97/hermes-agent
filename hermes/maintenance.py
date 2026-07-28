@@ -23,8 +23,8 @@ MaintenanceStatus = Literal[
     "manual_intervention_required",
 ]
 
-_STATE_VERSION = 3
-_RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$")
+_STATE_VERSION = 4
+_RUN_ID_PATTERN = re.compile(r"^run-[0-9a-f]{32}$")
 _RUN_ALIAS_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$")
 _ARTIFACT_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
 _ERROR_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
@@ -85,6 +85,9 @@ _STATE_KEYS = {
     "active_report_attempt",
     "report_owner_hash",
     "report_phase",
+    "report_snapshot_at",
+    "report_json_digest",
+    "report_markdown_digest",
 }
 _SENSITIVE_RUN_WORDS = (
     "content",
@@ -203,10 +206,31 @@ class DatabaseRunLock:
         lock_root: str | Path | None = None,
     ):
         resolved = Path(database_path).expanduser().resolve()
-        identity = _identifier_hash(str(resolved))
+        try:
+            file_stat = resolved.stat()
+        except OSError:
+            identity_source = f"path:{os.path.normcase(str(resolved))}"
+        else:
+            if file_stat.st_ino:
+                identity_source = (
+                    f"file:{int(file_stat.st_dev)}:{int(file_stat.st_ino)}"
+                )
+            else:
+                identity_source = f"path:{os.path.normcase(str(resolved))}"
+        identity = _identifier_hash(identity_source)
+        if sys.platform == "win32":
+            default_root = (
+                Path(os.environ.get("LOCALAPPDATA", tempfile.gettempdir()))
+                / "HermesAgent"
+                / "maintenance-locks"
+            )
+        else:
+            default_root = (
+                Path(tempfile.gettempdir())
+                / "hermes-agent-maintenance-locks"
+            )
         root = Path(
-            lock_root
-            or (Path(tempfile.gettempdir()) / "hermes-maintenance-locks")
+            lock_root or default_root
         ).expanduser().resolve()
         root.mkdir(parents=True, exist_ok=True)
         self.path = root / f"{identity}.lock"
@@ -321,7 +345,19 @@ class MaintenanceRunner:
         self._reserved_attempt = 0
         self._resumed = False
 
-    def run(self) -> MaintenanceResult:
+    def run(self, *, resume_id: str | None = None) -> MaintenanceResult:
+        if resume_id is not None:
+            if not _RUN_ID_PATTERN.fullmatch(resume_id):
+                raise ValueError("resume_id is not a canonical run identifier")
+            if (
+                self.requested_run_id is not None
+                and self.requested_run_id != resume_id
+            ):
+                raise ValueError("resume_id conflicts with the external alias")
+            if self.run_id is not None and self.run_id != resume_id:
+                raise ValueError("resume_id conflicts with runner state")
+            self.requested_run_id = resume_id
+            self.run_id = resume_id
         self.report_dir.mkdir(parents=True, exist_ok=True)
         backup_database_path = self._adapter_database_path(
             self.backup_manager
@@ -546,6 +582,11 @@ class MaintenanceRunner:
                 return self._finish(
                     "manual_intervention_required",
                     "offline_lease_invalid",
+                )
+            elif not self._reverify_stored_backup():
+                return self._finish(
+                    "manual_intervention_required",
+                    "resume_backup_invalid",
                 )
             else:
                 try:
@@ -935,6 +976,10 @@ class MaintenanceRunner:
             )
             and isinstance(verification.get("sha256"), str)
             and _HEX_PATTERN.fullmatch(verification["sha256"]) is not None
+            and isinstance(verification.get("file_identity"), str)
+            and _HEX_PATTERN.fullmatch(
+                verification["file_identity"]
+            ) is not None
         )
 
     @staticmethod
@@ -1148,6 +1193,9 @@ class MaintenanceRunner:
                 for key in _FULL_BACKUP_COUNT_KEYS
             },
             "digest": str(verification.get("sha256") or ""),
+            "file_identity": str(
+                verification.get("file_identity") or ""
+            ),
         }
 
     @staticmethod
@@ -1323,6 +1371,9 @@ class MaintenanceRunner:
             "active_report_attempt": 0,
             "report_owner_hash": "",
             "report_phase": "idle",
+            "report_snapshot_at": "",
+            "report_json_digest": "",
+            "report_markdown_digest": "",
         }
 
     @staticmethod
@@ -1372,6 +1423,9 @@ class MaintenanceRunner:
             secrets.token_hex(32)
         )
         state["report_phase"] = "reserved"
+        state["report_snapshot_at"] = ""
+        state["report_json_digest"] = ""
+        state["report_markdown_digest"] = ""
         self._reserved_attempt = attempt
         self._persist_state()
         self._crash("after_report_reservation")
@@ -1384,8 +1438,22 @@ class MaintenanceRunner:
         json_path, markdown_path = self._report_paths(
             int(state["active_report_attempt"])
         )
-        self._ensure_owned_artifact(json_path, "json", owner_hash)
-        self._ensure_owned_artifact(markdown_path, "markdown", owner_hash)
+        expected_json = None
+        expected_markdown = None
+        if state["report_snapshot_at"]:
+            expected_json, expected_markdown = self._canonical_report_texts()
+        self._ensure_owned_artifact(
+            json_path,
+            "json",
+            owner_hash,
+            expected_json,
+        )
+        self._ensure_owned_artifact(
+            markdown_path,
+            "markdown",
+            owner_hash,
+            expected_markdown,
+        )
 
     @staticmethod
     def _reservation_marker(kind: str, owner_hash: str) -> str:
@@ -1405,6 +1473,7 @@ class MaintenanceRunner:
         path: Path,
         kind: str,
         owner_hash: str,
+        expected_text: str | None = None,
     ) -> None:
         marker = self._reservation_marker(kind, owner_hash)
         if not path.exists():
@@ -1420,7 +1489,12 @@ class MaintenanceRunner:
                     handle.write(marker)
                     handle.flush()
                     os.fsync(handle.fileno())
-        if not self._artifact_is_owned(path, kind, owner_hash):
+        if not self._artifact_is_owned(
+            path,
+            kind,
+            owner_hash,
+            expected_text,
+        ):
             raise ArtifactCollisionError("report artifact is foreign")
 
     @staticmethod
@@ -1428,6 +1502,7 @@ class MaintenanceRunner:
         path: Path,
         kind: str,
         owner_hash: str,
+        expected_text: str | None = None,
     ) -> bool:
         try:
             text = path.read_text(encoding="utf-8")
@@ -1435,18 +1510,7 @@ class MaintenanceRunner:
             return False
         if text == MaintenanceRunner._reservation_marker(kind, owner_hash):
             return True
-        if kind == "json":
-            try:
-                payload = json.loads(text)
-            except json.JSONDecodeError:
-                return False
-            return (
-                isinstance(payload, dict)
-                and payload.get("report_owner_hash") == owner_hash
-            )
-        return text.startswith(
-            f"<!-- hermes-maintenance-owner:{owner_hash} -->\n"
-        )
+        return expected_text is not None and text == expected_text
 
     @classmethod
     def _read_state(
@@ -1536,6 +1600,13 @@ class MaintenanceRunner:
             raise StateValidationError("report attempt state is invalid")
         owner_hash = state["report_owner_hash"]
         cls._validate_hash(owner_hash, allow_empty=True)
+        snapshot_at = state["report_snapshot_at"]
+        if snapshot_at:
+            cls._validate_timestamp(snapshot_at)
+        elif not isinstance(snapshot_at, str):
+            raise StateValidationError("report snapshot timestamp is invalid")
+        cls._validate_hash(state["report_json_digest"], allow_empty=True)
+        cls._validate_hash(state["report_markdown_digest"], allow_empty=True)
         phase = state["report_phase"]
         if phase not in {
             "idle",
@@ -1552,6 +1623,22 @@ class MaintenanceRunner:
             raise StateValidationError("active report ownership is invalid")
         if pending_status and active_attempt == 0:
             raise StateValidationError("terminal intent lacks report ownership")
+        report_hashes_present = bool(
+            state["report_json_digest"]
+            and state["report_markdown_digest"]
+        )
+        if bool(state["report_json_digest"]) != bool(
+            state["report_markdown_digest"]
+        ):
+            raise StateValidationError("report digests are incomplete")
+        if snapshot_at and not report_hashes_present:
+            raise StateValidationError("report snapshot lacks digests")
+        if phase in {"json_written", "markdown_written"} and not snapshot_at:
+            raise StateValidationError("written report lacks snapshot")
+        if report_attempt > 0 and active_attempt == 0 and (
+            not snapshot_at or not report_hashes_present
+        ):
+            raise StateValidationError("terminal report binding is missing")
         cls._validate_process(state["process"])
         cls._validate_optional_backup(state["backup"])
         cls._validate_optional_audit(state["pre_audit"])
@@ -1638,6 +1725,7 @@ class MaintenanceRunner:
             "schema_version",
             "counts",
             "digest",
+            "file_identity",
         }
         if not isinstance(value, dict) or set(value) != keys:
             raise StateValidationError("backup summary is invalid")
@@ -1654,6 +1742,7 @@ class MaintenanceRunner:
             raise StateValidationError("backup schema version is invalid")
         cls._validate_counts(value["counts"], _FULL_BACKUP_COUNT_KEYS)
         cls._validate_hash(value["digest"])
+        cls._validate_hash(value["file_identity"])
 
     @classmethod
     def _validate_optional_audit(cls, value: object) -> None:
@@ -1954,31 +2043,28 @@ class MaintenanceRunner:
         state = self._require_state()
         if not state["pending_status"]:
             raise StateValidationError("terminal report intent is missing")
-        payload = self._report_payload()
+        json_text, markdown_text = self._prepare_report_snapshot()
         json_path, markdown_path = self._report_paths(self._reserved_attempt)
         owner_hash = str(state["report_owner_hash"])
-        self._ensure_owned_artifact(json_path, "json", owner_hash)
-        self._ensure_owned_artifact(markdown_path, "markdown", owner_hash)
-        _atomic_write(
+        self._ensure_owned_artifact(
             json_path,
-            json.dumps(
-                payload,
-                ensure_ascii=True,
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
+            "json",
+            owner_hash,
+            json_text,
         )
+        self._ensure_owned_artifact(
+            markdown_path,
+            "markdown",
+            owner_hash,
+            markdown_text,
+        )
+        if json_path.read_text(encoding="utf-8") != json_text:
+            _atomic_write(json_path, json_text)
         state["report_phase"] = "json_written"
         self._persist_state()
         self._crash("after_json_write")
-        _atomic_write(
-            markdown_path,
-            (
-                f"<!-- hermes-maintenance-owner:{owner_hash} -->\n"
-                + self._markdown(payload)
-            ),
-        )
+        if markdown_path.read_text(encoding="utf-8") != markdown_text:
+            _atomic_write(markdown_path, markdown_text)
         state["report_phase"] = "markdown_written"
         self._persist_state()
         self._crash("after_markdown_write")
@@ -2018,33 +2104,82 @@ class MaintenanceRunner:
         self._reserved_attempt = attempt
         json_path, markdown_path = self._report_paths(attempt)
         owner_hash = str(state["report_owner_hash"])
-        self._ensure_owned_artifact(json_path, "json", owner_hash)
-        self._ensure_owned_artifact(markdown_path, "markdown", owner_hash)
-        payload = self._report_payload()
+        json_text, markdown_text = self._canonical_report_texts()
+        self._verify_report_digests(json_text, markdown_text)
+        self._ensure_owned_artifact(
+            json_path,
+            "json",
+            owner_hash,
+            json_text,
+        )
+        self._ensure_owned_artifact(
+            markdown_path,
+            "markdown",
+            owner_hash,
+            markdown_text,
+        )
         if json_path.read_text(encoding="utf-8") == self._reservation_marker(
             "json",
             owner_hash,
         ):
-            _atomic_write(
-                json_path,
-                json.dumps(
-                    payload,
-                    ensure_ascii=True,
-                    indent=2,
-                    sort_keys=True,
-                )
-                + "\n",
-            )
+            _atomic_write(json_path, json_text)
         if markdown_path.read_text(
             encoding="utf-8"
         ) == self._reservation_marker("markdown", owner_hash):
-            _atomic_write(
-                markdown_path,
-                (
-                    f"<!-- hermes-maintenance-owner:{owner_hash} -->\n"
-                    + self._markdown(payload)
-                ),
+            _atomic_write(markdown_path, markdown_text)
+
+    def _prepare_report_snapshot(self) -> tuple[str, str]:
+        state = self._require_state()
+        if not state["report_snapshot_at"]:
+            state["report_snapshot_at"] = _utc_now()
+        json_text, markdown_text = self._canonical_report_texts()
+        json_digest = hashlib.sha256(json_text.encode("utf-8")).hexdigest()
+        markdown_digest = hashlib.sha256(
+            markdown_text.encode("utf-8")
+        ).hexdigest()
+        if state["report_json_digest"] and (
+            state["report_json_digest"] != json_digest
+            or state["report_markdown_digest"] != markdown_digest
+        ):
+            raise StateValidationError("report snapshot binding changed")
+        state["report_json_digest"] = json_digest
+        state["report_markdown_digest"] = markdown_digest
+        self._persist_state()
+        return json_text, markdown_text
+
+    def _canonical_report_texts(self) -> tuple[str, str]:
+        state = self._require_state()
+        if not state["report_snapshot_at"]:
+            raise StateValidationError("report snapshot is missing")
+        payload = self._report_payload()
+        json_text = (
+            json.dumps(
+                payload,
+                ensure_ascii=True,
+                indent=2,
+                sort_keys=True,
             )
+            + "\n"
+        )
+        markdown_text = (
+            f"<!-- hermes-maintenance-owner:{state['report_owner_hash']} -->\n"
+            + self._markdown(payload)
+        )
+        return json_text, markdown_text
+
+    def _verify_report_digests(
+        self,
+        json_text: str,
+        markdown_text: str,
+    ) -> None:
+        state = self._require_state()
+        if (
+            hashlib.sha256(json_text.encode("utf-8")).hexdigest()
+            != state["report_json_digest"]
+            or hashlib.sha256(markdown_text.encode("utf-8")).hexdigest()
+            != state["report_markdown_digest"]
+        ):
+            raise StateValidationError("report snapshot digest is invalid")
 
     def _report_payload(self) -> dict[str, object]:
         state = self._require_state()
@@ -2059,11 +2194,13 @@ class MaintenanceRunner:
         if reported_status == "completed" and "completed" not in reported_stages:
             reported_stages.append("completed")
         return {
-            "report_version": 3,
+            "report_version": 4,
             "run_id": self._run_id(),
             "status": reported_status,
             "started_at": state["started_at"],
-            "updated_at": state["updated_at"],
+            "updated_at": (
+                state["report_snapshot_at"] or state["updated_at"]
+            ),
             "completed_stages": reported_stages,
             "error_code": reported_error,
             "report_owner_hash": state["report_owner_hash"],
@@ -2113,6 +2250,7 @@ class MaintenanceRunner:
                 for key in _FULL_BACKUP_COUNT_KEYS
             },
             "digest": summary["digest"],
+            "file_identity": summary["file_identity"],
         }
 
     @staticmethod

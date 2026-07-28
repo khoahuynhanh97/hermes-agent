@@ -10,7 +10,7 @@ import tempfile
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol, TypedDict
+from typing import Any, Callable, Protocol, TypedDict
 from urllib.parse import urlencode
 
 from .db import SCHEMA_VERSION, Database
@@ -99,6 +99,7 @@ class BackupVerification(TypedDict):
     required_tables_missing: list[str]
     counts: dict[str, int]
     sha256: str
+    file_identity: str
     detail: str
 
 
@@ -164,12 +165,30 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _snapshot_stat(path: Path) -> tuple[int, int, int, int, int]:
+    value = path.stat()
+    return (
+        int(value.st_dev),
+        int(value.st_ino),
+        int(value.st_size),
+        int(value.st_mtime_ns),
+        int(value.st_ctime_ns),
+    )
+
+
+def _snapshot_identity(value: tuple[int, int, int, int, int]) -> str:
+    return hashlib.sha256(
+        ":".join(str(item) for item in value).encode("ascii")
+    ).hexdigest()
+
+
 class SQLiteBackupManager:
     def __init__(
         self,
         database: Database | None = None,
         backup_dir: str | Path | None = None,
         keep: int = 14,
+        verification_hook: Callable[[str, Path], None] | None = None,
     ):
         self.database = database or Database()
         default_dir = self.database.path.parent / "backups"
@@ -177,6 +196,7 @@ class SQLiteBackupManager:
             backup_dir or os.environ.get("HERMES_BACKUP_DIR", "") or default_dir
         ).expanduser().resolve()
         self.keep = max(1, int(keep))
+        self._verification_hook = verification_hook
         self.backup_dir.mkdir(parents=True, exist_ok=True)
 
     def create_backup(self, label: str = "scheduled") -> Path:
@@ -288,6 +308,7 @@ class SQLiteBackupManager:
         required_tables_missing: list[str] | None = None,
         counts: dict[str, int] | None = None,
         sha256: str = "",
+        file_identity: str = "",
     ) -> BackupVerification:
         return {
             "ok": False,
@@ -304,6 +325,7 @@ class SQLiteBackupManager:
                 table: 0 for table in VERIFICATION_COUNT_TABLES
             },
             "sha256": sha256,
+            "file_identity": file_identity,
             "detail": detail,
         }
 
@@ -326,7 +348,19 @@ class SQLiteBackupManager:
                 "backup file does not exist",
             )
         try:
+            initial_stat = _snapshot_stat(candidate)
             digest = _sha256_file(candidate)
+            after_digest_stat = _snapshot_stat(candidate)
+            if initial_stat != after_digest_stat:
+                return self._verification_failure(
+                    candidate,
+                    "backup changed during verification",
+                )
+            if self._verification_hook is not None:
+                self._verification_hook(
+                    "after_digest_before_sqlite",
+                    candidate,
+                )
             with closing(
                 sqlite3.connect(
                     _sqlite_uri(
@@ -383,10 +417,20 @@ class SQLiteBackupManager:
                     )
                     for table in VERIFICATION_COUNT_TABLES
                 }
+            final_digest = _sha256_file(candidate)
+            final_stat = _snapshot_stat(candidate)
         except (OSError, sqlite3.Error, TypeError, ValueError):
             return self._verification_failure(
                 candidate,
                 "backup is not a readable SQLite database",
+            )
+        if (
+            initial_stat != final_stat
+            or digest != final_digest
+        ):
+            return self._verification_failure(
+                candidate,
+                "backup changed during verification",
             )
 
         failures: list[str] = []
@@ -408,6 +452,7 @@ class SQLiteBackupManager:
             "required_tables_missing": required_tables_missing,
             "counts": counts,
             "sha256": digest,
+            "file_identity": _snapshot_identity(initial_stat),
             "detail": detail,
         }
 
