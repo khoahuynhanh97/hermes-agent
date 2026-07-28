@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal, Protocol, Sequence
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from typing import Any, Literal, Protocol, Sequence
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,7 @@ class LifecycleCommand:
     reason: str = ""
     expected_status: str | None = None
     force: bool = False
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -81,9 +83,20 @@ class KnowledgeLifecycle:
         self,
         lesson_id: str,
         actor: LifecycleActor,
+        *,
+        reason: str = "",
+        metadata: Mapping[str, Any] | None = None,
     ) -> LifecycleResult:
         return self.apply(
-            [LifecycleCommand("request_reanalysis", lesson_id, actor)]
+            [
+                LifecycleCommand(
+                    "request_reanalysis",
+                    lesson_id,
+                    actor,
+                    reason=reason,
+                    metadata=metadata or {},
+                )
+            ]
         )[0]
 
     def apply(

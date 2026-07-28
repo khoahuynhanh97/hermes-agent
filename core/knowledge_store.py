@@ -24,6 +24,10 @@ from typing import Optional
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import config
+from hermes.knowledge_similarity import (
+    build_duplicate_warning,
+    find_similar_knowledge_entries,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -197,115 +201,14 @@ class UnifiedKnowledgeStore:
         return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
     def find_similar_entries(self, title: str, summary: str = "", threshold: float = 0.6) -> list[dict]:
-        """
-        Tim cac entry da approved co title hoac summary tuong tu.
-        Dung simple string matching + keyword overlap de detect duplicate.
-
-        Args:
-            title: Title cua entry can check
-            summary: Summary/key_lessons cua entry can check (optional)
-            threshold: Ngưỡng similarity (0.0 - 1.0), mac dinh 0.6 (60% overlap)
-
-        Returns:
-            List cac entry da approved co do tuong tu cao
-        """
+        """Return approved entries matching the shared duplicate policy."""
         self._reload()
-
-        if not title:
-            return []
-
-        title_lower = title.lower().strip()
-        title_words = set(title_lower.split())
-
-        # Lay keywords tu title (loai bo stop words tieng Viet co ban)
-        stop_words = {"cach", "lam", "cho", "va", "cua", "trong", "voi", "tu", "de", "mot",
-                      "cac", "nay", "do", "duoc", "khong", "con", "neu", "hay", "hoac",
-                      "the", "how", "to", "and", "for", "with", "from", "a", "an", "is", "in"}
-        title_keywords = title_words - stop_words
-
-        similar_entries = []
-
-        for entry in self._index["entries"]:
-            if entry.get("status") != "approved":
-                continue
-
-            entry_title = (entry.get("title") or "").lower().strip()
-            entry_words = set(entry_title.split())
-            entry_keywords = entry_words - stop_words
-
-            # 1. Exact title match
-            if title_lower == entry_title:
-                similar_entries.append({
-                    **entry,
-                    "match_type": "exact_title",
-                    "similarity": 1.0,
-                })
-                continue
-
-            # 2. High overlap title (>= threshold)
-            if title_keywords and entry_keywords:
-                intersection = title_keywords & entry_keywords
-                union = title_keywords | entry_keywords
-                jaccard = len(intersection) / len(union) if union else 0
-                if jaccard >= threshold:
-                    similar_entries.append({
-                        **entry,
-                        "match_type": "similar_title",
-                        "similarity": jaccard,
-                        "common_keywords": list(intersection),
-                    })
-                    continue
-
-            # 3. Title contains in entry or vice versa
-            if (len(title_lower) > 10 and title_lower in entry_title) or \
-               (len(entry_title) > 10 and entry_title in title_lower):
-                similarity = min(len(title_lower), len(entry_title)) / max(len(title_lower), len(entry_title))
-                if similarity >= threshold:
-                    similar_entries.append({
-                        **entry,
-                        "match_type": "contained_title",
-                        "similarity": similarity,
-                    })
-                    continue
-
-            # 4. Summary overlap (if summary provided)
-            if summary:
-                summary_lower = summary.lower().strip()
-                # Clean punctuation from summary words
-                import string
-                summary_clean = summary_lower.translate(str.maketrans('', '', string.punctuation))
-                summary_words = set(summary_clean.split()) - stop_words
-
-                # Also include entry's key_lessons in comparison
-                entry_lessons = entry.get("key_lessons", [])
-                entry_lesson_words = set()
-                for lesson in entry_lessons:
-                    lesson_clean = lesson.lower().translate(str.maketrans('', '', string.punctuation))
-                    entry_lesson_words.update(lesson_clean.split())
-                entry_lesson_words = entry_lesson_words - stop_words
-
-                # Combine entry keywords and lesson keywords
-                all_entry_keywords = entry_keywords | entry_lesson_words
-
-                if summary_words and all_entry_keywords:
-                    summary_intersection = summary_words & all_entry_keywords
-                    summary_union = summary_words | all_entry_keywords
-                    summary_jaccard = len(summary_intersection) / len(summary_union) if summary_union else 0
-                    # Combine title and summary similarity
-                    title_sim = (jaccard if title_keywords and entry_keywords else 0)
-                    combined = title_sim * 0.5 + summary_jaccard * 0.5
-                    if combined >= threshold:
-                        similar_entries.append({
-                            **entry,
-                            "match_type": "similar_summary",
-                            "similarity": combined,
-                            "common_keywords": list(summary_intersection),
-                        })
-
-        # Sort by similarity descending
-        similar_entries.sort(key=lambda x: x.get("similarity", 0), reverse=True)
-
-        return similar_entries
+        return find_similar_knowledge_entries(
+            title,
+            summary,
+            self._index["entries"],
+            threshold=threshold,
+        )
 
     def find_existing_entry(self, source_url: str) -> Optional[dict]:
         if not source_url:
@@ -671,20 +574,7 @@ class UnifiedKnowledgeStore:
             similar = self.find_similar_entries(title, summary, threshold=0.5)
             if similar:
                 # Tra ve entry voi thong tin canh bao trung lap
-                matched_entry["duplicate_warning"] = {
-                    "has_duplicates": True,
-                    "similar_count": len(similar),
-                    "similar_entries": [
-                        {
-                            "id": s.get("id"),
-                            "title": s.get("title"),
-                            "similarity": round(s.get("similarity", 0) * 100, 1),
-                            "match_type": s.get("match_type"),
-                            "common_keywords": s.get("common_keywords", []),
-                        }
-                        for s in similar[:5]  # Chi lay 5 entry gan nhat
-                    ],
-                }
+                matched_entry["duplicate_warning"] = build_duplicate_warning(similar)
                 return matched_entry
 
         # Khong co trung lap hoac force=True -> duyet binh thuong

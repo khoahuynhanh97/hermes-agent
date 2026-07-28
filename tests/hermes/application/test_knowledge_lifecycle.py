@@ -104,6 +104,48 @@ class KnowledgeLifecycleTests(unittest.TestCase):
         self.assertEqual(again.lesson["status"], "approved")
         self.assertEqual(self.event_actions(entry["id"]), ["created", "approved"])
 
+    def test_duplicate_approval_requires_force_without_mutating_lifecycle_state(
+        self,
+    ) -> None:
+        actor = LifecycleActor.owner("42")
+        approved = self.store.add_entry(
+            title="Repository maps reduce repeated agent context",
+            source_url="https://example.com/repository-maps-approved",
+            key_lessons=["Repository maps reduce repeated agent context"],
+            owner_user_id="42",
+        )
+        duplicate = self.store.add_entry(
+            title="Repository maps reduce repeated agent context",
+            source_url="https://example.com/repository-maps-pending",
+            key_lessons=["Repository maps reduce repeated agent context"],
+            owner_user_id="42",
+        )
+        self.lifecycle.approve(approved["id"], actor, mode="test")
+
+        warned = self.lifecycle.approve(duplicate["id"], actor, mode="test")
+
+        self.assertFalse(warned.ok)
+        self.assertEqual(warned.code, "duplicate_warning")
+        self.assertFalse(warned.changed)
+        self.assertEqual(warned.lesson["status"], "pending")
+        self.assertTrue(warned.lesson["duplicate_warning"]["has_duplicates"])
+        self.assertEqual(
+            warned.lesson["duplicate_warning"]["similar_entries"][0]["id"],
+            approved["id"],
+        )
+        self.assertEqual(self.event_actions(duplicate["id"]), ["created"])
+        self.assertNotIn(duplicate["id"], self.fts_lesson_ids())
+
+        forced = self.lifecycle.approve(
+            duplicate["id"], actor, mode="force_approve", force=True
+        )
+
+        self.assertTrue(forced.ok)
+        self.assertTrue(forced.changed)
+        self.assertEqual(forced.lesson["status"], "approved")
+        self.assertEqual(self.event_actions(duplicate["id"]), ["created", "approved"])
+        self.assertIn(duplicate["id"], self.fts_lesson_ids())
+
     def test_reject_is_idempotent_and_removes_lesson_from_fts(self) -> None:
         entry = self.add_entry("Search lifecycle")
         actor = LifecycleActor.owner("42")
@@ -138,6 +180,31 @@ class KnowledgeLifecycleTests(unittest.TestCase):
             self.event_actions(entry["id"]), ["created", "reanalysis_requested"]
         )
 
+    def test_owner_reanalysis_cannot_write_another_owners_detail(self) -> None:
+        entry = self.add_entry("Protected reanalysis detail", owner="42")
+
+        result = self.lifecycle.apply(
+            [
+                LifecycleCommand(
+                    "request_reanalysis",
+                    entry["id"],
+                    LifecycleActor.owner("99"),
+                    reason="attempted override",
+                    metadata={"raw_analysis": "must not be written"},
+                )
+            ]
+        )[0]
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.code, "forbidden")
+        self.assertFalse(self.store.get_entry(entry["id"])["needs_reanalysis"])
+        self.assertNotIn(
+            "validation_error",
+            self.store.get_entry_detail(entry["id"]),
+        )
+        self.assertNotIn("raw_analysis", self.store.get_entry_detail(entry["id"]))
+        self.assertEqual(self.event_actions(entry["id"]), ["created"])
+
     def test_batch_rolls_back_when_second_command_fails_after_valid_first(self) -> None:
         first = self.add_entry("First atomic lesson")
         second = self.add_entry("Second atomic lesson")
@@ -157,8 +224,12 @@ class KnowledgeLifecycleTests(unittest.TestCase):
         with self.assertRaisesRegex(sqlite3.IntegrityError, "forced lifecycle failure"):
             self.lifecycle.apply(
                 [
-                    LifecycleCommand("approve", first["id"], actor, mode="batch"),
-                    LifecycleCommand("approve", second["id"], actor, mode="batch"),
+                    LifecycleCommand(
+                        "approve", first["id"], actor, mode="batch", force=True
+                    ),
+                    LifecycleCommand(
+                        "approve", second["id"], actor, mode="batch", force=True
+                    ),
                 ]
             )
 

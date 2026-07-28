@@ -120,6 +120,36 @@ class KnowledgeRepositoryTests(unittest.TestCase):
         self.assertFalse(replaced["needs_reanalysis"])
         self.assertEqual(store.get_entry_detail(entry["id"])["summary"], "Recovered summary")
 
+    def test_mark_needs_reanalysis_is_idempotent_and_preserves_detail_updates(
+        self,
+    ) -> None:
+        from hermes.knowledge import SQLiteKnowledgeStore
+
+        store = SQLiteKnowledgeStore(self.database)
+        entry = store.add_entry(title="Recoverable malformed lesson", owner_user_id=42)
+
+        first = store.mark_needs_reanalysis(
+            entry["id"],
+            "invalid JSON",
+            {"raw_analysis": "source-bound analysis", "reanalysis_count": 1},
+        )
+        second = store.mark_needs_reanalysis(
+            entry["id"],
+            "different retry error",
+            {"raw_analysis": "replacement should not apply", "reanalysis_count": 2},
+        )
+
+        detail = store.get_entry_detail(entry["id"])
+        self.assertTrue(first["needs_reanalysis"])
+        self.assertTrue(second["needs_reanalysis"])
+        self.assertEqual(detail["validation_error"], "invalid JSON")
+        self.assertEqual(detail["raw_analysis"], "source-bound analysis")
+        self.assertEqual(detail["reanalysis_count"], 1)
+        self.assertEqual(
+            [event["action"] for event in store.list_events(entry["id"])],
+            ["created", "reanalysis_requested"],
+        )
+
     def test_legacy_factory_selects_sqlite_backend(self) -> None:
         import core.knowledge_store as legacy_module
         from hermes.knowledge import SQLiteKnowledgeStore
@@ -162,15 +192,37 @@ class KnowledgeRepositoryTests(unittest.TestCase):
         from hermes.knowledge import SQLiteKnowledgeStore
 
         store = SQLiteKnowledgeStore(self.database, default_owner_user_id="42")
-        entry = store.add_entry(title="Force-compatible approval", owner_user_id="42")
+        approved_entry = store.add_entry(
+            title="Force-compatible approval",
+            source_url="https://example.com/force-approved",
+            owner_user_id="42",
+        )
+        duplicate_entry = store.add_entry(
+            title="Force-compatible approval",
+            source_url="https://example.com/force-pending",
+            owner_user_id="42",
+        )
+        store.mark_approved(
+            approved_entry["id"],
+            approved_by="42",
+            approval_mode="initial",
+        )
+
+        warning = store.mark_approved(
+            duplicate_entry["id"],
+            approved_by="42",
+            approval_mode="telegram_command",
+        )
 
         approved = store.mark_approved(
-            entry["id"],
+            duplicate_entry["id"],
             approved_by="42",
             approval_mode="force_approve",
             force=True,
         )
 
+        self.assertEqual(warning["status"], "pending")
+        self.assertTrue(warning["duplicate_warning"]["has_duplicates"])
         self.assertEqual(approved["status"], "approved")
         self.assertEqual(approved["approval_mode"], "force_approve")
 

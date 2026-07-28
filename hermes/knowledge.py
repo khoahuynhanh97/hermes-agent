@@ -14,6 +14,10 @@ from .application.knowledge_lifecycle import (
     LifecycleResult,
 )
 from .db import Database, utc_now
+from .knowledge_similarity import (
+    build_duplicate_warning,
+    find_similar_knowledge_entries,
+)
 
 
 VALID_STATUSES = {"pending", "approved", "rejected"}
@@ -609,7 +613,8 @@ class SQLiteKnowledgeStore:
     ) -> LifecycleResult:
         row = connection.execute(
             """
-            SELECT id, owner_user_id, status, needs_reanalysis, detail_json
+            SELECT id, owner_user_id, status, needs_reanalysis, detail_json,
+                   title, key_lessons_json
             FROM lessons
             WHERE id = ? OR slug = ?
             ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END
@@ -662,6 +667,43 @@ class SQLiteKnowledgeStore:
                     False,
                     self._get_entry(connection, row["id"]),
                 )
+            if not command.force:
+                approved_rows = connection.execute(
+                    """
+                    SELECT id, title, key_lessons_json, status
+                    FROM lessons
+                    WHERE owner_user_id = ? AND status = 'approved' AND id <> ?
+                    """,
+                    (row["owner_user_id"], row["id"]),
+                ).fetchall()
+                similar = find_similar_knowledge_entries(
+                    row["title"],
+                    " ".join(
+                        str(item)
+                        for item in _json_load(row["key_lessons_json"], [])
+                    ),
+                    [
+                        {
+                            "id": candidate["id"],
+                            "title": candidate["title"],
+                            "key_lessons": _json_load(
+                                candidate["key_lessons_json"], []
+                            ),
+                            "status": candidate["status"],
+                        }
+                        for candidate in approved_rows
+                    ],
+                    threshold=0.5,
+                )
+                if similar:
+                    lesson = self._get_entry(connection, row["id"])
+                    lesson["duplicate_warning"] = build_duplicate_warning(similar)
+                    return LifecycleResult(
+                        False,
+                        "duplicate_warning",
+                        False,
+                        lesson,
+                    )
             now = utc_now()
             connection.execute(
                 """
@@ -726,6 +768,7 @@ class SQLiteKnowledgeStore:
                 )
             now = utc_now()
             detail = _json_load(row["detail_json"], {})
+            detail.update(command.metadata)
             detail["needs_reanalysis"] = True
             if command.reason:
                 detail["validation_error"] = command.reason
@@ -780,6 +823,8 @@ class SQLiteKnowledgeStore:
             for index, command in enumerate(command_list):
                 lesson = self.get_entry(command.lesson_id)
                 if index == rejected.index:
+                    if rejected.result.code == "duplicate_warning":
+                        lesson = rejected.result.lesson
                     results.append(
                         LifecycleResult(
                             False,
@@ -819,7 +864,11 @@ class SQLiteKnowledgeStore:
                 )
             ]
         )
-        return result[0].lesson if result[0].ok else None
+        return (
+            result[0].lesson
+            if result[0].ok or result[0].code == "duplicate_warning"
+            else None
+        )
 
     def mark_rejected(
         self,
@@ -869,24 +918,18 @@ class SQLiteKnowledgeStore:
         validation_error: str,
         detail_updates: dict | None = None,
     ) -> dict | None:
-        with self.database.transaction(immediate=True) as connection:
-            row = connection.execute(
-                "SELECT id, detail_json FROM lessons WHERE (id = ? OR slug = ?) AND status = 'pending' LIMIT 1",
-                (identifier, identifier),
-            ).fetchone()
-            if not row:
-                return None
-            detail = _json_load(row["detail_json"], {})
-            detail.update(detail_updates or {})
-            detail["needs_reanalysis"] = True
-            detail["validation_error"] = validation_error
-            detail.setdefault("reanalysis_count", 0)
-            connection.execute(
-                "UPDATE lessons SET needs_reanalysis = 1, detail_json = ?, updated_at = ? WHERE id = ?",
-                (_json_dump(detail), utc_now(), row["id"]),
-            )
-            self._add_event(connection, row["id"], "reanalysis_requested", "", validation_error)
-            return self._get_entry(connection, row["id"])
+        result = self.apply_lifecycle_commands(
+            [
+                LifecycleCommand(
+                    "request_reanalysis",
+                    identifier,
+                    LifecycleActor.system(""),
+                    reason=validation_error,
+                    metadata=detail_updates or {},
+                )
+            ]
+        )[0]
+        return result.lesson if result.ok else None
 
     def replace_pending_lesson(
         self,
