@@ -9,6 +9,7 @@ MODE_SCRIPT_FROM_VIDEO = "script_from_video"
 # Standard route mappings for commands, modes, and execution engines
 ROUTE_MAP = {
     "/hoc_kien_thuc": {"mode": MODE_LEARN_KNOWLEDGE,    "engine": "knowledge"},
+    "/learn":          {"mode": MODE_LEARN_KNOWLEDGE,    "engine": "knowledge"},
     "/hoc_video":     {"mode": MODE_LEARN_KNOWLEDGE,    "engine": "knowledge"},
     "/hoc_hook_cta":  {"mode": MODE_LEARN_HOOK_CTA,     "engine": "hook_cta"},
     "/len_kich_ban":  {"mode": MODE_SCRIPT_FROM_VIDEO,  "engine": "mixed"},
@@ -28,7 +29,7 @@ def normalize_command(text: str) -> str | None:
     text_clean = text.strip().lower()
     
     # Matching aliases and space variations
-    if text_clean.startswith(("/hoc_kien_thuc", "/hoc_kien_thuc")):
+    if text_clean.startswith(("/hoc_kien_thuc", "/hoc_kien_thuc", "/learn")):
         return "/hoc_kien_thuc"
     if text_clean.startswith(("/hoc_video", "/hoc video", "/học video")):
         return "/hoc_video"

@@ -188,7 +188,8 @@ class JobRepositoryTests(unittest.TestCase):
         worker.task_queue = None
         worker.execute_job_tasks = lambda value: (["summary_analysis.md"], "done")
 
-        processed = worker.process_next_job()
+        with patch("core.job_watcher.logger"):
+            processed = worker.process_next_job()
 
         self.assertTrue(processed)
         self.assertEqual(

@@ -105,7 +105,7 @@ class VideoFetcherTests(unittest.TestCase):
                 video_fetcher,
                 "_get_transcriber",
                 side_effect=video_fetcher.TranscriptionBackendUnavailable("faster-whisper backend unavailable"),
-            ):
+            ), patch.object(video_fetcher, "logger"):
                 result = video_fetcher.fetch_transcript(str(source), temp_dir)
 
         self.assertEqual(result["status"], "failed")
@@ -133,6 +133,7 @@ class VideoFetcherTests(unittest.TestCase):
                     side_effect=video_fetcher.TranscriptionBackendUnavailable("faster-whisper backend unavailable"),
                 ),
                 patch.object(video_fetcher, "_fetch_metadata", return_value={"title": "Video"}),
+                patch.object(video_fetcher, "logger"),
             ):
                 result = video_fetcher.fetch_transcript("https://example.com/video", temp_dir)
 

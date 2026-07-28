@@ -3,11 +3,29 @@ from __future__ import annotations
 import io
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
 
 class MediaAnalysisContractTests(unittest.TestCase):
+    @staticmethod
+    def closed_capture():
+        class ClosedCapture:
+            def get(self, _property):
+                return 0
+
+            def set(self, _property, _value):
+                return False
+
+            def read(self):
+                return False, None
+
+            def release(self):
+                return None
+
+        return ClosedCapture()
+
     def test_learning_analysis_raises_when_vision_provider_is_unavailable(self) -> None:
         from tools.video_analyser import MediaAnalysisUnavailable, analyze_video
 
@@ -15,7 +33,7 @@ class MediaAnalysisContractTests(unittest.TestCase):
             video_path = Path(temp_dir) / "source.mp4"
             video_path.write_bytes(b"not-a-real-video")
 
-            with patch("tools.video_analyser.init_gemini", return_value=False):
+            with patch("tools.video_analyser.init_gemini", return_value=False), redirect_stdout(io.StringIO()):
                 with self.assertRaises(MediaAnalysisUnavailable):
                     analyze_video(str(video_path), prompt_text="Analyze only real source evidence")
 
@@ -26,7 +44,10 @@ class MediaAnalysisContractTests(unittest.TestCase):
             video_path = Path(temp_dir) / "source.mp4"
             video_path.write_bytes(b"not-a-real-video")
 
-            result = analyze_video(str(video_path), offline_only=True)
+            with patch("tools.video_analyser.cv2.VideoCapture", return_value=self.closed_capture()), redirect_stdout(
+                io.StringIO()
+            ):
+                result = analyze_video(str(video_path), offline_only=True)
 
         self.assertIsInstance(result, str)
         self.assertTrue(result.strip())
@@ -40,7 +61,9 @@ class MediaAnalysisContractTests(unittest.TestCase):
             output = io.BytesIO()
             console = io.TextIOWrapper(output, encoding="cp1252", errors="strict")
 
-            with patch("sys.stdout", console):
+            with patch("tools.video_analyser.cv2.VideoCapture", return_value=self.closed_capture()), patch(
+                "sys.stdout", console
+            ):
                 result = analyze_video(str(video_path), offline_only=True)
 
             console.detach()
@@ -81,6 +104,7 @@ class MediaAnalysisContractTests(unittest.TestCase):
             with (
                 patch("tools.video_analyser.init_gemini", return_value=True),
                 patch("tools.video_analyser.get_gemini_client", return_value=client),
+                redirect_stdout(io.StringIO()),
             ):
                 result = analyze_video(str(video_path), prompt_text="Analyze")
 

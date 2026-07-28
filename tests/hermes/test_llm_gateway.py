@@ -32,7 +32,7 @@ class LLMGatewayTests(unittest.TestCase):
         }
         with patch.dict(os.environ, env, clear=False), patch(
             "core.llm_gateway.requests.post", side_effect=requests.Timeout("slow")
-        ):
+        ), patch("core.llm_gateway.logger"):
             with self.assertRaisesRegex(gateway.LLMGatewayError, "9Router request failed"):
                 gateway.complete("hello")
 

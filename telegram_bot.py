@@ -614,11 +614,8 @@ def build_video_job(
     if extra_note:
         notes += f"\nExtra user note: {extra_note.strip()}"
 
-    job = JOB_DEDUP.create_or_duplicate(
-        source_value,
-        mode,
-        chat_id,
-        lambda: manager.create_job(
+    def create_job():
+        return manager.create_job(
             source_value=source_value,
             source_kind=source_kind,
             target_mode="create_new",
@@ -634,7 +631,9 @@ def build_video_job(
             engine=engine,
             job_type=job_type,
             expected_outputs=expected_outputs,
-        ),
+        )
+    job = create_job() if reanalysis_target_id else JOB_DEDUP.create_or_duplicate(
+        source_value, mode, chat_id, create_job
     )
     if job.get("duplicate"):
         return job
@@ -1576,6 +1575,10 @@ async def approve_source_command(update: Update, context: ContextTypes.DEFAULT_T
     entry_id = (context.args[0] if context.args else "").strip()
     if not user or not entry_id:
         await reply_html(update.message, "Usage: /approve_source <knowledge_id>")
+        return 0
+    backend = os.environ.get("HERMES_STORAGE_BACKEND", config.HERMES_STORAGE_BACKEND).strip().lower()
+    if backend != "sqlite":
+        await reply_html(update.message, "Source approval requires SQLite storage.")
         return 0
     store = get_store()
     entry = store.get_entry(entry_id)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import tempfile
 import unittest
@@ -101,6 +102,43 @@ class TelegramMemoryTests(unittest.TestCase):
         self.assertEqual(len(store.list_entries(status="approved", owner_user_id="42")), 2)
         self.assertIn("2 lesson", update.message.replies[0])
 
+    def test_approve_source_defaults_to_sqlite_when_backend_is_unset(self) -> None:
+        import telegram_bot
+        from hermes.knowledge import SQLiteKnowledgeStore
+
+        self.env.stop()
+        with patch.dict(
+            os.environ,
+            {"HERMES_DB_PATH": str(Path(self.temp_dir.name) / "default-hermes.db")},
+            clear=True,
+        ):
+            store = SQLiteKnowledgeStore(default_owner_user_id="42")
+            entry = store.add_entry(
+                title="SQLite default",
+                source_url="https://example.com/sqlite-default",
+                owner_user_id="42",
+            )
+            update = self.update()
+            approved = asyncio.run(
+                telegram_bot.approve_source_command(update, SimpleNamespace(args=[entry["id"]]))
+            )
+
+        self.assertEqual(approved, 1)
+        self.assertIn("1 lesson", update.message.replies[0])
+
+    def test_approve_source_rejects_non_sqlite_backends(self) -> None:
+        import telegram_bot
+
+        self.env.stop()
+        with patch.dict(os.environ, {"HERMES_STORAGE_BACKEND": "json"}, clear=True):
+            update = self.update()
+            approved = asyncio.run(
+                telegram_bot.approve_source_command(update, SimpleNamespace(args=["kb-any"]))
+            )
+
+        self.assertEqual(approved, 0)
+        self.assertIn("SQLite", update.message.replies[0])
+
     def test_settings_report_is_redacted(self) -> None:
         import telegram_bot
 
@@ -132,6 +170,58 @@ class TelegramMemoryTests(unittest.TestCase):
             asyncio.run(telegram_bot.re_analysis_command(update, SimpleNamespace(args=[entry["id"]])))
 
         self.assertEqual(build.call_args.kwargs["reanalysis_target_id"], entry["id"])
+
+    def test_reanalysis_bypasses_source_dedup_and_records_target_id(self) -> None:
+        import telegram_bot
+        from core.job_dedup import JobDedup
+        from hermes.knowledge import SQLiteKnowledgeStore
+
+        store = SQLiteKnowledgeStore(default_owner_user_id="42")
+        entry = store.add_entry(
+            title="Reanalysis source",
+            source_url="https://www.tiktok.com/@owner/video/123",
+            owner_user_id="42",
+        )
+        store.mark_needs_reanalysis(entry["id"], "Source needs review")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+
+            class FakeManager:
+                def __init__(self):
+                    self.number = 0
+
+                def create_job(self, source_value, source_kind, **_kwargs):
+                    self.number += 1
+                    output_dir = root / f"output-{self.number}"
+                    return {
+                        "job_id": f"job-{self.number}",
+                        "source": {"value": source_value, "kind": source_kind},
+                        "paths": {"job_file": str(root / f"job-{self.number}.json")},
+                        "target": {"output_dir": str(output_dir), "project_slug": "reanalysis"},
+                    }
+
+                def _write_json(self, path, payload):
+                    Path(path).parent.mkdir(parents=True, exist_ok=True)
+                    Path(path).write_text(json.dumps(payload), encoding="utf-8")
+
+            manager = FakeManager()
+            dedup = JobDedup(root / "dedup.json")
+            with patch.object(telegram_bot, "AgentJobManager", return_value=manager), patch.object(
+                telegram_bot, "JOB_DEDUP", dedup
+            ), patch.object(telegram_bot.logger, "info"):
+                original = telegram_bot.build_video_job(
+                    telegram_bot.MODE_LEARN_KNOWLEDGE,
+                    entry["source_url"],
+                    source_kind="tiktok_url",
+                    telegram_info={"chat_id": 42, "user_id": 42},
+                )
+                reanalysis = asyncio.run(
+                    telegram_bot.re_analysis_command(self.update(), SimpleNamespace(args=[entry["id"]]))
+                )
+
+        self.assertNotEqual(reanalysis["job_id"], original["job_id"])
+        self.assertEqual(reanalysis["reanalysis_target_id"], entry["id"])
 
 
 if __name__ == "__main__":

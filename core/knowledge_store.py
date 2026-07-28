@@ -901,7 +901,9 @@ class UnifiedKnowledgeStore:
 
 def get_store():
     """Return the configured knowledge backend."""
-    backend = os.environ.get("HERMES_STORAGE_BACKEND", "json").strip().lower()
+    backend = os.environ.get(
+        "HERMES_STORAGE_BACKEND", getattr(config, "HERMES_STORAGE_BACKEND", "sqlite")
+    ).strip().lower() or "sqlite"
     if backend == "sqlite":
         from hermes.knowledge import SQLiteKnowledgeStore
 
