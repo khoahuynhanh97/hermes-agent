@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from hermes.data_health import (
@@ -16,7 +17,13 @@ from hermes.data_health import (
     RepairReport,
 )
 from hermes.db import SCHEMA_VERSION
-from hermes.maintenance import MaintenanceRunner, RuntimeState
+from hermes.maintenance import (
+    ArtifactCollisionError,
+    MaintenanceBusyError,
+    MaintenanceRunner,
+    RuntimeState,
+    StateValidationError,
+)
 
 
 FORBIDDEN_KEYS = (
@@ -28,6 +35,7 @@ FORBIDDEN_KEYS = (
     "credential",
     "telegram",
     "environment",
+    "path",
 )
 PRIVATE_VALUES = (
     "private lesson body",
@@ -45,12 +53,14 @@ def healthy_audit(
     integrity: str = "ok",
     foreign_key_violations: int = 0,
     schema_version: int = SCHEMA_VERSION,
+    counts: dict[str, int] | None = None,
 ) -> AuditReport:
     return AuditReport(
         integrity=integrity,
         foreign_key_violations=foreign_key_violations,
         schema_version=schema_version,
-        counts={
+        counts=counts
+        or {
             "lessons": 12,
             "pending": 2,
             "approved": 8,
@@ -63,6 +73,21 @@ def healthy_audit(
         findings=findings,
         repair_plan=RepairPlan(actions),
     )
+
+
+def repaired_audit(**overrides: int) -> AuditReport:
+    counts = {
+        "lessons": 12,
+        "pending": 2,
+        "approved": 7,
+        "rejected": 3,
+        "sources": 10,
+        "evidence": 7,
+        "lesson_events": 20,
+        "fts_rows": 7,
+    }
+    counts.update(overrides)
+    return healthy_audit(counts=counts)
 
 
 SAFE_FINDING = Finding(
@@ -95,11 +120,31 @@ APPLIED_REPAIR = RepairReport(
             kind="reject_lesson",
             status="applied",
             reason="applied",
-            before={"content": "private lesson body"},
+            before={
+                "content": "private lesson body",
+                "status": "approved",
+            },
             after={"status": "rejected"},
         ),
     ),
 )
+
+
+class FakeOfflineLease:
+    def __init__(
+        self,
+        events: list[str],
+        validations: list[bool] | None = None,
+    ):
+        self.events = events
+        self.validations = list(validations or [True])
+        self.released = False
+
+    def validate(self) -> bool:
+        self.events.append("validate_offline")
+        if len(self.validations) > 1:
+            return self.validations.pop(0)
+        return self.validations[0]
 
 
 class FakeProcessController:
@@ -111,18 +156,22 @@ class FakeProcessController:
         started: RuntimeState | None = None,
         health: dict[str, bool] | None = None,
         stop_error: Exception | None = None,
-        start_error: Exception | None = None,
+        start_error: BaseException | None = None,
+        lease: FakeOfflineLease | None = None,
+        lease_error: Exception | None = None,
     ):
         self.events = events
         self.discovered = discovered or RuntimeState(
-            bot_running=True,
-            worker_running=True,
+            bot_count=1,
+            worker_count=1,
             unambiguous=True,
         )
         self.started = started or self.discovered
         self.health = health or {"bot": True, "worker": True}
         self.stop_error = stop_error
         self.start_error = start_error
+        self.lease = lease or FakeOfflineLease(events)
+        self.lease_error = lease_error
         self.stop_states: list[RuntimeState] = []
 
     def discover(self) -> RuntimeState:
@@ -141,6 +190,16 @@ class FakeProcessController:
             raise self.start_error
         return self.started
 
+    def acquire_offline_lease(self, state: RuntimeState) -> FakeOfflineLease:
+        self.events.append("acquire_offline")
+        if self.lease_error is not None:
+            raise self.lease_error
+        return self.lease
+
+    def release_offline_lease(self, lease: FakeOfflineLease) -> None:
+        self.events.append("release_offline")
+        lease.released = True
+
     def verify(self, state: RuntimeState) -> dict[str, bool]:
         self.events.append("verify_processes")
         return dict(self.health)
@@ -154,9 +213,16 @@ class FakeBackupManager:
         *,
         create_error: Exception | None = None,
         verification: dict[str, object] | None = None,
+        verifications: list[dict[str, object]] | None = None,
+        database_path: Path | None = None,
     ):
         self.events = events
         self.backup_path = backup_path
+        self.backup_dir = backup_path.parent
+        self.explicit_database_path = database_path is not None
+        self.database = SimpleNamespace(
+            path=database_path or backup_path.parent.parent / "live" / "hermes.db"
+        )
         self.create_error = create_error
         self.verification = verification or {
             "ok": True,
@@ -172,6 +238,7 @@ class FakeBackupManager:
             },
             "detail": "ok",
         }
+        self.verifications = list(verifications or [])
         self.restore_calls = 0
 
     def create_backup(self, label: str = "scheduled") -> Path:
@@ -182,6 +249,10 @@ class FakeBackupManager:
 
     def verify(self, path: str | Path) -> dict[str, object]:
         self.events.append("verify_backup")
+        if self.verifications:
+            if len(self.verifications) > 1:
+                return dict(self.verifications.pop(0))
+            return dict(self.verifications[0])
         return dict(self.verification)
 
     def restore(self, path: str | Path) -> None:
@@ -197,11 +268,16 @@ class FakeDataHealth:
         *,
         repair_report: RepairReport = APPLIED_REPAIR,
         repair_error: Exception | None = None,
+        database_path: Path | None = None,
     ):
         self.events = events
         self.audits = list(audits)
         self.repair_report = repair_report
         self.repair_error = repair_error
+        self.explicit_database_path = database_path is not None
+        self.database = SimpleNamespace(
+            path=database_path or Path("unused-live-hermes.db")
+        )
         self.audit_calls = 0
         self.repair_calls = 0
 
@@ -253,10 +329,16 @@ class MaintenanceRunnerTests(unittest.TestCase):
         FakeDataHealth,
     ]:
         process = process or FakeProcessController(self.events)
+        live_database = self.root / "live" / "hermes.db"
         backup = backup or FakeBackupManager(
             self.events,
             self.root / "backups" / "verified.db",
+            database_path=live_database,
         )
+        if backup is not None and not backup.explicit_database_path:
+            backup.database.path = live_database
+        if health is not None and not health.explicit_database_path:
+            health.database.path = live_database
         health = health or FakeDataHealth(
             self.events,
             [
@@ -264,8 +346,9 @@ class MaintenanceRunnerTests(unittest.TestCase):
                     findings=(SAFE_FINDING,),
                     actions=(SAFE_ACTION,),
                 ),
-                healthy_audit(),
+                repaired_audit(),
             ],
+            database_path=live_database,
         )
         return (
             MaintenanceRunner(
@@ -315,11 +398,15 @@ class MaintenanceRunnerTests(unittest.TestCase):
             [
                 "discover",
                 "stop",
+                "acquire_offline",
+                "validate_offline",
                 "create_backup",
                 "verify_backup",
                 "audit",
+                "validate_offline",
                 "repair",
                 "audit",
+                "release_offline",
                 "start",
                 "verify_processes",
             ],
@@ -337,13 +424,15 @@ class MaintenanceRunnerTests(unittest.TestCase):
         state_path = next(self.report_dir.glob("*.state.json"))
         state = json.loads(state_path.read_text(encoding="utf-8"))
         self.assert_recursively_redacted(state)
+        self.assertNotIn(str(self.root), json.dumps(state))
+        self.assertNotIn(str(self.root), json.dumps(report))
 
     def test_ambiguous_discovery_fails_without_stopping_runtime(self) -> None:
         process = FakeProcessController(
             self.events,
             discovered=RuntimeState(
-                bot_running=True,
-                worker_running=True,
+                bot_count=2,
+                worker_count=1,
                 unambiguous=False,
             ),
         )
@@ -360,8 +449,8 @@ class MaintenanceRunnerTests(unittest.TestCase):
         process = FakeProcessController(
             self.events,
             discovered=RuntimeState(
-                bot_running=True,
-                worker_running=False,
+                bot_count=1,
+                worker_count=0,
                 unambiguous=True,
             ),
         )
@@ -397,7 +486,17 @@ class MaintenanceRunnerTests(unittest.TestCase):
         result = runner.run()
 
         self.assertEqual(result.status, "failed")
-        self.assertEqual(self.events, ["discover", "stop", "create_backup"])
+        self.assertEqual(
+            self.events,
+            [
+                "discover",
+                "stop",
+                "acquire_offline",
+                "validate_offline",
+                "create_backup",
+                "release_offline",
+            ],
+        )
         self.assertEqual(health.repair_calls, 0)
         self.assertEqual(backup.restore_calls, 0)
         self.assert_recursively_redacted(self.load_report(result))
@@ -424,7 +523,15 @@ class MaintenanceRunnerTests(unittest.TestCase):
         self.assertEqual(result.status, "failed")
         self.assertEqual(
             self.events,
-            ["discover", "stop", "create_backup", "verify_backup"],
+            [
+                "discover",
+                "stop",
+                "acquire_offline",
+                "validate_offline",
+                "create_backup",
+                "verify_backup",
+                "release_offline",
+            ],
         )
         self.assertEqual(health.audit_calls, 0)
         self.assertEqual(backup.restore_calls, 0)
@@ -501,8 +608,8 @@ class MaintenanceRunnerTests(unittest.TestCase):
 
     def test_partial_restart_is_stopped_and_reported_failed(self) -> None:
         partial = RuntimeState(
-            bot_running=True,
-            worker_running=False,
+            bot_count=1,
+            worker_count=0,
             unambiguous=True,
         )
         process = FakeProcessController(
@@ -515,7 +622,7 @@ class MaintenanceRunnerTests(unittest.TestCase):
         result = runner.run()
 
         self.assertEqual(result.status, "failed")
-        self.assertEqual(self.events[-3:], ["start", "verify_processes", "stop"])
+        self.assertEqual(self.events[-3:], ["release_offline", "start", "stop"])
         self.assertEqual(process.stop_states[-1], partial)
         self.assertEqual(backup.restore_calls, 0)
         report = self.load_report(result)
@@ -523,8 +630,8 @@ class MaintenanceRunnerTests(unittest.TestCase):
 
     def test_restart_exception_discovers_and_stops_started_process(self) -> None:
         partial = RuntimeState(
-            bot_running=True,
-            worker_running=False,
+            bot_count=1,
+            worker_count=0,
             unambiguous=True,
         )
         process = FakeProcessController(
@@ -532,8 +639,8 @@ class MaintenanceRunnerTests(unittest.TestCase):
             start_error=RuntimeError("secret-token-value"),
         )
         process.discovered = RuntimeState(
-            bot_running=True,
-            worker_running=True,
+            bot_count=1,
+            worker_count=1,
             unambiguous=True,
         )
         discoveries = iter((process.discovered, partial))
@@ -568,7 +675,7 @@ class MaintenanceRunnerTests(unittest.TestCase):
                     findings=(SAFE_FINDING,),
                     actions=(SAFE_ACTION,),
                 ),
-                healthy_audit(),
+                repaired_audit(),
             ],
         )
         runner, process, backup, _ = self.make_runner(
@@ -591,7 +698,11 @@ class MaintenanceRunnerTests(unittest.TestCase):
         self.assertEqual(health.repair_calls, 1)
         self.assertEqual(self.events[:first_event_count].count("stop"), 1)
         self.assertEqual(self.events[first_event_count:], [
+            "acquire_offline",
+            "validate_offline",
+            "verify_backup",
             "audit",
+            "release_offline",
             "start",
             "verify_processes",
         ])
@@ -635,6 +746,278 @@ class MaintenanceRunnerTests(unittest.TestCase):
         self.assertNotEqual(first_result.run_id, second_result.run_id)
         self.assertTrue(second_result.run_id.endswith("-1"))
         self.assertNotEqual(first_result.report_json, second_result.report_json)
+
+    def test_offline_lease_is_revalidated_before_backup_and_repair(self) -> None:
+        lease = FakeOfflineLease(self.events, [True, False])
+        process = FakeProcessController(self.events, lease=lease)
+        runner, _, _, health = self.make_runner(process=process)
+
+        result = runner.run()
+
+        self.assertEqual(result.status, "manual_intervention_required")
+        self.assertEqual(health.repair_calls, 0)
+        self.assertTrue(lease.released)
+        self.assertEqual(self.events.count("validate_offline"), 2)
+        self.assertNotIn("start", self.events)
+
+    def test_concurrent_runner_fails_before_process_or_database_side_effects(
+        self,
+    ) -> None:
+        self.report_dir.mkdir(parents=True)
+        (self.report_dir / ".maintenance-run.lock").write_text(
+            "held",
+            encoding="utf-8",
+        )
+        runner, _, _, health = self.make_runner(run_id="busy-run")
+
+        with self.assertRaises(MaintenanceBusyError):
+            runner.run()
+
+        self.assertEqual(self.events, [])
+        self.assertEqual(health.audit_calls, 0)
+        self.assertEqual(health.repair_calls, 0)
+
+    def test_resume_reverifies_stored_backup_before_audit_or_restart(self) -> None:
+        backup = FakeBackupManager(
+            self.events,
+            self.root / "backups" / "verified.db",
+        )
+        invalid = {
+            **backup.verification,
+            "ok": False,
+            "integrity": "failed",
+        }
+        backup.verifications = [dict(backup.verification), invalid]
+        health = FakeDataHealth(
+            self.events,
+            [
+                healthy_audit(
+                    findings=(SAFE_FINDING,),
+                    actions=(SAFE_ACTION,),
+                ),
+                healthy_audit(
+                    findings=(SAFE_FINDING,),
+                    actions=(SAFE_ACTION,),
+                ),
+                repaired_audit(),
+            ],
+        )
+        runner, process, backup, health = self.make_runner(
+            backup=backup,
+            health=health,
+            run_id="backup-resume-run",
+        )
+        first = runner.run()
+        first_event_count = len(self.events)
+
+        resumed, _, _, _ = self.make_runner(
+            process=process,
+            backup=backup,
+            health=health,
+            run_id="backup-resume-run",
+        )
+        second = resumed.run()
+
+        self.assertEqual(first.status, "manual_intervention_required")
+        self.assertEqual(second.status, "manual_intervention_required")
+        self.assertEqual(
+            self.events[first_event_count:],
+            [
+                "acquire_offline",
+                "validate_offline",
+                "verify_backup",
+                "release_offline",
+            ],
+        )
+        self.assertEqual(health.repair_calls, 1)
+
+    def test_restart_intent_prevents_double_start_after_crash(self) -> None:
+        process = FakeProcessController(
+            self.events,
+            start_error=KeyboardInterrupt(),
+        )
+        runner, process, backup, health = self.make_runner(
+            process=process,
+            run_id="restart-crash-run",
+        )
+
+        with self.assertRaises(KeyboardInterrupt):
+            runner.run()
+        first_event_count = len(self.events)
+
+        resumed, _, _, _ = self.make_runner(
+            process=process,
+            backup=backup,
+            health=health,
+            run_id="restart-crash-run",
+        )
+        result = resumed.run()
+
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(self.events.count("start"), 1)
+        self.assertEqual(
+            self.events[first_event_count:],
+            ["verify_backup", "discover", "verify_processes"],
+        )
+
+    def test_tampered_state_fails_closed_before_side_effects(self) -> None:
+        runner, process, backup, health = self.make_runner(
+            run_id="tamper-run",
+        )
+        runner.run()
+        state_path = next(self.report_dir.glob("*.state.json"))
+        original = json.loads(state_path.read_text(encoding="utf-8"))
+
+        tampered_states = (
+            {**original, "environment": {"secret": "secret-token-value"}},
+            {
+                **original,
+                "completed_stages": ["discovered", "backup_created"],
+            },
+            {
+                **original,
+                "post_audit": {
+                    **original["post_audit"],
+                    "counts": {
+                        **original["post_audit"]["counts"],
+                        "lessons": 11,
+                    },
+                },
+            },
+        )
+        for index, tampered in enumerate(tampered_states):
+            with self.subTest(index=index):
+                state_path.write_text(
+                    json.dumps(tampered),
+                    encoding="utf-8",
+                )
+                self.events.clear()
+                resumed, _, _, _ = self.make_runner(
+                    process=process,
+                    backup=backup,
+                    health=health,
+                    run_id="tamper-run",
+                )
+                with self.assertRaises(StateValidationError):
+                    resumed.run()
+                self.assertEqual(self.events, [])
+                state_path.write_text(
+                    json.dumps(original),
+                    encoding="utf-8",
+                )
+
+    def test_miswired_backup_and_health_adapters_fail_before_discovery(self) -> None:
+        backup = FakeBackupManager(
+            self.events,
+            self.root / "backups" / "verified.db",
+            database_path=self.root / "live-a" / "hermes.db",
+        )
+        health = FakeDataHealth(
+            self.events,
+            [healthy_audit()],
+            database_path=self.root / "live-b" / "hermes.db",
+        )
+        runner, _, _, _ = self.make_runner(
+            backup=backup,
+            health=health,
+        )
+
+        result = runner.run()
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(self.events, [])
+        self.assertEqual(
+            self.load_report(result)["error_code"],
+            "database_configuration_mismatch",
+        )
+
+    def test_backup_counts_must_match_pre_repair_live_audit(self) -> None:
+        backup = FakeBackupManager(
+            self.events,
+            self.root / "backups" / "verified.db",
+        )
+        backup.verification["counts"] = {
+            "lessons": 11,
+            "sources": 10,
+            "lesson_events": 19,
+        }
+        runner, _, _, health = self.make_runner(backup=backup)
+
+        result = runner.run()
+
+        self.assertEqual(result.status, "manual_intervention_required")
+        self.assertEqual(health.repair_calls, 0)
+        self.assertNotIn("start", self.events)
+        self.assertEqual(
+            self.load_report(result)["error_code"],
+            "backup_source_mismatch",
+        )
+
+    def test_post_check_enforces_explicit_count_invariants(self) -> None:
+        invalid_posts = (
+            repaired_audit(lessons=11),
+            repaired_audit(sources=9),
+            repaired_audit(evidence=6),
+            repaired_audit(lesson_events=19),
+            repaired_audit(approved=8),
+            repaired_audit(rejected=2),
+            repaired_audit(fts_rows=8),
+        )
+        for post_audit in invalid_posts:
+            with self.subTest(counts=post_audit.counts):
+                self.events.clear()
+                health = FakeDataHealth(
+                    self.events,
+                    [
+                        healthy_audit(
+                            findings=(SAFE_FINDING,),
+                            actions=(SAFE_ACTION,),
+                        ),
+                        post_audit,
+                    ],
+                )
+                runner, _, _, _ = self.make_runner(health=health)
+                result = runner.run()
+                self.assertEqual(
+                    result.status,
+                    "manual_intervention_required",
+                )
+                self.assertNotIn("start", self.events)
+
+    def test_report_artifact_collision_fails_before_discovery(self) -> None:
+        self.report_dir.mkdir(parents=True)
+        collision = (
+            self.report_dir / "maintenance-artifact-run-attempt-1.json"
+        )
+        collision.write_text("historical", encoding="utf-8")
+        runner, _, _, _ = self.make_runner(run_id="artifact-run")
+
+        with self.assertRaises(ArtifactCollisionError):
+            runner.run()
+
+        self.assertEqual(self.events, [])
+        self.assertEqual(collision.read_text(encoding="utf-8"), "historical")
+
+    def test_restart_requires_unambiguous_exact_process_counts(self) -> None:
+        duplicate = RuntimeState(
+            bot_count=2,
+            worker_count=1,
+            unambiguous=True,
+        )
+        process = FakeProcessController(
+            self.events,
+            started=duplicate,
+            health={"bot": True, "worker": True},
+        )
+        runner, process, _, _ = self.make_runner(process=process)
+
+        result = runner.run()
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(process.stop_states[-1], duplicate)
+        self.assertTrue(
+            self.load_report(result)["process"]["partial_restart_stopped"]
+        )
 
 
 if __name__ == "__main__":
