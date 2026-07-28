@@ -169,7 +169,7 @@ class LearningReviewStore:
         return self._move(name, self.approved_dir)
 
     def reject(self, name):
-        # Mark as rejected in UnifiedKnowledgeStore if we can find it
+        # The queue entry is only moved after its knowledge lesson is rejected.
         from core.knowledge_store import get_store
         content = self.read(name)
         source_url = ""
@@ -179,18 +179,22 @@ class LearningReviewStore:
                 source_url = line.replace("Source:", "").strip()
                 break
                 
-        if source_url:
-            store = get_store()
-            existing = store.find_existing_entry(source_url)
-            if existing:
-                lifecycle = KnowledgeLifecycle(store)
-                result = lifecycle.reject(
-                    existing["id"],
-                    LifecycleActor.system("gui-review"),
-                    reason="Rejected via review queue UI",
-                )
-                if not result.ok:
-                    raise ValueError(f"Knowledge rejection failed: {result.code}")
+        if not source_url:
+            raise ValueError("Knowledge lesson not found for rejection.")
+
+        store = get_store()
+        existing = store.find_existing_entry(source_url)
+        if not existing:
+            raise ValueError("Knowledge lesson not found for rejection.")
+
+        lifecycle = KnowledgeLifecycle(store)
+        result = lifecycle.reject(
+            existing["id"],
+            LifecycleActor.system("gui-review"),
+            reason="Rejected via review queue UI",
+        )
+        if not result.ok:
+            raise ValueError(f"Knowledge rejection failed: {result.code}")
                     
         return self._move(name, self.rejected_dir)
 

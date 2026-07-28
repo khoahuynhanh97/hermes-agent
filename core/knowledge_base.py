@@ -9,6 +9,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import config
 from tools.video_downloader import download_video
 from tools.video_analyser import analyze_video
+from hermes.application.knowledge_lifecycle import KnowledgeLifecycle, LifecycleActor
 
 KB_DIR = os.path.abspath(getattr(config, "KNOWLEDGE_BASE_ROOT", os.path.join(os.path.dirname(__file__), '..', 'knowledge_base')))
 INDEX_FILE = os.path.join(KB_DIR, 'index.json')
@@ -247,7 +248,13 @@ Yêu cầu báo cáo trả về dạng cấu trúc JSON chi tiết sau (hãy tr�
             source="gui_learn",
         )
         if auto_approve:
-            store.mark_approved(new_entry["id"], approved_by=approved_by, approval_mode=approval_mode)
+            result = KnowledgeLifecycle(store).approve(
+                new_entry["id"],
+                LifecycleActor.system("gui-review"),
+                mode=approval_mode or "",
+            )
+            if not result.ok:
+                return {"error": f"Knowledge approval failed: {result.code}"}
             
         # Lấy lại entry để cập nhật slug chuẩn
         updated_entry = store.get_entry(new_entry["id"])

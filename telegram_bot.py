@@ -1506,6 +1506,8 @@ async def approve_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     store = get_store()
     lifecycle = KnowledgeLifecycle(store)
     pending_entries = _visible_pending_entries(store, user_id)
+    reanalysis_entries = [entry for entry in pending_entries if entry.get("needs_reanalysis")]
+    approvable_entries = [entry for entry in pending_entries if not entry.get("needs_reanalysis")]
     results = lifecycle.apply(
         [
             LifecycleCommand(
@@ -1515,7 +1517,7 @@ async def approve_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE
                 mode="telegram_command_bulk",
                 expected_status="pending",
             )
-            for entry in pending_entries
+            for entry in approvable_entries
         ]
     )
     approved = sum(result.changed for result in results)
@@ -1524,7 +1526,7 @@ async def approve_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             "title": entry.get("title", "N/A"),
             "similar_count": result.lesson["duplicate_warning"]["similar_count"],
         }
-        for entry, result in zip(pending_entries, results)
+        for entry, result in zip(approvable_entries, results)
         if result.code == "duplicate_warning"
     ]
     if skipped and not approved:
@@ -1534,7 +1536,15 @@ async def approve_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         msg += "\nDung /approve_force <id> de duyet bat chap."
         await reply_html(update.message, msg)
     elif approved:
-        await reply_html(update.message, f"Da approve {approved} lesson dang hien thi.")
+        message = f"Da approve {approved} lesson dang hien thi."
+        if reanalysis_entries:
+            message += f"\nBo qua {len(reanalysis_entries)} lesson can reanalysis."
+        await reply_html(update.message, message)
+    elif reanalysis_entries:
+        await reply_html(
+            update.message,
+            f"Khong approve lesson nao. Bo qua {len(reanalysis_entries)} lesson can reanalysis.",
+        )
     else:
         await reply_html(update.message, "Khong co lesson pending de approve.")
 
@@ -1637,12 +1647,21 @@ async def re_analysis_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         return None
     if not await require_sqlite_source_authority(update):
         return None
-    entry = get_store().get_entry(entry_id)
-    if not entry or str(entry.get("owner_user_id")) != str(user.id):
-        await reply_html(update.message, "Knowledge lesson not found.")
+    lifecycle = KnowledgeLifecycle(get_store())
+    result = lifecycle.request_reanalysis(
+        entry_id,
+        LifecycleActor.owner(str(user.id)),
+        reason="Reanalysis requested via Telegram",
+    )
+    if not result.ok:
+        if result.code in {"not_found", "forbidden"}:
+            await reply_html(update.message, "Knowledge lesson not found.")
+        else:
+            await reply_html(update.message, "Lesson is not pending reanalysis.")
         return None
-    if entry.get("status") != "pending" or not entry.get("needs_reanalysis"):
-        await reply_html(update.message, "Lesson is not pending reanalysis.")
+    entry = result.lesson
+    if not entry:
+        await reply_html(update.message, "Knowledge lesson not found.")
         return None
     source_value = str(entry.get("source_url") or "").strip()
     if not source_value:
