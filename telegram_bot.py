@@ -1570,15 +1570,26 @@ async def reject_memory_command(update: Update, context: ContextTypes.DEFAULT_TY
     return await memory_decision_command(update, context, "reject")
 
 
+def configured_storage_backend() -> str:
+    return os.environ.get(
+        "HERMES_STORAGE_BACKEND", getattr(config, "HERMES_STORAGE_BACKEND", "sqlite")
+    ).strip().lower() or "sqlite"
+
+
+async def require_sqlite_source_authority(update: Update) -> bool:
+    if configured_storage_backend() == "sqlite":
+        return True
+    await reply_html(update.message, "Source approval and reanalysis require SQLite storage.")
+    return False
+
+
 async def approve_source_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     entry_id = (context.args[0] if context.args else "").strip()
     if not user or not entry_id:
         await reply_html(update.message, "Usage: /approve_source <knowledge_id>")
         return 0
-    backend = os.environ.get("HERMES_STORAGE_BACKEND", config.HERMES_STORAGE_BACKEND).strip().lower()
-    if backend != "sqlite":
-        await reply_html(update.message, "Source approval requires SQLite storage.")
+    if not await require_sqlite_source_authority(update):
         return 0
     store = get_store()
     entry = store.get_entry(entry_id)
@@ -1595,6 +1606,8 @@ async def re_analysis_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     entry_id = (context.args[0] if context.args else "").strip()
     if not user or not entry_id:
         await reply_html(update.message, "Usage: /re_analysis <knowledge_id>")
+        return None
+    if not await require_sqlite_source_authority(update):
         return None
     entry = get_store().get_entry(entry_id)
     if not entry or str(entry.get("owner_user_id")) != str(user.id):

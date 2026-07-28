@@ -139,6 +139,41 @@ class TelegramMemoryTests(unittest.TestCase):
         self.assertEqual(approved, 0)
         self.assertIn("SQLite", update.message.replies[0])
 
+    def test_reanalysis_rejects_json_backend_before_creating_a_job(self) -> None:
+        import core.knowledge_store as legacy_store
+        import telegram_bot
+
+        self.env.stop()
+        root = Path(self.temp_dir.name) / "legacy-knowledge"
+        with patch.multiple(
+            legacy_store,
+            KB_DIR=root,
+            UNIFIED_INDEX_FILE=root / "unified_index.json",
+            ENTRIES_DIR=root / "entries",
+        ), patch.dict(
+            os.environ, {"HERMES_STORAGE_BACKEND": "json"}, clear=True
+        ), patch.object(legacy_store.logger, "info"):
+            store = legacy_store.UnifiedKnowledgeStore()
+            entry = store.add_entry(
+                title="Legacy-only reanalysis",
+                source_url="https://example.com/legacy-reanalysis",
+                owner_user_id="42",
+                detail_data={"legacy": True},
+            )
+            store.mark_needs_reanalysis(entry["id"], "Legacy source needs review")
+            update = self.update()
+            with patch.object(
+                telegram_bot,
+                "enqueue_learning_job",
+                side_effect=AssertionError("A JSON-backed reanalysis must not create a job"),
+            ):
+                result = asyncio.run(
+                    telegram_bot.re_analysis_command(update, SimpleNamespace(args=[entry["id"]]))
+                )
+
+        self.assertIsNone(result)
+        self.assertIn("SQLite", update.message.replies[0])
+
     def test_settings_report_is_redacted(self) -> None:
         import telegram_bot
 

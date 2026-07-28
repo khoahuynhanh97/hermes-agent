@@ -101,7 +101,8 @@ class SQLiteConversationMemory:
 
 
 def get_memory() -> ConversationMemory | SQLiteConversationMemory:
-    if os.environ.get("HERMES_STORAGE_BACKEND", "json").strip().lower() != "sqlite":
+    backend = os.environ.get("HERMES_STORAGE_BACKEND", "sqlite").strip().lower() or "sqlite"
+    if backend != "sqlite":
         return _DEFAULT_MEMORY
     database_path = os.environ.get("HERMES_DB_PATH", "").strip()
     cache_key = str(Path(database_path).resolve()) if database_path else "default"

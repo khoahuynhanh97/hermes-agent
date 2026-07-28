@@ -87,6 +87,22 @@ class MemoryRepositoryTests(unittest.TestCase):
             ).fetchone()[0]
         self.assertEqual(count, 1)
 
+    def test_conversation_memory_factory_defaults_to_sqlite_without_json_write(self) -> None:
+        import core.conversation_memory as compatibility
+
+        legacy_path = Path(self.temp_dir.name) / "data" / "conversation_memory.json"
+        legacy_memory = compatibility.ConversationMemory(legacy_path)
+        with patch.object(compatibility, "_DEFAULT_MEMORY", legacy_memory), patch.dict(
+            os.environ,
+            {"HERMES_DB_PATH": str(self.database.path)},
+            clear=True,
+        ):
+            memory = compatibility.get_memory()
+            memory.add(42, "user", "SQLite is the default")
+
+        self.assertEqual(type(memory).__name__, "SQLiteConversationMemory")
+        self.assertFalse(legacy_path.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
