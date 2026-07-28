@@ -158,6 +158,46 @@ class KnowledgeRepositoryTests(unittest.TestCase):
         self.assertEqual(store.get_entry(first["id"])["status"], "pending")
         self.assertEqual(store.get_entry(second["id"])["status"], "approved")
 
+    def test_sqlite_mark_approved_accepts_force_compatibility_argument(self) -> None:
+        from hermes.knowledge import SQLiteKnowledgeStore
+
+        store = SQLiteKnowledgeStore(self.database, default_owner_user_id="42")
+        entry = store.add_entry(title="Force-compatible approval", owner_user_id="42")
+
+        approved = store.mark_approved(
+            entry["id"],
+            approved_by="42",
+            approval_mode="force_approve",
+            force=True,
+        )
+
+        self.assertEqual(approved["status"], "approved")
+        self.assertEqual(approved["approval_mode"], "force_approve")
+
+    def test_legacy_transition_methods_preserve_system_caller_compatibility(self) -> None:
+        from hermes.knowledge import SQLiteKnowledgeStore
+
+        store = SQLiteKnowledgeStore(self.database, default_owner_user_id="42")
+        entry = store.add_entry(title="GUI-reviewed lesson", owner_user_id="42")
+
+        approved = store.mark_approved(
+            entry["id"],
+            approved_by="gui_user",
+            approval_mode="manual",
+        )
+        rejected = store.mark_rejected(
+            entry["id"],
+            rejected_by="gui_user",
+            rejection_reason="manual review",
+        )
+
+        self.assertEqual(approved["status"], "approved")
+        self.assertEqual(rejected["status"], "rejected")
+        self.assertEqual(
+            [event["action"] for event in store.list_events(entry["id"])],
+            ["created", "approved", "rejected"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

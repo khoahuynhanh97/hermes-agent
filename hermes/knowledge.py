@@ -6,8 +6,13 @@ import re
 import sqlite3
 import urllib.parse
 import uuid
-from typing import Any
+from typing import Any, Sequence
 
+from .application.knowledge_lifecycle import (
+    LifecycleActor,
+    LifecycleCommand,
+    LifecycleResult,
+)
 from .db import Database, utc_now
 
 
@@ -18,6 +23,13 @@ CONFIDENCE_SCORES = {
     "low": 0.35,
     "needs_source": 0.0,
 }
+
+
+class _LifecycleBatchRejected(Exception):
+    def __init__(self, index: int, result: LifecycleResult):
+        super().__init__(result.code)
+        self.index = index
+        self.result = result
 
 
 def _json_dump(value: Any) -> str:
@@ -590,53 +602,224 @@ class SQLiteKnowledgeStore:
             ),
         )
 
-    def _transition(
+    def _apply_lifecycle_command(
         self,
-        identifier: str,
-        status: str,
-        actor: str | None,
-        note: str = "",
-        metadata: dict | None = None,
-    ) -> dict | None:
-        if status not in {"approved", "rejected"}:
-            raise ValueError(f"Unsupported lesson status: {status}")
-        now = utc_now()
-        with self.database.transaction(immediate=True) as connection:
-            row = connection.execute(
-                "SELECT id, status, needs_reanalysis FROM lessons WHERE id = ? OR slug = ? LIMIT 1",
-                (identifier, identifier),
-            ).fetchone()
-            if not row:
-                return None
-            if status == "approved" and row["needs_reanalysis"]:
-                return None
-            if row["status"] != status:
-                approved_at = now if status == "approved" else None
-                rejected_at = now if status == "rejected" else None
-                connection.execute(
-                    """
-                    UPDATE lessons
-                    SET status = ?, approved_at = ?, rejected_at = ?, updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (status, approved_at, rejected_at, now, row["id"]),
+        connection: sqlite3.Connection,
+        command: LifecycleCommand,
+    ) -> LifecycleResult:
+        row = connection.execute(
+            """
+            SELECT id, owner_user_id, status, needs_reanalysis, detail_json
+            FROM lessons
+            WHERE id = ? OR slug = ?
+            ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END
+            LIMIT 1
+            """,
+            (command.lesson_id, command.lesson_id, command.lesson_id),
+        ).fetchone()
+        if not row:
+            return LifecycleResult(False, "not_found", False)
+
+        actor = command.actor
+        if actor.role not in {"owner", "system"}:
+            return LifecycleResult(
+                False,
+                "forbidden",
+                False,
+                self._get_entry(connection, row["id"]),
+            )
+        if actor.role == "owner" and actor.actor_id != row["owner_user_id"]:
+            return LifecycleResult(
+                False,
+                "forbidden",
+                False,
+                self._get_entry(connection, row["id"]),
+            )
+        if (
+            command.expected_status is not None
+            and row["status"] != command.expected_status
+        ):
+            return LifecycleResult(
+                False,
+                "status_conflict",
+                False,
+                self._get_entry(connection, row["id"]),
+            )
+
+        action = command.action
+        if action == "approve":
+            if row["needs_reanalysis"]:
+                return LifecycleResult(
+                    False,
+                    "needs_reanalysis",
+                    False,
+                    self._get_entry(connection, row["id"]),
                 )
-                self._add_event(connection, row["id"], status, actor or "", note, metadata)
+            if row["status"] == "approved":
+                return LifecycleResult(
+                    True,
+                    "unchanged",
+                    False,
+                    self._get_entry(connection, row["id"]),
+                )
+            now = utc_now()
+            connection.execute(
+                """
+                UPDATE lessons
+                SET status = 'approved', approved_at = ?, rejected_at = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (now, now, row["id"]),
+            )
+            metadata = {"mode": command.mode} if command.mode else {}
+            self._add_event(
+                connection,
+                row["id"],
+                "approved",
+                actor.actor_id,
+                metadata=metadata,
+                created_at=now,
+            )
             self._sync_fts(connection, row["id"])
-            return self._get_entry(connection, row["id"])
+        elif action == "reject":
+            if row["status"] == "rejected":
+                return LifecycleResult(
+                    True,
+                    "unchanged",
+                    False,
+                    self._get_entry(connection, row["id"]),
+                )
+            now = utc_now()
+            connection.execute(
+                """
+                UPDATE lessons
+                SET status = 'rejected', approved_at = NULL, rejected_at = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (now, now, row["id"]),
+            )
+            self._add_event(
+                connection,
+                row["id"],
+                "rejected",
+                actor.actor_id,
+                command.reason,
+                created_at=now,
+            )
+            self._sync_fts(connection, row["id"])
+        elif action == "request_reanalysis":
+            if row["status"] != "pending":
+                return LifecycleResult(
+                    False,
+                    "invalid_transition",
+                    False,
+                    self._get_entry(connection, row["id"]),
+                )
+            if row["needs_reanalysis"]:
+                return LifecycleResult(
+                    True,
+                    "unchanged",
+                    False,
+                    self._get_entry(connection, row["id"]),
+                )
+            now = utc_now()
+            detail = _json_load(row["detail_json"], {})
+            detail["needs_reanalysis"] = True
+            if command.reason:
+                detail["validation_error"] = command.reason
+            detail.setdefault("reanalysis_count", 0)
+            connection.execute(
+                """
+                UPDATE lessons
+                SET needs_reanalysis = 1, detail_json = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (_json_dump(detail), now, row["id"]),
+            )
+            self._add_event(
+                connection,
+                row["id"],
+                "reanalysis_requested",
+                actor.actor_id,
+                command.reason,
+                created_at=now,
+            )
+            self._sync_fts(connection, row["id"])
+        else:
+            return LifecycleResult(
+                False,
+                "invalid_action",
+                False,
+                self._get_entry(connection, row["id"]),
+            )
+
+        return LifecycleResult(
+            True,
+            "changed",
+            True,
+            self._get_entry(connection, row["id"]),
+        )
+
+    def apply_lifecycle_commands(
+        self, commands: Sequence[LifecycleCommand]
+    ) -> list[LifecycleResult]:
+        command_list = list(commands)
+        try:
+            with self.database.transaction(immediate=True) as connection:
+                results = []
+                for index, command in enumerate(command_list):
+                    result = self._apply_lifecycle_command(connection, command)
+                    results.append(result)
+                    if not result.ok:
+                        raise _LifecycleBatchRejected(index, result)
+                return results
+        except _LifecycleBatchRejected as rejected:
+            results = []
+            for index, command in enumerate(command_list):
+                lesson = self.get_entry(command.lesson_id)
+                if index == rejected.index:
+                    results.append(
+                        LifecycleResult(
+                            False,
+                            rejected.result.code,
+                            False,
+                            lesson,
+                        )
+                    )
+                else:
+                    code = (
+                        "batch_rolled_back"
+                        if index < rejected.index
+                        else "batch_aborted"
+                    )
+                    results.append(LifecycleResult(False, code, False, lesson))
+            return results
+
+    @staticmethod
+    def _compatibility_actor(actor_id: str | None) -> LifecycleActor:
+        return LifecycleActor.system(actor_id or "")
 
     def mark_approved(
         self,
         identifier: str,
         approved_by: str | None = None,
         approval_mode: str | None = None,
+        force: bool = False,
     ) -> dict | None:
-        return self._transition(
-            identifier,
-            "approved",
-            approved_by,
-            metadata={"mode": approval_mode} if approval_mode else {},
+        result = self.apply_lifecycle_commands(
+            [
+                LifecycleCommand(
+                    "approve",
+                    identifier,
+                    self._compatibility_actor(approved_by),
+                    mode=approval_mode or "",
+                    force=force,
+                )
+            ]
         )
+        return result[0].lesson if result[0].ok else None
 
     def mark_rejected(
         self,
@@ -644,12 +827,21 @@ class SQLiteKnowledgeStore:
         rejected_by: str | None = None,
         rejection_reason: str | None = None,
     ) -> dict | None:
-        return self._transition(identifier, "rejected", rejected_by, rejection_reason or "")
+        result = self.apply_lifecycle_commands(
+            [
+                LifecycleCommand(
+                    "reject",
+                    identifier,
+                    self._compatibility_actor(rejected_by),
+                    reason=rejection_reason or "",
+                )
+            ]
+        )
+        return result[0].lesson if result[0].ok else None
 
     def approve_source(self, source_id: str, approved_by: str) -> int:
-        now = utc_now()
         actor = str(approved_by)
-        with self.database.transaction(immediate=True) as connection:
+        with self.database.connect() as connection:
             rows = connection.execute(
                 """
                 SELECT id FROM lessons
@@ -658,14 +850,18 @@ class SQLiteKnowledgeStore:
                 """,
                 (source_id, actor),
             ).fetchall()
-            for row in rows:
-                connection.execute(
-                    "UPDATE lessons SET status = 'approved', approved_at = ?, updated_at = ? WHERE id = ?",
-                    (now, now, row["id"]),
-                )
-                self._add_event(connection, row["id"], "approved", actor, "", {"mode": "source_batch"})
-                self._sync_fts(connection, row["id"])
-            return len(rows)
+        commands = [
+            LifecycleCommand(
+                "approve",
+                row["id"],
+                LifecycleActor.owner(actor),
+                mode="source_batch",
+                expected_status="pending",
+            )
+            for row in rows
+        ]
+        results = self.apply_lifecycle_commands(commands)
+        return sum(result.changed for result in results)
 
     def mark_needs_reanalysis(
         self,
