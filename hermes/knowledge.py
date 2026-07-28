@@ -88,9 +88,12 @@ class SQLiteKnowledgeStore:
         self,
         database: Database | None = None,
         default_owner_user_id: str | int | None = None,
+        *,
+        initialize_database: bool = True,
     ):
         self.database = database or Database()
-        self.database.initialize()
+        if initialize_database:
+            self.database.initialize()
         self.default_owner_user_id = (
             str(default_owner_user_id) if default_owner_user_id not in (None, "") else "default"
         )
@@ -811,13 +814,9 @@ class SQLiteKnowledgeStore:
         command_list = list(commands)
         try:
             with self.database.transaction(immediate=True) as connection:
-                results = []
-                for index, command in enumerate(command_list):
-                    result = self._apply_lifecycle_command(connection, command)
-                    results.append(result)
-                    if not result.ok:
-                        raise _LifecycleBatchRejected(index, result)
-                return results
+                return self.apply_lifecycle_commands_in_transaction(
+                    connection, command_list
+                )
         except _LifecycleBatchRejected as rejected:
             results = []
             for index, command in enumerate(command_list):
@@ -841,6 +840,20 @@ class SQLiteKnowledgeStore:
                     )
                     results.append(LifecycleResult(False, code, False, lesson))
             return results
+
+    def apply_lifecycle_commands_in_transaction(
+        self,
+        connection: sqlite3.Connection,
+        commands: Sequence[LifecycleCommand],
+    ) -> list[LifecycleResult]:
+        """Apply lifecycle commands while the caller owns the transaction."""
+        results = []
+        for index, command in enumerate(commands):
+            result = self._apply_lifecycle_command(connection, command)
+            results.append(result)
+            if not result.ok:
+                raise _LifecycleBatchRejected(index, result)
+        return results
 
     @staticmethod
     def _compatibility_actor(actor_id: str | None) -> LifecycleActor:
