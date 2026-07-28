@@ -14,6 +14,21 @@ from hermes.db import SCHEMA_VERSION, Database
 from hermes.knowledge import SQLiteKnowledgeStore
 
 
+class FakeOfflineAccessLease:
+    def __init__(self, *states: bool):
+        self._states = list(states or (True,))
+        self.validation_count = 0
+
+    def validate(self) -> bool:
+        self.validation_count += 1
+        if len(self._states) > 1:
+            return self._states.pop(0)
+        return self._states[0]
+
+    def close(self) -> None:
+        raise AssertionError("BackupManager must not close an external lease")
+
+
 class BackupTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -404,6 +419,48 @@ class BackupTests(unittest.TestCase):
         self.assertEqual(len(failed_candidates), 1)
         self.assertGreater(failed_candidates[0].stat().st_size, 0)
 
+    def test_restore_without_offline_lease_refuses_before_mutation(self) -> None:
+        from hermes.backup import BackupOperationError
+
+        manager = self._backup_manager()
+        self.store.add_entry(title="Current DB", owner_user_id="42")
+        backup = manager.create_backup(label="restore-source")
+        database_hash = self._logical_database_hash(self.database.path)
+        backups_before = set((self.root / "backups").iterdir())
+
+        with mock.patch.object(
+            manager,
+            "create_backup",
+            wraps=manager.create_backup,
+        ) as create_backup:
+            with self.assertRaises(BackupOperationError) as raised:
+                manager.restore(backup)
+
+        self.assertEqual(raised.exception.code, "offline_lease_required")
+        create_backup.assert_not_called()
+        self.assertEqual(
+            self._logical_database_hash(self.database.path),
+            database_hash,
+        )
+        self.assertEqual(set((self.root / "backups").iterdir()), backups_before)
+        self.assertEqual(
+            list(self.database.path.parent.glob("*.restore-*")),
+            [],
+        )
+
+    def test_restore_rejects_boolean_in_place_of_offline_lease(self) -> None:
+        from hermes.backup import BackupOperationError
+
+        manager = self._backup_manager()
+        backup = manager.create_backup(label="restore-source")
+        backups_before = set((self.root / "backups").iterdir())
+
+        with self.assertRaises(BackupOperationError) as raised:
+            manager.restore(backup, lease=True)  # type: ignore[arg-type]
+
+        self.assertEqual(raised.exception.code, "offline_lease_required")
+        self.assertEqual(set((self.root / "backups").iterdir()), backups_before)
+
     def test_restore_replaces_database_and_keeps_pre_restore_copy(self) -> None:
         manager = self._backup_manager()
         first = self.store.add_entry(title="Kept lesson", owner_user_id="42")
@@ -413,13 +470,15 @@ class BackupTests(unittest.TestCase):
         self.store.delete_entry(first["id"])
         self.assertIsNone(self.store.get_entry(first["id"]))
 
-        result = manager.restore(backup)
+        lease = FakeOfflineAccessLease()
+        result = manager.restore(backup, lease=lease)
 
         restored_store = SQLiteKnowledgeStore(Database(self.database.path))
         self.assertIsNotNone(restored_store.get_entry(first["id"]))
         self.assertTrue(Path(result["pre_restore_backup"]).exists())
         self.assertEqual(self._sha256(backup), backup_digest)
         self.assertEqual(backup.stat().st_mtime_ns, backup_mtime)
+        self.assertGreaterEqual(lease.validation_count, 3)
 
     def test_restore_into_missing_destination_does_not_require_checkpoint(
         self,
@@ -436,7 +495,10 @@ class BackupTests(unittest.TestCase):
             self.root / "new-destination-backups",
         )
 
-        result = destination_manager.restore(backup)
+        result = destination_manager.restore(
+            backup,
+            lease=FakeOfflineAccessLease(),
+        )
 
         restored = SQLiteKnowledgeStore(Database(destination))
         self.assertIsNotNone(restored.get_entry(entry["id"]))
@@ -458,7 +520,10 @@ class BackupTests(unittest.TestCase):
             wraps=manager.create_backup,
         ) as create_backup:
             with self.assertRaises(BackupOperationError):
-                manager.restore(invalid)
+                manager.restore(
+                    invalid,
+                    lease=FakeOfflineAccessLease(),
+                )
 
         create_backup.assert_not_called()
         self.assertEqual(self._sha256(invalid), digest_before)
@@ -477,7 +542,10 @@ class BackupTests(unittest.TestCase):
             wraps=manager.create_backup,
         ) as create_backup:
             with self.assertRaises(BackupOperationError) as raised:
-                manager.restore(self.database.path)
+                manager.restore(
+                    self.database.path,
+                    lease=FakeOfflineAccessLease(),
+                )
 
         create_backup.assert_not_called()
         self.assertEqual(raised.exception.code, "source_is_destination")
@@ -536,7 +604,10 @@ class BackupTests(unittest.TestCase):
                 side_effect=fail_selected_stage,
         ):
             with self.assertRaises(BackupOperationError):
-                manager.restore(replacement_backup)
+                manager.restore(
+                    replacement_backup,
+                    lease=FakeOfflineAccessLease(),
+                )
 
         self.assertTrue(failure_injected)
         self.assertEqual(
@@ -613,7 +684,10 @@ class BackupTests(unittest.TestCase):
                 side_effect=fail_main_promotion,
             ):
                 with self.assertRaises(BackupOperationError):
-                    manager.restore(replacement_backup)
+                    manager.restore(
+                        replacement_backup,
+                        lease=FakeOfflineAccessLease(),
+                    )
         finally:
             idle_connection.close()
 
@@ -625,6 +699,52 @@ class BackupTests(unittest.TestCase):
         backups_after = set((self.root / "backups").glob("*.db"))
         self.assertTrue(backups_before < backups_after)
         self.assertTrue(replacement_backup.exists())
+
+    def test_revoked_lease_refuses_immediately_before_live_staging(self) -> None:
+        from hermes.backup import BackupOperationError
+
+        manager = self._backup_manager()
+        replacement = self.store.add_entry(
+            title="Replacement snapshot",
+            owner_user_id="42",
+        )
+        replacement_backup = manager.create_backup(label="replacement")
+        self.store.delete_entry(replacement["id"])
+        self.store.add_entry(title="Original snapshot", owner_user_id="42")
+        old_hash = self._logical_database_hash(self.database.path)
+        backups_before = set((self.root / "backups").glob("*.db"))
+        lease = FakeOfflineAccessLease(True, False)
+
+        with mock.patch.object(
+            manager,
+            "_stage_live_database",
+            wraps=manager._stage_live_database,
+        ) as stage:
+            with self.assertRaises(BackupOperationError) as raised:
+                manager.restore(replacement_backup, lease=lease)
+
+        self.assertEqual(raised.exception.code, "offline_lease_revoked")
+        stage.assert_not_called()
+        self.assertEqual(
+            self._logical_database_hash(self.database.path),
+            old_hash,
+        )
+        self.assertTrue(
+            backups_before < set((self.root / "backups").glob("*.db"))
+        )
+        self.assertEqual(
+            list(self.database.path.parent.glob("*.restore-rollback-*")),
+            [],
+        )
+
+    def test_offline_lease_documents_concurrent_writer_contract(self) -> None:
+        import inspect
+
+        from hermes.backup import OfflineAccessLease
+
+        contract = inspect.getdoc(OfflineAccessLease) or ""
+        self.assertIn("concurrent writers", contract)
+        self.assertIn("entire restore", contract)
 
     def test_cli_returns_allowlisted_json_for_expected_failure(self) -> None:
         from hermes.backup import BackupOperationError
@@ -656,6 +776,38 @@ class BackupTests(unittest.TestCase):
                 "code": "invalid_source",
                 "path": str(intended_path.resolve()),
                 "detail": "backup source is invalid",
+            },
+        )
+
+    def test_cli_restore_refuses_boolean_confirmation_without_real_lease(
+        self,
+    ) -> None:
+        from scripts import hermes_backup as backup_cli
+
+        source = self.root / "restore-source.db"
+        output = io.StringIO()
+
+        with mock.patch.object(
+            backup_cli,
+            "SQLiteBackupManager",
+        ) as manager_type, redirect_stdout(output):
+            exit_code = backup_cli.main(
+                ["restore", str(source), "--confirm"]
+            )
+
+        manager_type.assert_not_called()
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(
+            json.loads(output.getvalue()),
+            {
+                "ok": False,
+                "operation": "restore",
+                "code": "offline_lease_unavailable",
+                "path": str(source.resolve()),
+                "detail": (
+                    "restore requires an offline access lease from "
+                    "the process controller"
+                ),
             },
         )
 

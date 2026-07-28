@@ -40,7 +40,11 @@ def main(argv: list[str] | None = None) -> int:
     verify.add_argument("path")
     restore = commands.add_parser("restore")
     restore.add_argument("path")
-    restore.add_argument("--confirm", action="store_true", help="Required because restore replaces the local DB")
+    restore.add_argument(
+        "--confirm",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args(argv)
 
     intended_path: str | Path = (
@@ -48,13 +52,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.command in {"verify", "restore"}
         else Path(args.backup_dir or ".")
     )
-    if args.command == "restore" and not args.confirm:
+    if args.command == "restore":
         result = {
             "ok": False,
             "operation": "restore",
-            "code": "confirmation_required",
+            "code": "offline_lease_unavailable",
             "path": str(Path(args.path).expanduser().resolve()),
-            "detail": "restore requires confirmation",
+            "detail": (
+                "restore requires an offline access lease from "
+                "the process controller"
+            ),
         }
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 2
@@ -72,8 +79,6 @@ def main(argv: list[str] | None = None) -> int:
             result = {"ok": True, "path": str(manager.export_json())}
         elif args.command == "verify":
             result = manager.verify(args.path)
-        else:
-            result = {"ok": True, **manager.restore(args.path)}
     except BackupOperationError as exc:
         result = exc.to_payload()
         print(json.dumps(result, ensure_ascii=False, indent=2))

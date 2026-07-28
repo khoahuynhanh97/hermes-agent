@@ -9,7 +9,7 @@ import tempfile
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, Protocol, TypedDict
 from urllib.parse import urlencode
 
 from .db import SCHEMA_VERSION, Database
@@ -68,6 +68,12 @@ _SAFE_OPERATION_DETAILS = {
     ("restore", "restored_candidate_invalid"): (
         "restored database verification failed"
     ),
+    ("restore", "offline_lease_required"): (
+        "restore requires an active offline access lease"
+    ),
+    ("restore", "offline_lease_revoked"): (
+        "offline access lease is no longer active"
+    ),
     ("restore", "exclusive_access_required"): (
         "restore requires exclusive database access"
     ),
@@ -86,6 +92,19 @@ class BackupVerification(TypedDict):
     required_tables_missing: list[str]
     counts: dict[str, int]
     detail: str
+
+
+class OfflineAccessLease(Protocol):
+    """Externally owned proof of exclusive offline access.
+
+    The provider must prevent concurrent writers for the entire restore,
+    including destructive staging, rollback, and cleanup. BackupManager only
+    validates this lease; it never closes, releases, or deletes it.
+    """
+
+    def validate(self) -> bool:
+        """Return whether exclusive offline access is still active."""
+        ...
 
 
 class BackupOperationError(RuntimeError):
@@ -372,7 +391,16 @@ class SQLiteBackupManager:
             "detail": detail,
         }
 
-    def restore(self, backup_path: str | Path) -> dict[str, str]:
+    def restore(
+        self,
+        backup_path: str | Path,
+        *,
+        lease: OfflineAccessLease | None = None,
+    ) -> dict[str, str]:
+        self._require_active_lease(
+            lease,
+            code="offline_lease_required",
+        )
         source_path = Path(backup_path).expanduser().resolve()
         verification = self.verify(source_path)
         if not verification["ok"]:
@@ -406,7 +434,6 @@ class SQLiteBackupManager:
         )
         os.close(descriptor)
         temporary = Path(temporary_name)
-        restore_lock: tuple[int, Path] | None = None
         rollback_dir: Path | None = None
         try:
             source_uri = _sqlite_uri(
@@ -428,12 +455,23 @@ class SQLiteBackupManager:
                     detail="restored database verification failed",
                 )
 
-            restore_lock = self._acquire_restore_lock()
             staged: list[tuple[Path, Path]] = []
+            self._require_active_lease(
+                lease,
+                code="offline_lease_revoked",
+            )
             if self.database.path.exists():
                 self._checkpoint_live_database()
                 rollback_dir = self._allocate_restore_rollback()
                 staged = self._stage_live_database(rollback_dir)
+            try:
+                self._require_active_lease(
+                    lease,
+                    code="offline_lease_revoked",
+                )
+            except BackupOperationError:
+                self._rollback_staged(staged)
+                raise
             try:
                 self._replace_path(temporary, self.database.path)
             except OSError:
@@ -453,14 +491,11 @@ class SQLiteBackupManager:
                 path=source_path,
                 detail="restore failed",
             ) from None
-        finally:
-            try:
-                temporary.unlink(missing_ok=True)
-            except OSError:
-                pass
-            self._remove_sidecars(temporary)
-            if restore_lock is not None:
-                self._release_restore_lock(*restore_lock)
+        self._require_active_lease(
+            lease,
+            code="offline_lease_revoked",
+            path=rollback_dir or self.database.path,
+        )
         return {
             "restored_from": str(source_path),
             "database": str(self.database.path),
@@ -468,31 +503,30 @@ class SQLiteBackupManager:
             "rollback_snapshot": str(rollback_dir or ""),
         }
 
-    def _acquire_restore_lock(self) -> tuple[int, Path]:
-        lock_path = Path(f"{self.database.path}.restore.lock")
+    def _require_active_lease(
+        self,
+        lease: OfflineAccessLease | None,
+        *,
+        code: str,
+        path: Path | None = None,
+    ) -> None:
+        validate = getattr(lease, "validate", None)
         try:
-            descriptor = os.open(
-                lock_path,
-                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-            )
-        except OSError:
-            raise BackupOperationError(
-                operation="restore",
-                code="exclusive_access_required",
-                path=self.database.path,
-                detail="restore requires exclusive database access",
-            ) from None
-        return descriptor, lock_path
-
-    @staticmethod
-    def _release_restore_lock(descriptor: int, lock_path: Path) -> None:
-        try:
-            os.close(descriptor)
-        finally:
-            try:
-                lock_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+            active = bool(validate()) if callable(validate) else False
+        except Exception:
+            active = False
+        if active:
+            return
+        raise BackupOperationError(
+            operation="restore",
+            code=code,
+            path=path or self.database.path,
+            detail=(
+                "restore requires an active offline access lease"
+                if code == "offline_lease_required"
+                else "offline access lease is no longer active"
+            ),
+        )
 
     def _checkpoint_live_database(self) -> None:
         try:
