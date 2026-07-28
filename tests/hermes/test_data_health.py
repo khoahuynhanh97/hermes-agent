@@ -7,6 +7,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from hermes.application.knowledge_lifecycle import KnowledgeLifecycle, LifecycleActor
 from hermes.data_health import DataHealth, RepairAction, RepairPlan
@@ -710,6 +711,127 @@ class DataHealthTests(unittest.TestCase):
         self.assertEqual(report.applied_count, 0)
         self.assertEqual(report.outcomes[0].reason, "precondition_failed")
         self.assertEqual(before, self.snapshot())
+
+    def test_schema_is_rechecked_after_write_lock_before_repair_actions(
+        self,
+    ) -> None:
+        lesson = self.add_lesson("Schema changed through WAL", category="error")
+        self.approve(lesson)
+        health = DataHealth(self.database)
+        plan = health.audit().repair_plan
+        original_check = DataHealth._schema_precondition
+        check_count = 0
+
+        def mutate_after_unlocked_check(
+            connection: sqlite3.Connection,
+        ) -> tuple[bool, dict[str, int | str | bool]]:
+            nonlocal check_count
+            result = original_check(connection)
+            check_count += 1
+            if check_count == 2:
+                other = sqlite3.connect(self.database.path)
+                try:
+                    other.execute("PRAGMA user_version = 999")
+                    other.commit()
+                finally:
+                    other.close()
+            return result
+
+        before = self.snapshot()
+        with patch.object(
+            health,
+            "_schema_precondition",
+            side_effect=mutate_after_unlocked_check,
+        ):
+            report = health.repair(plan)
+
+        self.assertGreaterEqual(check_count, 3)
+        self.assertEqual(report.applied_count, 0)
+        self.assertTrue(
+            all(
+                outcome.reason == "precondition_failed"
+                for outcome in report.outcomes
+            )
+        )
+        self.assertEqual(before, self.snapshot())
+        self.assertEqual(self.store.get_entry(lesson["id"])["status"], "approved")
+
+    def test_fts_postcondition_failure_rolls_back_complete_transaction(
+        self,
+    ) -> None:
+        lesson = self.add_lesson("Residual FTS drift")
+        self.approve(lesson)
+        with self.database.transaction(immediate=True) as connection:
+            connection.execute(
+                "DELETE FROM lesson_fts WHERE lesson_id = ?",
+                (lesson["id"],),
+            )
+        health = DataHealth(self.database, store=self.store)
+        plan = health.audit().repair_plan
+        before = self.snapshot()
+        before_hash = self.database_hash()
+
+        with patch.object(self.store, "_sync_fts", return_value=None):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "FTS rebuild postcondition",
+            ) as caught:
+                health.repair(plan)
+
+        self.assertEqual(
+            type(caught.exception).__name__,
+            "_RepairPostconditionFailed",
+        )
+        self.assertEqual(before, self.snapshot())
+        self.assertEqual(before_hash, self.database_hash())
+
+    def test_invalid_single_approval_event_timestamp_is_review_only(self) -> None:
+        lessons = [
+            self.add_lesson("Empty approval event timestamp"),
+            self.add_lesson("Malformed approval event timestamp"),
+        ]
+        for lesson in lessons:
+            self.approve(lesson)
+        invalid_values = ("", "not-a-timestamp")
+        with self.database.transaction(immediate=True) as connection:
+            for lesson, invalid in zip(lessons, invalid_values):
+                connection.execute(
+                    "UPDATE lessons SET approved_at = NULL WHERE id = ?",
+                    (lesson["id"],),
+                )
+                connection.execute(
+                    """
+                    UPDATE lesson_events SET created_at = ?
+                    WHERE lesson_id = ? AND action = 'approved'
+                    """,
+                    (invalid, lesson["id"]),
+                )
+
+        report = DataHealth(self.database).audit()
+
+        subject_hashes = {
+            hashlib.sha256(lesson["id"].encode("utf-8")).hexdigest()
+            for lesson in lessons
+        }
+        invalid_findings = [
+            finding
+            for finding in report.findings
+            if finding.code == "approved_at_missing_invalid_event_timestamp"
+        ]
+        self.assertEqual(
+            {finding.subject_id_hash for finding in invalid_findings},
+            subject_hashes,
+        )
+        self.assertTrue(
+            all(finding.repair_class == "review" for finding in invalid_findings)
+        )
+        self.assertFalse(
+            any(
+                action.kind == "set_approved_at"
+                and action.subject_id in subject_hashes
+                for action in report.repair_plan.actions
+            )
+        )
 
 
 if __name__ == "__main__":

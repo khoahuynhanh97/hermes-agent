@@ -5,6 +5,7 @@ import json
 import sqlite3
 import unicodedata
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
@@ -106,6 +107,10 @@ class _FtsDrift:
     expected_hash: str
 
 
+class _RepairPostconditionFailed(RuntimeError):
+    pass
+
+
 def _subject_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -131,6 +136,19 @@ def _is_unknown_title(value: str | None) -> bool:
 
 def _empty_counts() -> dict[str, int]:
     return {key: 0 for key in COUNT_KEYS}
+
+
+def _valid_timestamp(value: str | None) -> bool:
+    text = str(value or "").strip()
+    if not text or ("T" not in text and " " not in text):
+        return False
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        datetime.fromisoformat(text)
+    except ValueError:
+        return False
+    return True
 
 
 def _action(
@@ -601,26 +619,41 @@ class DataHealth:
                     ).fetchall()
                     if len(approved_events) == 1:
                         event_created_at = str(approved_events[0]["created_at"])
-                        findings.append(
-                            self._finding(
-                                "approved_at_missing_unambiguous",
-                                "error",
-                                "lesson",
-                                lesson_id,
-                                "safe",
-                                {"approved_event_count": 1},
+                        if _valid_timestamp(event_created_at):
+                            findings.append(
+                                self._finding(
+                                    "approved_at_missing_unambiguous",
+                                    "error",
+                                    "lesson",
+                                    lesson_id,
+                                    "safe",
+                                    {"approved_event_count": 1},
+                                )
                             )
-                        )
-                        if not has_deterministic_defect:
-                            timestamp_actions.append(
-                                _action(
-                                    "set_approved_at",
-                                    _subject_hash(lesson_id),
+                            if not has_deterministic_defect:
+                                timestamp_actions.append(
+                                    _action(
+                                        "set_approved_at",
+                                        _subject_hash(lesson_id),
+                                        {
+                                            "status": "approved",
+                                            "approved_at_missing": True,
+                                            "approved_event_count": 1,
+                                            "event_created_at": event_created_at,
+                                        },
+                                    )
+                                )
+                        else:
+                            findings.append(
+                                self._finding(
+                                    "approved_at_missing_invalid_event_timestamp",
+                                    "warning",
+                                    "lesson",
+                                    lesson_id,
+                                    "review",
                                     {
-                                        "status": "approved",
-                                        "approved_at_missing": True,
                                         "approved_event_count": 1,
-                                        "event_created_at": event_created_at,
+                                        "timestamp_valid": False,
                                     },
                                 )
                             )
@@ -941,6 +974,10 @@ class DataHealth:
         for row in rows:
             self.store._sync_fts(connection, str(row["id"]))
         after_drift, after_hash = self._fts_drift(connection)
+        if after_drift:
+            raise _RepairPostconditionFailed(
+                "FTS rebuild postcondition failed: residual drift remains"
+            )
         return self._outcome(
             action,
             status="applied",
@@ -1008,6 +1045,9 @@ class DataHealth:
                     or action.expected.get("approved_at_missing") is not True
                     or action.expected.get("approved_event_count") != 1
                     or not isinstance(action.expected.get("event_created_at"), str)
+                    or not _valid_timestamp(
+                        str(action.expected.get("event_created_at") or "")
+                    )
                 ):
                     raise ValueError("Timestamp action has invalid preconditions")
             else:
@@ -1203,6 +1243,18 @@ class DataHealth:
                         "database_identity_matches": False,
                     },
                 )
+            locked_compatible, locked_metadata = self._schema_precondition(
+                connection
+            )
+            if not locked_compatible:
+                connection.rollback()
+                return self._precondition_report(
+                    actions,
+                    {
+                        **locked_metadata,
+                        "database_identity_matches": True,
+                    },
+                )
             try:
                 locked = self.database.path.stat()
                 locked_signature = (
@@ -1218,7 +1270,7 @@ class DataHealth:
                 return self._precondition_report(
                     actions,
                     {
-                        **writable_metadata,
+                        **locked_metadata,
                         "database_identity_matches": False,
                     },
                 )
