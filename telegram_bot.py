@@ -1647,7 +1647,20 @@ async def re_analysis_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         return None
     if not await require_sqlite_source_authority(update):
         return None
-    lifecycle = KnowledgeLifecycle(get_store())
+    store = get_store()
+    entry = store.get_entry(entry_id)
+    if not entry:
+        await reply_html(update.message, "Knowledge lesson not found.")
+        return None
+    if entry.get("status") != "pending" or not entry.get("needs_reanalysis"):
+        await reply_html(update.message, "Lesson is not pending reanalysis.")
+        return None
+    source_value = str(entry.get("source_url") or "").strip()
+    if not source_value:
+        await reply_html(update.message, "Lesson has no source to reanalyze.")
+        return None
+
+    lifecycle = KnowledgeLifecycle(store)
     result = lifecycle.request_reanalysis(
         entry_id,
         LifecycleActor.owner(str(user.id)),
@@ -1662,10 +1675,6 @@ async def re_analysis_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     entry = result.lesson
     if not entry:
         await reply_html(update.message, "Knowledge lesson not found.")
-        return None
-    source_value = str(entry.get("source_url") or "").strip()
-    if not source_value:
-        await reply_html(update.message, "Lesson has no source to reanalyze.")
         return None
     lowered = source_value.lower()
     source_kind = "website_url"

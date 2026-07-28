@@ -243,6 +243,8 @@ class KnowledgeLifecycleWiringTests(unittest.TestCase):
         from hermes.knowledge import SQLiteKnowledgeStore
 
         entry = self.add_entry("Private reanalysis", owner="99")
+        store = SQLiteKnowledgeStore(default_owner_user_id="99")
+        store.mark_needs_reanalysis(entry["id"], "Source needs repair")
         with patch.object(telegram_bot, "KnowledgeLifecycle", RecordingKnowledgeLifecycle), patch.object(
             telegram_bot,
             "enqueue_learning_job",
@@ -257,9 +259,9 @@ class KnowledgeLifecycleWiringTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(RecordingKnowledgeLifecycle.calls[0][0], "request_reanalysis")
         self.assertEqual(RecordingKnowledgeLifecycle.calls[0][2], LifecycleActor.owner("42"))
-        self.assertFalse(SQLiteKnowledgeStore().get_entry(entry["id"])["needs_reanalysis"])
+        self.assertEqual(self.event_actions(store, entry["id"]), ["created", "reanalysis_requested"])
 
-    def test_reanalysis_refuses_invalid_state_before_enqueue(self) -> None:
+    def test_reanalysis_rejects_invalid_state_without_lifecycle_mutation(self) -> None:
         import telegram_bot
         from hermes.knowledge import SQLiteKnowledgeStore
 
@@ -278,8 +280,55 @@ class KnowledgeLifecycleWiringTests(unittest.TestCase):
             )
 
         self.assertIsNone(result)
-        self.assertEqual(RecordingKnowledgeLifecycle.calls[0][0], "request_reanalysis")
+        self.assertEqual(RecordingKnowledgeLifecycle.calls, [])
         self.assertEqual(store.get_entry(entry["id"])["status"], "approved")
+        self.assertEqual(self.event_actions(store, entry["id"]), ["created", "approved"])
+
+    def test_reanalysis_rejects_pending_lesson_without_reanalysis_flag_before_mutation(self) -> None:
+        import telegram_bot
+        from hermes.knowledge import SQLiteKnowledgeStore
+
+        entry = self.add_entry("Pending without reanalysis")
+        store = SQLiteKnowledgeStore()
+        with patch.object(telegram_bot, "KnowledgeLifecycle", RecordingKnowledgeLifecycle), patch.object(
+            telegram_bot,
+            "enqueue_learning_job",
+            return_value={"job_id": "unexpected"},
+        ) as enqueue:
+            result = asyncio.run(
+                telegram_bot.re_analysis_command(
+                    self.update(), SimpleNamespace(args=[entry["id"]])
+                )
+            )
+
+        self.assertIsNone(result)
+        enqueue.assert_not_called()
+        self.assertEqual(RecordingKnowledgeLifecycle.calls, [])
+        self.assertFalse(store.get_entry(entry["id"])["needs_reanalysis"])
+        self.assertEqual(self.event_actions(store, entry["id"]), ["created"])
+
+    def test_reanalysis_rejects_flagged_lesson_without_source_before_mutation(self) -> None:
+        import telegram_bot
+        from hermes.knowledge import SQLiteKnowledgeStore
+
+        store = SQLiteKnowledgeStore()
+        entry = store.add_entry(title="Source-less reanalysis", owner_user_id="42")
+        store.mark_needs_reanalysis(entry["id"], "Source needs repair")
+        with patch.object(telegram_bot, "KnowledgeLifecycle", RecordingKnowledgeLifecycle), patch.object(
+            telegram_bot,
+            "enqueue_learning_job",
+            side_effect=AssertionError("must not enqueue lessons without a source"),
+        ):
+            result = asyncio.run(
+                telegram_bot.re_analysis_command(
+                    self.update(), SimpleNamespace(args=[entry["id"]])
+                )
+            )
+
+        self.assertIsNone(result)
+        self.assertEqual(RecordingKnowledgeLifecycle.calls, [])
+        self.assertTrue(store.get_entry(entry["id"])["needs_reanalysis"])
+        self.assertEqual(self.event_actions(store, entry["id"]), ["created", "reanalysis_requested"])
 
     def test_learning_review_approval_uses_system_lifecycle_actor_before_move(self) -> None:
         import core.learning_review as learning_review
