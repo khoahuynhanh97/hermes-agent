@@ -35,6 +35,11 @@ from core.llm_gateway import complete as llm_complete, health_check, list_models
 from core.conversation_memory import get_memory
 from core.knowledge_store import get_store
 from core.source_validation import validate_learning_source
+from hermes.application.knowledge_lifecycle import (
+    KnowledgeLifecycle,
+    LifecycleActor,
+    LifecycleCommand,
+)
 from hermes.assistant import extract_learning_request, extract_memory_request
 from hermes.memory import MemoryRepository
 from core.repository_search import (
@@ -1314,6 +1319,7 @@ async def knowledge_decision_command(update: Update, context: ContextTypes.DEFAU
         return
     user_id = update.effective_user.id if update.effective_user else None
     store = get_store()
+    lifecycle = KnowledgeLifecycle(store)
     if entry_id.isdecimal():
         position = int(entry_id)
         visible_pending = _visible_pending_entries(store, user_id)
@@ -1321,22 +1327,17 @@ async def knowledge_decision_command(update: Update, context: ContextTypes.DEFAU
             await reply_html(update.message, "Số thứ tự không tồn tại trong /knowledge pending.")
             return
         entry_id = str(visible_pending[position - 1]["id"])
-    entry = store.get_entry(entry_id)
-    if not entry:
-        await reply_html(update.message, "Không tìm thấy knowledge entry này.")
-        return
-    owner_user_id = entry.get("owner_user_id")
-    if owner_user_id and str(owner_user_id) != str(user_id):
-        await reply_html(update.message, "Bạn không sở hữu knowledge entry này.")
-        return
-
     if action == "approve":
         # Kiem tra trung lap truoc khi duyet
-        result = store.mark_approved(entry_id, approved_by=str(user_id), approval_mode="telegram_command")
+        result = lifecycle.approve(
+            entry_id,
+            LifecycleActor.owner(str(user_id)),
+            mode="telegram_command",
+        )
         
         # Kiem tra neu co canh bao trung lap
-        if result and result.get("duplicate_warning", {}).get("has_duplicates"):
-            similar = result["duplicate_warning"]["similar_entries"]
+        if result.code == "duplicate_warning":
+            similar = result.lesson["duplicate_warning"]["similar_entries"]
             warning_lines = [
                 f"<b>Canh bao trung lap!</b>",
                 f"Entry nay co title/tong quat tuong tu voi <b>{len(similar)}</b> bai da duyet:",
@@ -1363,15 +1364,26 @@ async def knowledge_decision_command(update: Update, context: ContextTypes.DEFAU
                 "Neu khong co van de, hay /approve_force de duyet binh thuong.",
             ])
             message = "\n".join(warning_lines)
-        elif result:
+        elif result.ok:
             message = "Da approve lesson va dua vao approved knowledge."
+        elif result.code == "forbidden":
+            message = "Ban khong so huu knowledge entry nay."
         else:
             message = "Lesson khong ton tai hoac da duoc duyet."
     else:
         reason = " ".join(context.args[1:]).strip() or "Rejected via Telegram command"
-        updated = store.mark_rejected(entry_id, rejected_by=str(user_id), rejection_reason=reason)
-        message = "Da reject lesson."
-    await reply_html(update.message, message if result else "Lesson khong ton tai.")
+        result = lifecycle.reject(
+            entry_id,
+            LifecycleActor.owner(str(user_id)),
+            reason=reason,
+        )
+        if result.ok:
+            message = "Da reject lesson."
+        elif result.code == "forbidden":
+            message = "Ban khong so huu knowledge entry nay."
+        else:
+            message = "Lesson khong ton tai."
+    await reply_html(update.message, message)
 
 
 async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1390,6 +1402,7 @@ async def approve_force_command(update: Update, context: ContextTypes.DEFAULT_TY
         return
     user_id = update.effective_user.id if update.effective_user else None
     store = get_store()
+    lifecycle = KnowledgeLifecycle(store)
     if entry_id.isdecimal():
         position = int(entry_id)
         visible_pending = _visible_pending_entries(store, user_id)
@@ -1397,18 +1410,16 @@ async def approve_force_command(update: Update, context: ContextTypes.DEFAULT_TY
             await reply_html(update.message, "So thu tu khong ton tai trong /knowledge pending.")
             return
         entry_id = str(visible_pending[position - 1]["id"])
-    entry = store.get_entry(entry_id)
-    if not entry:
-        await reply_html(update.message, "Khong tim thay knowledge entry nay.")
-        return
-    owner_user_id = entry.get("owner_user_id")
-    if owner_user_id and str(owner_user_id) != str(user_id):
-        await reply_html(update.message, "Ban khong so huu knowledge entry nay.")
-        return
-
-    updated = store.mark_approved(entry_id, approved_by=str(user_id), approval_mode="force_approve", force=True)
-    if updated:
+    result = lifecycle.approve(
+        entry_id,
+        LifecycleActor.owner(str(user_id)),
+        mode="force_approve",
+        force=True,
+    )
+    if result.ok:
         await reply_html(update.message, "Da approve (bat chap) lesson va dua vao approved knowledge.")
+    elif result.code == "forbidden":
+        await reply_html(update.message, "Ban khong so huu knowledge entry nay.")
     else:
         await reply_html(update.message, "Lesson khong ton tai hoac da duoc duyet.")
 
@@ -1493,38 +1504,37 @@ async def approve_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     """Approve every pending lesson currently displayed to this Telegram user."""
     user_id = update.effective_user.id if update.effective_user else None
     store = get_store()
+    lifecycle = KnowledgeLifecycle(store)
     pending_entries = _visible_pending_entries(store, user_id)
-    approved = 0
-    skipped = []
-    for entry in pending_entries:
-        result = store.mark_approved(
-            entry["id"], approved_by=str(user_id), approval_mode="telegram_command_bulk"
-        )
-        if result:
-            if result.get("duplicate_warning", {}).get("has_duplicates"):
-                skipped.append({
-                    "title": entry.get("title", "N/A"),
-                    "similar_count": result["duplicate_warning"]["similar_count"],
-                })
-            else:
-                approved += 1
-    if approved and skipped:
-        msg = f"Da approve {approved} lesson."
-        msg += f"\nBo qua {len(skipped)} lesson co trung lap:"
+    results = lifecycle.apply(
+        [
+            LifecycleCommand(
+                "approve",
+                entry["id"],
+                LifecycleActor.owner(str(user_id)),
+                mode="telegram_command_bulk",
+                expected_status="pending",
+            )
+            for entry in pending_entries
+        ]
+    )
+    approved = sum(result.changed for result in results)
+    skipped = [
+        {
+            "title": entry.get("title", "N/A"),
+            "similar_count": result.lesson["duplicate_warning"]["similar_count"],
+        }
+        for entry, result in zip(pending_entries, results)
+        if result.code == "duplicate_warning"
+    ]
+    if skipped and not approved:
+        msg = f"Khong approve lesson nao; batch bi huy do {len(skipped)} lesson co trung lap:"
         for s in skipped[:5]:
             msg += f"\n  - {s['title']} (trung voi {s['similar_count']} bai)"
-        if len(skipped) > 5:
-            msg += f"\n  ... va {len(skipped) - 5} bai khac"
         msg += "\nDung /approve_force <id> de duyet bat chap."
         await reply_html(update.message, msg)
     elif approved:
         await reply_html(update.message, f"Da approve {approved} lesson dang hien thi.")
-    elif skipped:
-        msg = f"Tat ca {len(skipped)} lesson deu co trung lap:"
-        for s in skipped[:5]:
-            msg += f"\n  - {s['title']} (trung voi {s['similar_count']} bai)"
-        msg += "\nDung /approve_force <id> de duyet bat chap."
-        await reply_html(update.message, msg)
     else:
         await reply_html(update.message, "Khong co lesson pending de approve.")
 
@@ -1593,10 +1603,28 @@ async def approve_source_command(update: Update, context: ContextTypes.DEFAULT_T
         return 0
     store = get_store()
     entry = store.get_entry(entry_id)
-    if not entry or str(entry.get("owner_user_id")) != str(user.id):
+    if not entry:
         await reply_html(update.message, "Knowledge lesson not found.")
         return 0
-    approved = store.approve_source(entry["source_id"], str(user.id))
+    lifecycle = KnowledgeLifecycle(store)
+    source_entries = [
+        item
+        for item in store.list_entries(status="pending", owner_user_id=str(user.id))
+        if item.get("source_id") == entry.get("source_id") and not item.get("needs_reanalysis")
+    ]
+    results = lifecycle.apply(
+        [
+            LifecycleCommand(
+                "approve",
+                item["id"],
+                LifecycleActor.owner(str(user.id)),
+                mode="source_batch",
+                expected_status="pending",
+            )
+            for item in source_entries
+        ]
+    )
+    approved = sum(result.changed for result in results)
     await reply_html(update.message, f"Approved {approved} lesson(s) from this source.")
     return approved
 
@@ -2242,28 +2270,27 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from core.knowledge_store import get_store
 
         action, entry_id = data.split(":", 1)
-        entry = get_store().get_entry(entry_id)
-        if not entry:
-            await edit_html_message(query, "Không tìm thấy lesson này.")
-            return
-        owner_user_id = entry.get("owner_user_id")
-        if owner_user_id and str(owner_user_id) != str(user_id):
-            await query.answer("Bạn không sở hữu lesson này.", show_alert=True)
-            return
+        lifecycle = KnowledgeLifecycle(get_store())
         if action == "knowledge_approve":
-            updated = get_store().mark_approved(
+            result = lifecycle.approve(
                 entry_id,
-                approved_by=str(user_id),
-                approval_mode="telegram",
+                LifecycleActor.owner(str(user_id)),
+                mode="telegram",
             )
-            result_text = "Đã approve lesson và đưa vào approved knowledge." if updated else "Lesson không còn tồn tại."
+            success_text = "Đã approve lesson và đưa vào approved knowledge."
         else:
-            updated = get_store().mark_rejected(
+            result = lifecycle.reject(
                 entry_id,
-                rejected_by=str(user_id),
-                rejection_reason="Rejected via Telegram",
+                LifecycleActor.owner(str(user_id)),
+                reason="Rejected via Telegram",
             )
-            result_text = "Đã reject lesson." if updated else "Lesson không còn tồn tại."
+            success_text = "Đã reject lesson."
+        if result.ok:
+            result_text = success_text
+        elif result.code == "forbidden":
+            result_text = "Bạn không sở hữu lesson này."
+        else:
+            result_text = "Lesson không còn tồn tại."
         try:
             await edit_html_message(query, result_text)
         except Exception as exc:

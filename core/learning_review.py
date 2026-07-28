@@ -4,6 +4,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from hermes.application.knowledge_lifecycle import KnowledgeLifecycle, LifecycleActor
+
 
 class LearningReviewStore:
     """Local approval queue for Hermes learning proposals."""
@@ -116,6 +118,7 @@ class LearningReviewStore:
                 
         # 2. Add to UnifiedKnowledgeStore
         store = get_store()
+        lifecycle = KnowledgeLifecycle(store)
         # Check if entry already exists (by source_url)
         existing = None
         if source_url:
@@ -133,7 +136,9 @@ class LearningReviewStore:
                 
         if existing:
             # Update existing status via ID
-            store.mark_approved(existing["id"], approved_by="gui_user", approval_mode="manual")
+            result = lifecycle.approve(
+                existing["id"], LifecycleActor.system("gui-review"), mode="manual"
+            )
             logger_msg = f"[LearningReview] Updated existing entry status to approved: {existing['id']}"
         else:
             # Create new entry directly as approved
@@ -150,8 +155,13 @@ class LearningReviewStore:
                 job_output_dir=output_dir_str,
                 source="telegram_job",
             )
-            store.mark_approved(new_entry["id"], approved_by="gui_user", approval_mode="manual")
+            result = lifecycle.approve(
+                new_entry["id"], LifecycleActor.system("gui-review"), mode="manual"
+            )
             logger_msg = f"[LearningReview] Added new approved entry: {new_entry['id']}"
+
+        if not result.ok:
+            raise ValueError(f"Knowledge approval failed: {result.code}")
             
         print(logger_msg)
         
@@ -173,7 +183,14 @@ class LearningReviewStore:
             store = get_store()
             existing = store.find_existing_entry(source_url)
             if existing:
-                store.mark_rejected(existing["id"], rejected_by="gui_user", rejection_reason="Rejected via review queue UI")
+                lifecycle = KnowledgeLifecycle(store)
+                result = lifecycle.reject(
+                    existing["id"],
+                    LifecycleActor.system("gui-review"),
+                    reason="Rejected via review queue UI",
+                )
+                if not result.ok:
+                    raise ValueError(f"Knowledge rejection failed: {result.code}")
                     
         return self._move(name, self.rejected_dir)
 

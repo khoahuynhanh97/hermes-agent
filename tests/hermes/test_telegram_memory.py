@@ -101,6 +101,10 @@ class TelegramMemoryTests(unittest.TestCase):
 
         self.assertEqual(len(store.list_entries(status="approved", owner_user_id="42")), 2)
         self.assertIn("2 lesson", update.message.replies[0])
+        self.assertEqual(
+            [event["action"] for event in store.list_events(first["id"])],
+            ["created", "approved"],
+        )
 
     def test_approve_source_defaults_to_sqlite_when_backend_is_unset(self) -> None:
         import telegram_bot
