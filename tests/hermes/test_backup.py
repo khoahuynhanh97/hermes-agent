@@ -29,6 +29,24 @@ class BackupTests(unittest.TestCase):
     def _sha256(path: Path) -> str:
         return hashlib.sha256(path.read_bytes()).hexdigest()
 
+    @staticmethod
+    def _logical_database_hash(path: Path) -> str:
+        with closing(sqlite3.connect(path)) as connection:
+            payload = {
+                table: connection.execute(
+                    f"SELECT * FROM {table} ORDER BY rowid"
+                ).fetchall()
+                for table in ("sources", "lessons", "lesson_events")
+            }
+        return hashlib.sha256(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                default=str,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+
     def _backup_manager(self, *, keep: int = 14):
         from hermes.backup import SQLiteBackupManager
 
@@ -229,6 +247,41 @@ class BackupTests(unittest.TestCase):
                 2,
             )
 
+    def test_hard_link_cleanup_failure_keeps_only_diagnostic_candidate(
+        self,
+    ) -> None:
+        from hermes.backup import BackupOperationError
+
+        manager = self._backup_manager()
+        self.store.add_entry(title="Candidate only", owner_user_id="42")
+        real_unlink = Path.unlink
+
+        def fail_temporary_unlink(
+            path: Path,
+            *args: object,
+            **kwargs: object,
+        ) -> None:
+            if path.name.endswith(".db.tmp"):
+                raise OSError("injected temporary unlink failure")
+            real_unlink(path, *args, **kwargs)
+
+        with mock.patch.object(
+            Path,
+            "unlink",
+            autospec=True,
+            side_effect=fail_temporary_unlink,
+        ):
+            with self.assertRaises(BackupOperationError) as raised:
+                manager.create_backup(label="unlink-failure")
+
+        self.assertEqual(raised.exception.code, "promotion_cleanup_failed")
+        promoted = list((self.root / "backups").glob("*.db"))
+        candidates = list((self.root / "backups").glob("*.db.tmp"))
+        self.assertEqual(promoted, [])
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].stat().st_nlink, 1)
+        self.assertTrue(manager.verify(candidates[0])["ok"])
+
     def test_verify_reopens_immutable_read_only_without_mutating_backup(self) -> None:
         manager = self._backup_manager()
         backup = manager.create_backup(label="read-only")
@@ -368,6 +421,29 @@ class BackupTests(unittest.TestCase):
         self.assertEqual(self._sha256(backup), backup_digest)
         self.assertEqual(backup.stat().st_mtime_ns, backup_mtime)
 
+    def test_restore_into_missing_destination_does_not_require_checkpoint(
+        self,
+    ) -> None:
+        from hermes.backup import SQLiteBackupManager
+
+        manager = self._backup_manager()
+        entry = self.store.add_entry(title="Restored new DB", owner_user_id="42")
+        backup = manager.create_backup(label="new-destination")
+        backup_digest = self._sha256(backup)
+        destination = self.root / "new-data" / "hermes.db"
+        destination_manager = SQLiteBackupManager(
+            Database(destination),
+            self.root / "new-destination-backups",
+        )
+
+        result = destination_manager.restore(backup)
+
+        restored = SQLiteKnowledgeStore(Database(destination))
+        self.assertIsNotNone(restored.get_entry(entry["id"]))
+        self.assertEqual(result["pre_restore_backup"], "")
+        self.assertEqual(result["rollback_snapshot"], "")
+        self.assertEqual(self._sha256(backup), backup_digest)
+
     def test_restore_rejects_invalid_source_before_pre_restore_snapshot(self) -> None:
         from hermes.backup import BackupOperationError
 
@@ -406,6 +482,149 @@ class BackupTests(unittest.TestCase):
         create_backup.assert_not_called()
         self.assertEqual(raised.exception.code, "source_is_destination")
         self.assertEqual(self._sha256(self.database.path), digest_before)
+
+    def _assert_restore_stage_failure_is_atomic(
+        self,
+        *,
+        failing_source_suffix: str,
+    ) -> None:
+        from hermes.backup import BackupOperationError
+
+        manager = self._backup_manager()
+        replacement = self.store.add_entry(
+            title="Replacement snapshot",
+            owner_user_id="42",
+        )
+        replacement_backup = manager.create_backup(label="replacement")
+        self.store.delete_entry(replacement["id"])
+        self.store.add_entry(title="Original one", owner_user_id="42")
+        self.store.add_entry(title="Original two", owner_user_id="42")
+        old_hash = self._logical_database_hash(self.database.path)
+        backups_before = set((self.root / "backups").glob("*.db"))
+        real_replace = manager._replace_path
+        real_create_backup = manager.create_backup
+        failure_injected = False
+
+        def create_pre_restore_with_sidecars(label: str = "scheduled") -> Path:
+            path = real_create_backup(label)
+            if label == "pre-restore":
+                Path(f"{self.database.path}-wal").touch()
+                Path(f"{self.database.path}-shm").touch()
+            return path
+
+        def fail_selected_stage(source: Path, target: Path) -> None:
+            nonlocal failure_injected
+            if (
+                not failure_injected
+                and str(source).endswith(failing_source_suffix)
+            ):
+                failure_injected = True
+                raise OSError(f"injected {failing_source_suffix} stage failure")
+            real_replace(source, target)
+
+        with mock.patch.object(
+            manager,
+            "_checkpoint_live_database",
+            return_value=None,
+        ), mock.patch.object(
+            manager,
+            "create_backup",
+            side_effect=create_pre_restore_with_sidecars,
+        ), mock.patch.object(
+                manager,
+                "_replace_path",
+                side_effect=fail_selected_stage,
+        ):
+            with self.assertRaises(BackupOperationError):
+                manager.restore(replacement_backup)
+
+        self.assertTrue(failure_injected)
+        self.assertEqual(
+            self._logical_database_hash(self.database.path),
+            old_hash,
+        )
+        backups_after = set((self.root / "backups").glob("*.db"))
+        self.assertTrue(backups_before < backups_after)
+        self.assertTrue(replacement_backup.exists())
+
+    def test_restore_wal_stage_failure_preserves_original_logical_database(
+        self,
+    ) -> None:
+        self._assert_restore_stage_failure_is_atomic(
+            failing_source_suffix="-wal",
+        )
+
+    def test_restore_shm_stage_failure_preserves_original_logical_database(
+        self,
+    ) -> None:
+        self._assert_restore_stage_failure_is_atomic(
+            failing_source_suffix="-shm",
+        )
+
+    def test_restore_main_replace_failure_rolls_back_original_database(
+        self,
+    ) -> None:
+        from hermes.backup import BackupOperationError
+
+        manager = self._backup_manager()
+        replacement = self.store.add_entry(
+            title="Replacement snapshot",
+            owner_user_id="42",
+        )
+        replacement_backup = manager.create_backup(label="replacement")
+        self.store.delete_entry(replacement["id"])
+        idle_connection = self.database.connect()
+        self.store.add_entry(title="Original one", owner_user_id="42")
+        self.store.add_entry(title="Original two", owner_user_id="42")
+        old_hash = self._logical_database_hash(self.database.path)
+        wal_path = Path(f"{self.database.path}-wal")
+        self.assertTrue(wal_path.exists())
+        self.assertGreater(wal_path.stat().st_size, 0)
+        backups_before = set((self.root / "backups").glob("*.db"))
+        real_replace = manager._replace_path
+        real_checkpoint = manager._checkpoint_live_database
+        failure_injected = False
+
+        def checkpoint_then_release_idle_connection() -> None:
+            try:
+                real_checkpoint()
+            finally:
+                idle_connection.close()
+
+        def fail_main_promotion(source: Path, target: Path) -> None:
+            nonlocal failure_injected
+            if (
+                not failure_injected
+                and target == self.database.path
+                and source.name.endswith(".tmp")
+            ):
+                failure_injected = True
+                raise OSError("injected main replace failure")
+            real_replace(source, target)
+
+        try:
+            with mock.patch.object(
+                manager,
+                "_checkpoint_live_database",
+                side_effect=checkpoint_then_release_idle_connection,
+            ), mock.patch.object(
+                manager,
+                "_replace_path",
+                side_effect=fail_main_promotion,
+            ):
+                with self.assertRaises(BackupOperationError):
+                    manager.restore(replacement_backup)
+        finally:
+            idle_connection.close()
+
+        self.assertTrue(failure_injected)
+        self.assertEqual(
+            self._logical_database_hash(self.database.path),
+            old_hash,
+        )
+        backups_after = set((self.root / "backups").glob("*.db"))
+        self.assertTrue(backups_before < backups_after)
+        self.assertTrue(replacement_backup.exists())
 
     def test_cli_returns_allowlisted_json_for_expected_failure(self) -> None:
         from hermes.backup import BackupOperationError

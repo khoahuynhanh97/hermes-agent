@@ -55,6 +55,9 @@ _SAFE_OPERATION_DETAILS = {
         "backup candidate verification failed"
     ),
     ("backup", "promotion_failed"): "backup candidate promotion failed",
+    ("backup", "promotion_cleanup_failed"): (
+        "backup candidate promotion cleanup failed"
+    ),
     ("backup", "candidate_allocation_failed"): (
         "backup candidate allocation failed"
     ),
@@ -65,6 +68,11 @@ _SAFE_OPERATION_DETAILS = {
     ("restore", "restored_candidate_invalid"): (
         "restored database verification failed"
     ),
+    ("restore", "exclusive_access_required"): (
+        "restore requires exclusive database access"
+    ),
+    ("restore", "stage_failed"): "restore staging failed",
+    ("restore", "rollback_failed"): "restore rollback failed",
     ("restore", "restore_failed"): "restore failed",
 }
 
@@ -185,7 +193,23 @@ class SQLiteBackupManager:
                 path=temporary,
                 detail="backup candidate promotion failed",
             ) from None
-        temporary.unlink()
+        try:
+            temporary.unlink()
+        except OSError:
+            try:
+                target.unlink()
+            except OSError:
+                for alias in (target, temporary):
+                    try:
+                        alias.chmod(0o444)
+                    except OSError:
+                        pass
+            raise BackupOperationError(
+                operation="backup",
+                code="promotion_cleanup_failed",
+                path=temporary,
+                detail="backup candidate promotion cleanup failed",
+            ) from None
         self._remove_sidecars(temporary)
         return target
 
@@ -382,6 +406,8 @@ class SQLiteBackupManager:
         )
         os.close(descriptor)
         temporary = Path(temporary_name)
+        restore_lock: tuple[int, Path] | None = None
+        rollback_dir: Path | None = None
         try:
             source_uri = _sqlite_uri(
                 source_path,
@@ -401,9 +427,23 @@ class SQLiteBackupManager:
                     path=source_path,
                     detail="restored database verification failed",
                 )
-            for suffix in ("-wal", "-shm"):
-                Path(str(self.database.path) + suffix).unlink(missing_ok=True)
-            temporary.replace(self.database.path)
+
+            restore_lock = self._acquire_restore_lock()
+            staged: list[tuple[Path, Path]] = []
+            if self.database.path.exists():
+                self._checkpoint_live_database()
+                rollback_dir = self._allocate_restore_rollback()
+                staged = self._stage_live_database(rollback_dir)
+            try:
+                self._replace_path(temporary, self.database.path)
+            except OSError:
+                self._rollback_staged(staged)
+                raise BackupOperationError(
+                    operation="restore",
+                    code="restore_failed",
+                    path=source_path,
+                    detail="restore failed",
+                ) from None
         except BackupOperationError:
             raise
         except (OSError, sqlite3.Error):
@@ -414,13 +454,147 @@ class SQLiteBackupManager:
                 detail="restore failed",
             ) from None
         finally:
-            temporary.unlink(missing_ok=True)
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
             self._remove_sidecars(temporary)
+            if restore_lock is not None:
+                self._release_restore_lock(*restore_lock)
         return {
             "restored_from": str(source_path),
             "database": str(self.database.path),
             "pre_restore_backup": str(pre_restore or ""),
+            "rollback_snapshot": str(rollback_dir or ""),
         }
+
+    def _acquire_restore_lock(self) -> tuple[int, Path]:
+        lock_path = Path(f"{self.database.path}.restore.lock")
+        try:
+            descriptor = os.open(
+                lock_path,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            )
+        except OSError:
+            raise BackupOperationError(
+                operation="restore",
+                code="exclusive_access_required",
+                path=self.database.path,
+                detail="restore requires exclusive database access",
+            ) from None
+        return descriptor, lock_path
+
+    @staticmethod
+    def _release_restore_lock(descriptor: int, lock_path: Path) -> None:
+        try:
+            os.close(descriptor)
+        finally:
+            try:
+                lock_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def _checkpoint_live_database(self) -> None:
+        try:
+            with closing(
+                sqlite3.connect(
+                    _sqlite_uri(self.database.path, mode="rw"),
+                    uri=True,
+                    timeout=self.database.busy_timeout_ms / 1000,
+                    isolation_level=None,
+                )
+            ) as connection:
+                connection.execute(
+                    f"PRAGMA busy_timeout = {self.database.busy_timeout_ms}"
+                )
+                checkpoint = connection.execute(
+                    "PRAGMA wal_checkpoint(TRUNCATE)"
+                ).fetchone()
+                if checkpoint and int(checkpoint[0]) != 0:
+                    raise BackupOperationError(
+                        operation="restore",
+                        code="exclusive_access_required",
+                        path=self.database.path,
+                        detail="restore requires exclusive database access",
+                    )
+                connection.execute("BEGIN EXCLUSIVE")
+                connection.rollback()
+        except BackupOperationError:
+            raise
+        except (OSError, sqlite3.Error):
+            raise BackupOperationError(
+                operation="restore",
+                code="exclusive_access_required",
+                path=self.database.path,
+                detail="restore requires exclusive database access",
+            ) from None
+
+    def _allocate_restore_rollback(self) -> Path:
+        for _ in range(16):
+            path = self.database.path.parent / (
+                f".{self.database.path.name}.restore-rollback-"
+                f"{_timestamp()}-{secrets.token_hex(8)}"
+            )
+            try:
+                path.mkdir()
+            except FileExistsError:
+                continue
+            except OSError:
+                break
+            return path
+        raise BackupOperationError(
+            operation="restore",
+            code="stage_failed",
+            path=self.database.path,
+            detail="restore staging failed",
+        )
+
+    def _stage_live_database(
+        self,
+        rollback_dir: Path,
+    ) -> list[tuple[Path, Path]]:
+        originals = [
+            Path(f"{self.database.path}-wal"),
+            Path(f"{self.database.path}-shm"),
+            self.database.path,
+        ]
+        staged: list[tuple[Path, Path]] = []
+        try:
+            for original in originals:
+                if not original.exists():
+                    continue
+                rollback_path = rollback_dir / original.name
+                self._replace_path(original, rollback_path)
+                staged.append((original, rollback_path))
+        except OSError:
+            self._rollback_staged(staged)
+            raise BackupOperationError(
+                operation="restore",
+                code="stage_failed",
+                path=self.database.path,
+                detail="restore staging failed",
+            ) from None
+        return staged
+
+    def _rollback_staged(
+        self,
+        staged: list[tuple[Path, Path]],
+    ) -> None:
+        try:
+            for original, rollback_path in reversed(staged):
+                if rollback_path.exists():
+                    self._replace_path(rollback_path, original)
+        except OSError:
+            raise BackupOperationError(
+                operation="restore",
+                code="rollback_failed",
+                path=self.database.path,
+                detail="restore rollback failed",
+            ) from None
+
+    @staticmethod
+    def _replace_path(source: Path, target: Path) -> None:
+        os.replace(source, target)
 
     def export_json(self, output_path: str | Path | None = None) -> Path:
         self.database.initialize()
