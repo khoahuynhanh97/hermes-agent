@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import sqlite3
+import tempfile
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TypedDict
+from urllib.parse import urlencode
 
 from .db import SCHEMA_VERSION, Database
 
@@ -45,6 +48,26 @@ REQUIRED_BACKUP_TABLES = (
 )
 VERIFICATION_COUNT_TABLES = ("lessons", "sources", "lesson_events")
 
+_SAFE_OPERATION_DETAILS = {
+    ("backup", "invalid_source"): "backup source is invalid",
+    ("backup", "backup_failed"): "backup creation failed",
+    ("backup", "candidate_verification_failed"): (
+        "backup candidate verification failed"
+    ),
+    ("backup", "promotion_failed"): "backup candidate promotion failed",
+    ("backup", "candidate_allocation_failed"): (
+        "backup candidate allocation failed"
+    ),
+    ("restore", "invalid_backup"): "restore source is invalid",
+    ("restore", "source_is_destination"): (
+        "restore source cannot be the live database"
+    ),
+    ("restore", "restored_candidate_invalid"): (
+        "restored database verification failed"
+    ),
+    ("restore", "restore_failed"): "restore failed",
+}
+
 
 class BackupVerification(TypedDict):
     ok: bool
@@ -57,6 +80,34 @@ class BackupVerification(TypedDict):
     detail: str
 
 
+class BackupOperationError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        operation: str,
+        code: str,
+        path: str | Path,
+        detail: str,
+    ):
+        self.operation = operation
+        self.code = code
+        self.path = Path(path).expanduser().resolve()
+        self.detail = _SAFE_OPERATION_DETAILS.get(
+            (operation, code),
+            f"{operation} failed",
+        )
+        super().__init__(self.detail)
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "ok": False,
+            "operation": self.operation,
+            "code": self.code,
+            "path": str(self.path),
+            "detail": self.detail,
+        }
+
+
 def _timestamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
 
@@ -64,6 +115,10 @@ def _timestamp() -> str:
 def _label(value: str) -> str:
     cleaned = re.sub(r"[^a-zA-Z0-9_-]+", "-", value or "backup").strip("-")
     return cleaned[:48] or "backup"
+
+
+def _sqlite_uri(path: Path, **query: str) -> str:
+    return f"{path.expanduser().resolve().as_uri()}?{urlencode(query)}"
 
 
 class SQLiteBackupManager:
@@ -82,28 +137,86 @@ class SQLiteBackupManager:
         self.backup_dir.mkdir(parents=True, exist_ok=True)
 
     def create_backup(self, label: str = "scheduled") -> Path:
-        self.database.initialize()
-        target = self.backup_dir / f"hermes-{_timestamp()}-{_label(label)}.db"
-        temporary = target.with_suffix(".db.tmp")
+        source_path = self.database.path.expanduser().resolve()
+        source_verification = self._verify_path(source_path, immutable=False)
+        if not source_verification["ok"]:
+            raise BackupOperationError(
+                operation="backup",
+                code="invalid_source",
+                path=source_path,
+                detail="backup source is invalid",
+            )
+
+        target, temporary = self._allocate_backup_paths(label)
         try:
-            with self.database.connect() as source, closing(sqlite3.connect(temporary)) as destination:
+            with closing(
+                sqlite3.connect(
+                    _sqlite_uri(source_path, mode="ro"),
+                    uri=True,
+                )
+            ) as source, closing(sqlite3.connect(temporary)) as destination:
+                source.execute("PRAGMA query_only = ON")
                 source.backup(destination)
-        except Exception:
+        except (OSError, sqlite3.Error):
             self._remove_sidecars(temporary)
-            raise
+            raise BackupOperationError(
+                operation="backup",
+                code="backup_failed",
+                path=temporary,
+                detail="backup creation failed",
+            ) from None
 
         verification = self.verify(temporary)
         if not verification["ok"]:
             self._remove_sidecars(temporary)
-            raise RuntimeError(
-                "Backup verification failed: "
-                f"{verification['detail']}. Candidate retained at {temporary}"
+            raise BackupOperationError(
+                operation="backup",
+                code="candidate_verification_failed",
+                path=temporary,
+                detail="backup candidate verification failed",
             )
 
-        temporary.replace(target)
+        try:
+            os.link(temporary, target)
+        except (FileExistsError, OSError):
+            raise BackupOperationError(
+                operation="backup",
+                code="promotion_failed",
+                path=temporary,
+                detail="backup candidate promotion failed",
+            ) from None
+        temporary.unlink()
         self._remove_sidecars(temporary)
-        self.prune()
         return target
+
+    def _allocate_backup_paths(self, label: str) -> tuple[Path, Path]:
+        prefix = f"hermes-{_timestamp()}-{_label(label)}"
+        for _ in range(16):
+            token = secrets.token_hex(8)
+            target = self.backup_dir / f"{prefix}-{token}.db"
+            temporary = target.with_suffix(".db.tmp")
+            try:
+                descriptor = os.open(
+                    temporary,
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                )
+            except FileExistsError:
+                continue
+            except OSError:
+                raise BackupOperationError(
+                    operation="backup",
+                    code="candidate_allocation_failed",
+                    path=self.backup_dir,
+                    detail="backup candidate allocation failed",
+                ) from None
+            os.close(descriptor)
+            return target, temporary
+        raise BackupOperationError(
+            operation="backup",
+            code="candidate_allocation_failed",
+            path=self.backup_dir,
+            detail="backup candidate allocation failed",
+        )
 
     @staticmethod
     def _verification_failure(
@@ -134,7 +247,18 @@ class SQLiteBackupManager:
         }
 
     def verify(self, path: str | Path) -> BackupVerification:
-        candidate = Path(path).expanduser().resolve()
+        return self._verify_path(
+            Path(path).expanduser().resolve(),
+            immutable=True,
+        )
+
+    def _verify_path(
+        self,
+        candidate: Path,
+        *,
+        immutable: bool,
+    ) -> BackupVerification:
+        candidate = candidate.expanduser().resolve()
         if not candidate.is_file():
             return self._verification_failure(
                 candidate,
@@ -143,7 +267,11 @@ class SQLiteBackupManager:
         try:
             with closing(
                 sqlite3.connect(
-                    f"file:{candidate.as_posix()}?mode=ro&immutable=1",
+                    _sqlite_uri(
+                        candidate,
+                        mode="ro",
+                        **({"immutable": "1"} if immutable else {}),
+                    ),
                     uri=True,
                 )
             ) as connection:
@@ -224,20 +352,67 @@ class SQLiteBackupManager:
         source_path = Path(backup_path).expanduser().resolve()
         verification = self.verify(source_path)
         if not verification["ok"]:
-            raise ValueError(f"Refusing invalid SQLite backup: {verification['detail']}")
-        pre_restore = self.create_backup(label="pre-restore") if self.database.path.exists() else None
-        temporary = self.database.path.with_suffix(".restore.tmp")
-        temporary.parent.mkdir(parents=True, exist_ok=True)
+            raise BackupOperationError(
+                operation="restore",
+                code="invalid_backup",
+                path=source_path,
+                detail="restore source is invalid",
+            )
+        if (
+            self.database.path.exists()
+            and source_path.samefile(self.database.path)
+        ):
+            raise BackupOperationError(
+                operation="restore",
+                code="source_is_destination",
+                path=source_path,
+                detail="restore source cannot be the live database",
+            )
+
+        pre_restore = (
+            self.create_backup(label="pre-restore")
+            if self.database.path.exists()
+            else None
+        )
+        self.database.path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{self.database.path.name}.restore-",
+            suffix=".tmp",
+            dir=self.database.path.parent,
+        )
+        os.close(descriptor)
+        temporary = Path(temporary_name)
         try:
-            source_uri = f"file:{source_path.as_posix()}?mode=ro&immutable=1"
-            with closing(sqlite3.connect(source_uri, uri=True)) as source, closing(sqlite3.connect(temporary)) as destination:
+            source_uri = _sqlite_uri(
+                source_path,
+                mode="ro",
+                immutable="1",
+            )
+            with closing(
+                sqlite3.connect(source_uri, uri=True)
+            ) as source, closing(sqlite3.connect(temporary)) as destination:
+                source.execute("PRAGMA query_only = ON")
                 source.backup(destination)
             restored_check = self.verify(temporary)
             if not restored_check["ok"]:
-                raise RuntimeError(f"Restored database failed integrity check: {restored_check['detail']}")
+                raise BackupOperationError(
+                    operation="restore",
+                    code="restored_candidate_invalid",
+                    path=source_path,
+                    detail="restored database verification failed",
+                )
             for suffix in ("-wal", "-shm"):
                 Path(str(self.database.path) + suffix).unlink(missing_ok=True)
             temporary.replace(self.database.path)
+        except BackupOperationError:
+            raise
+        except (OSError, sqlite3.Error):
+            raise BackupOperationError(
+                operation="restore",
+                code="restore_failed",
+                path=source_path,
+                detail="restore failed",
+            ) from None
         finally:
             temporary.unlink(missing_ok=True)
             self._remove_sidecars(temporary)
@@ -265,14 +440,6 @@ class SQLiteBackupManager:
         temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         temporary.replace(target)
         return target
-
-    def prune(self) -> list[Path]:
-        backups = sorted(self.backup_dir.glob("hermes-*.db"), key=lambda path: path.stat().st_mtime)
-        removed = backups[:-self.keep]
-        for path in removed:
-            path.unlink(missing_ok=True)
-            self._remove_sidecars(path)
-        return removed
 
     @staticmethod
     def _remove_sidecars(database_path: Path) -> None:
