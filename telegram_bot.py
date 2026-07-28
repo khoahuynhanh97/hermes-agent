@@ -2,6 +2,7 @@ import os
 import sys
 import logging
 import asyncio
+import hashlib
 import re
 import json
 from html import escape as html_escape, unescape as html_unescape
@@ -34,6 +35,8 @@ from core.llm_gateway import complete as llm_complete, health_check, list_models
 from core.conversation_memory import get_memory
 from core.knowledge_store import get_store
 from core.source_validation import validate_learning_source
+from hermes.assistant import extract_learning_request, extract_memory_request
+from hermes.memory import MemoryRepository
 from core.repository_search import (
     extract_repository_query,
     format_repository_context,
@@ -67,6 +70,21 @@ REPORT_PRIORITY = [
 LEARNING_STORE = LearningReviewStore()
 VIDEO_SOURCE_DIR = LEARNING_STORE.root / "video_sources"
 VIDEO_SOURCE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def save_text_learning_source(text: str, owner_user_id: str | int) -> tuple[Path, dict]:
+    payload = (text or "").strip()
+    if not payload:
+        raise ValueError("Learning text cannot be empty")
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    root = Path(os.environ.get("HERMES_DATA_DIR", config.HERMES_DATA_DIR)).resolve()
+    target_dir = root / "learning_sources" / str(owner_user_id)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / f"text-{digest[:16]}.txt"
+    temporary = target.with_suffix(".txt.tmp")
+    temporary.write_text(payload, encoding="utf-8")
+    temporary.replace(target)
+    return target, {"sha256": digest, "bytes": len(payload.encode("utf-8"))}
 
 # Life-cycle and configuration flags (CODEX JOB #001)
 _stop_event = asyncio.Event()
@@ -512,7 +530,14 @@ def should_defer_source_fetch(source_value: str, source_kind: str) -> bool:
     return source_kind == "tiktok_url" and (host == "tiktok.com" or host.endswith(".tiktok.com"))
 
 
-def build_video_job(mode, source_value: str, extra_note: str = "", telegram_info: dict = None, source_kind: str = "tiktok_url"):
+def build_video_job(
+    mode,
+    source_value: str,
+    extra_note: str = "",
+    telegram_info: dict = None,
+    source_kind: str = "tiktok_url",
+    reanalysis_target_id: str = "",
+):
     if isinstance(mode, dict):
         mode = mode.get("mode", MODE_LEARN_KNOWLEDGE)
     manager = AgentJobManager()
@@ -614,12 +639,40 @@ def build_video_job(mode, source_value: str, extra_note: str = "", telegram_info
     if job.get("duplicate"):
         return job
 
+    if reanalysis_target_id:
+        job["reanalysis_target_id"] = reanalysis_target_id
+        manager._write_json(Path(job["paths"]["job_file"]), job)
+        manager._write_json(Path(job["target"]["output_dir"]) / "job.json", job)
+
     if should_defer_source_fetch(source_value, source_kind):
         logger.info("[*] Defer TikTok media classification and transcript extraction to worker: %s", source_value)
         return job
 
     # Tích hợp CODEX JOB #002: Lấy transcript của video từ xa không qua Gemini File API
     try:
+        if source_kind == "website_url":
+            from tools.url_inspector import inspect_url
+
+            inspected = inspect_url(source_value)
+            job["source"].update(
+                transcript=inspected["text"],
+                transcript_method="website_text",
+                metadata={
+                    "title": inspected["title"],
+                    "description": inspected["description"],
+                    "content_type": inspected["content_type"],
+                    "bytes_read": inspected["bytes_read"],
+                },
+                fetch_status="success",
+                fetch_confidence="medium",
+            )
+            manager._write_json(Path(job["paths"]["job_file"]), job)
+            manager._write_json(Path(job["target"]["output_dir"]) / "job.json", job)
+            return job
+
+        if source_kind == "text":
+            return job
+
         from core.video_fetcher import fetch_transcript
         output_dir = job["target"]["output_dir"]
         logger.info(f"[*] Bắt đầu trích xuất transcript cho {source_value} tại {output_dir}")
@@ -759,23 +812,38 @@ async def create_product_job_command(update: Update, context: ContextTypes.DEFAU
         await reply_html(update.message, f"Lỗi tạo Job Manifest: {exc}")
 
 
-async def create_video_job_command(update: Update, context: ContextTypes.DEFAULT_TYPE, mode: str):
+async def create_video_job_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    mode: str,
+    *,
+    explicit_source_text: str = "",
+):
+    if explicit_source_text:
+        owner_id = update.effective_user.id
+        source_path, source_meta = save_text_learning_source(explicit_source_text, owner_id)
+        return await enqueue_learning_job(
+            update,
+            mode=mode,
+            source_value=str(source_path),
+            source_kind="text",
+            source_metadata=source_meta,
+        )
+
     url = get_pending_video_url(update, context)
     pending_file = None if url else get_pending_video_file(update)
     source_value = url
-    
-    source_kind = "url"
+    source_kind = "website_url"
     if url:
         if "tiktok" in url.lower():
             source_kind = "tiktok_url"
         elif "youtube" in url.lower() or "youtu.be" in url.lower():
             source_kind = "youtube_url"
-            
+
     local_video_path = None
     source_metadata = {}
-
     if not source_value and pending_file:
-        await reply_html(update.message, "Da nhan file/media. Minh dang luu nguon vao kho hoc hoi...")
+        await reply_html(update.message, "Saving the attached learning source...")
         local_video_path, source_metadata = await save_telegram_video_source(update, context, pending_file)
         source_value = str(local_video_path.resolve()) if local_video_path else f"telegram_file:{pending_file.get('file_id', '')}"
         if local_video_path:
@@ -784,58 +852,64 @@ async def create_video_job_command(update: Update, context: ContextTypes.DEFAULT
             source_kind = "telegram_file"
 
     if not source_value:
-        await reply_html(update.message,
-            "Mình chưa nhận được link hoặc file video nào. Hãy gửi link TikTok/YouTube hoặc gửi file video kèm caption:\n"
-            "/hoc_kien_thuc <link>\n"
-            "/hoc_hook_CTA <link>\n"
-            "/len_kich_ban <link>\n"
-            "/hoc_video"
-        )
-        return
+        await reply_html(update.message, "No learning source was provided.")
+        return None
 
     source_error = validate_learning_source(source_value)
     if source_error and mode in [MODE_LEARN_VIDEO, MODE_LEARN_KNOWLEDGE, MODE_LEARN_HOOK_CTA]:
         await reply_html(update.message, source_error)
-        return
+        return None
 
-    await reply_html(update.message, "Đã nhận yêu cầu. Mình đang tạo job để worker phân tích nội dung...")
+    return await enqueue_learning_job(
+        update,
+        mode=mode,
+        source_value=source_value,
+        source_kind=source_kind,
+        source_metadata=source_metadata,
+        url=url,
+        pending_file=pending_file,
+        local_video_path=local_video_path,
+    )
+
+async def enqueue_learning_job(
+    update: Update,
+    *,
+    mode: str,
+    source_value: str,
+    source_kind: str,
+    source_metadata: dict | None = None,
+    url: str = "",
+    pending_file: dict | None = None,
+    local_video_path=None,
+    reanalysis_target_id: str = "",
+):
+    source_metadata = source_metadata or {}
+    await reply_html(update.message, "Creating a learning job...")
     try:
-        raw_text = get_message_text(update)
-        extra_note = raw_text.replace("/hoc_video", "").replace("/hoc_kien_thuc", "").replace("/hoc_hook_CTA", "").replace("/hoc_hook_cta", "").replace("/len_kich_ban", "")
-        extra_note = extra_note.replace("/học video", "").replace("/lên kịch bản", "")
-        extra_note = extra_note.replace(source_value, "").replace(url or "", "").strip()
-        
+        raw_text = getattr(update.message, "text", "") or ""
+        extra_note = raw_text.replace(source_value, "").replace(url or "", "").strip()
         chat_id = update.effective_chat.id if update.effective_chat else None
-        username = update.effective_user.username if update.effective_user else ""
+        user = update.effective_user
         telegram_info = {
             "chat_id": chat_id,
-            "user_id": update.effective_user.id if update.effective_user else None,
-            "username": username,
+            "user_id": user.id if user else None,
+            "username": getattr(user, "username", "") if user else "",
             "source_metadata": source_metadata,
         }
-
         job = build_video_job(
             mode,
             source_value,
             extra_note=extra_note,
             telegram_info=telegram_info,
             source_kind=source_kind,
+            reanalysis_target_id=reanalysis_target_id,
         )
         if job.get("duplicate"):
-            if chat_id is not None:
-                if url and PENDING_STORE.get_link(chat_id) == url:
-                    PENDING_STORE.clear_link(chat_id)
-                if pending_file:
-                    PENDING_STORE.clear_file(chat_id)
-            await reply_html(update.message,
-                "Video nay da duoc xu ly roi.\n"
-                f"Job ID cu: {job['existing_job_id']}\n"
-                f"Dung /report {job['existing_job_id']} de xem ket qua."
-            )
-            return
+            await reply_html(update.message, f"Existing job: {job['existing_job_id']}")
+            return job
 
         intake_path = ""
-        if mode in [MODE_LEARN_VIDEO, MODE_LEARN_KNOWLEDGE, MODE_LEARN_HOOK_CTA]:
+        if mode in [MODE_LEARN_VIDEO, MODE_LEARN_KNOWLEDGE, MODE_LEARN_HOOK_CTA] and job.get("target", {}).get("output_dir"):
             intake_path = create_learning_intake_note(
                 job=job,
                 source_value=source_value,
@@ -844,26 +918,23 @@ async def create_video_job_command(update: Update, context: ContextTypes.DEFAULT
                 local_video_path=local_video_path,
                 telegram_info=telegram_info,
             )
-
         if chat_id is not None and url and PENDING_STORE.get_link(chat_id) == url:
             PENDING_STORE.clear_link(chat_id)
         if chat_id is not None and pending_file:
             PENDING_STORE.clear_file(chat_id)
-
-        reply = (
-            "Da tao job phan tich video.\n\n"
-            f"Job ID: {job['job_id']}\n"
-            f"Project: {job['target']['project_slug']}\n"
-            f"Output: {job['target']['output_dir']}\n"
-            f"Worker prompt: {job['paths']['worker_prompt']}\n\n"
-            f"Intake note: {intake_path or 'N/A'}\n\n"
-            "Bot se tu dong gui ket qua va tep tin vao day ngay khi Worker/AI xu ly xong."
+        await reply_html(
+            update.message,
+            "Learning job created.\n\n"
+            f"Job ID: {job.get('job_id', '')}\n"
+            f"Project: {job.get('target', {}).get('project_slug', '')}\n"
+            f"Output: {job.get('target', {}).get('output_dir', '')}\n"
+            f"Intake note: {intake_path or 'N/A'}",
         )
-        await reply_html(update.message, reply)
+        return job
     except Exception as exc:
-
-        logger.exception("Failed to create video job")
-        await reply_html(update.message, f"Lỗi tạo job video: {exc}")
+        logger.exception("Failed to create learning job")
+        await reply_html(update.message, f"Could not create learning job: {exc}")
+        return None
 
 
 def create_learning_intake_note(job: dict, source_value: str, source_kind: str, extra_note: str, local_video_path, telegram_info: dict):
@@ -1416,6 +1487,7 @@ async def merge_knowledge_command(update: Update, context: ContextTypes.DEFAULT_
         f"  - Hook: {target_entry.get('hook_type', 'N/A')}\n"
         f"  - CTA: {target_entry.get('cta_style', 'N/A')}\n\n"
         f"Entry goc da danh dau la 'merged'."
+    )
 
 
 async def approve_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1456,6 +1528,112 @@ async def approve_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await reply_html(update.message, msg)
     else:
         await reply_html(update.message, "Khong co lesson pending de approve.")
+
+
+async def propose_memory(update: Update, memory_text: str):
+    user = update.effective_user
+    if not user:
+        return None
+    memory = MemoryRepository().propose(user.id, "preference", memory_text)
+    await reply_html(
+        update.message,
+        "Memory proposal created.\n"
+        f"Approve: /approve_memory {memory['id']}\n"
+        f"Reject: /reject_memory {memory['id']}",
+    )
+    return memory
+
+
+async def remember_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await propose_memory(update, " ".join(context.args or []))
+
+
+async def memory_decision_command(update: Update, context: ContextTypes.DEFAULT_TYPE, decision: str):
+    user = update.effective_user
+    memory_id = (context.args[0] if context.args else "").strip()
+    if not user or not memory_id:
+        await reply_html(update.message, "Usage: /approve_memory <memory_id>")
+        return None
+    repository = MemoryRepository()
+    if decision == "approve":
+        memory = repository.approve(memory_id, user.id)
+    else:
+        memory = repository.reject(memory_id, user.id)
+    await reply_html(update.message, "Memory updated." if memory else "Memory not found.")
+    return memory
+
+
+async def approve_memory_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await memory_decision_command(update, context, "approve")
+
+
+async def reject_memory_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await memory_decision_command(update, context, "reject")
+
+
+async def approve_source_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    entry_id = (context.args[0] if context.args else "").strip()
+    if not user or not entry_id:
+        await reply_html(update.message, "Usage: /approve_source <knowledge_id>")
+        return 0
+    store = get_store()
+    entry = store.get_entry(entry_id)
+    if not entry or str(entry.get("owner_user_id")) != str(user.id):
+        await reply_html(update.message, "Knowledge lesson not found.")
+        return 0
+    approved = store.approve_source(entry["source_id"], str(user.id))
+    await reply_html(update.message, f"Approved {approved} lesson(s) from this source.")
+    return approved
+
+
+async def re_analysis_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    entry_id = (context.args[0] if context.args else "").strip()
+    if not user or not entry_id:
+        await reply_html(update.message, "Usage: /re_analysis <knowledge_id>")
+        return None
+    entry = get_store().get_entry(entry_id)
+    if not entry or str(entry.get("owner_user_id")) != str(user.id):
+        await reply_html(update.message, "Knowledge lesson not found.")
+        return None
+    if entry.get("status") != "pending" or not entry.get("needs_reanalysis"):
+        await reply_html(update.message, "Lesson is not pending reanalysis.")
+        return None
+    source_value = str(entry.get("source_url") or "").strip()
+    if not source_value:
+        await reply_html(update.message, "Lesson has no source to reanalyze.")
+        return None
+    lowered = source_value.lower()
+    source_kind = "website_url"
+    if "tiktok" in lowered:
+        source_kind = "tiktok_url"
+    elif "youtube" in lowered or "youtu.be" in lowered:
+        source_kind = "youtube_url"
+    return await enqueue_learning_job(
+        update,
+        mode=MODE_LEARN_KNOWLEDGE,
+        source_value=source_value,
+        source_kind=source_kind,
+        reanalysis_target_id=entry["id"],
+    )
+
+
+async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    backend = os.environ.get("HERMES_STORAGE_BACKEND", config.HERMES_STORAGE_BACKEND).strip().lower()
+    database = Path(os.environ.get("HERMES_DB_PATH", config.HERMES_DB_PATH)).name
+    try:
+        router = health_check()
+        router_status = "healthy" if router.get("ok") else "unhealthy"
+    except Exception:
+        router_status = "unavailable"
+    await reply_html(
+        update.message,
+        "Settings\n"
+        f"Storage: {'SQLite' if backend == 'sqlite' else backend} ({database})\n"
+        f"9Router: {router_status}\n"
+        f"Models: default={config.LLM_DEFAULT_MODEL}, gemini={config.GEMINI_MODEL}, local={config.DEFAULT_LOCAL_MODEL}",
+    )
 
 
 async def clear_memory_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1721,6 +1899,22 @@ async def video_attachment_handler(update: Update, context: ContextTypes.DEFAULT
 async def default_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Lắng nghe các tin nhắn thường không dùng slash command
     user_text = update.message.text
+
+    memory_text = extract_memory_request(user_text)
+    if memory_text:
+        await propose_memory(update, memory_text)
+        return
+
+    learning_text = extract_learning_request(user_text)
+    if learning_text:
+        await create_video_job_command(
+            update,
+            context,
+            mode=MODE_LEARN_KNOWLEDGE,
+            explicit_source_text=learning_text,
+        )
+        return
+
     await update.message.reply_chat_action("typing")
 
     route = resolve_route(user_text)
@@ -2216,6 +2410,12 @@ def main():
     app.add_handler(CommandHandler("reject", reject_command))
     app.add_handler(CommandHandler("merge", merge_knowledge_command))
     app.add_handler(CommandHandler("recover", recover_command))
+    app.add_handler(CommandHandler("remember", remember_command))
+    app.add_handler(CommandHandler("approve_memory", approve_memory_command))
+    app.add_handler(CommandHandler("reject_memory", reject_memory_command))
+    app.add_handler(CommandHandler("approve_source", approve_source_command))
+    app.add_handler(CommandHandler("re_analysis", re_analysis_command))
+    app.add_handler(CommandHandler("settings", settings_command))
     app.add_handler(CommandHandler("clear_memory", clear_memory_command))
     app.add_handler(CommandHandler("retry", retry_command))
     app.add_handler(CommandHandler("cancel", cancel_command))

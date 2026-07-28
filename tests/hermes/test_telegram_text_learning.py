@@ -46,9 +46,19 @@ class TelegramTextLearningTests(unittest.TestCase):
             effective_user=SimpleNamespace(id=42),
             effective_chat=SimpleNamespace(id=42),
         )
-        with patch.object(telegram_bot, "create_video_job_command", new=AsyncMock()) as create:
+        with patch.object(telegram_bot, "create_video_job_command", new=AsyncMock()) as create, patch.object(
+            telegram_bot, "ask_gemini", side_effect=AssertionError("LLM must not be called")
+        ):
             asyncio.run(telegram_bot.default_chat_handler(update, SimpleNamespace(args=[])))
         self.assertEqual(create.await_args.kwargs["mode"], telegram_bot.MODE_LEARN_KNOWLEDGE)
+
+    def test_primary_commands_are_registered(self) -> None:
+        source = Path("telegram_bot.py").read_text(encoding="utf-8")
+        for command in (
+            "remember", "approve_memory", "reject_memory",
+            "approve_source", "re_analysis", "settings",
+        ):
+            self.assertIn(f'CommandHandler("{command}"', source)
 
 
 if __name__ == "__main__":
