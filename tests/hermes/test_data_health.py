@@ -833,6 +833,187 @@ class DataHealthTests(unittest.TestCase):
             )
         )
 
+    def test_approval_event_timestamp_requires_timezone_aware_iso(self) -> None:
+        timestamp_cases = {
+            "naive": "2026-01-01T12:00:00",
+            "utc_z": "2026-01-01T12:00:00Z",
+            "utc_offset": "2026-01-01T12:00:00+00:00",
+            "local_offset": "2026-01-01T12:00:00+07:00",
+        }
+        lessons = {
+            name: self.add_lesson(f"Timestamp {name}")
+            for name in timestamp_cases
+        }
+        for lesson in lessons.values():
+            self.approve(lesson)
+        with self.database.transaction(immediate=True) as connection:
+            for name, lesson in lessons.items():
+                connection.execute(
+                    "UPDATE lessons SET approved_at = NULL WHERE id = ?",
+                    (lesson["id"],),
+                )
+                connection.execute(
+                    """
+                    UPDATE lesson_events SET created_at = ?
+                    WHERE lesson_id = ? AND action = 'approved'
+                    """,
+                    (timestamp_cases[name], lesson["id"]),
+                )
+
+        report = DataHealth(self.database).audit()
+
+        subject_hashes = {
+            name: hashlib.sha256(
+                lesson["id"].encode("utf-8")
+            ).hexdigest()
+            for name, lesson in lessons.items()
+        }
+        timestamp_actions = {
+            action.subject_id
+            for action in report.repair_plan.actions
+            if action.kind == "set_approved_at"
+        }
+        self.assertNotIn(subject_hashes["naive"], timestamp_actions)
+        for name in ("utc_z", "utc_offset", "local_offset"):
+            self.assertIn(subject_hashes[name], timestamp_actions)
+        invalid = next(
+            finding
+            for finding in report.findings
+            if finding.subject_id_hash == subject_hashes["naive"]
+            and finding.code == "approved_at_missing_invalid_event_timestamp"
+        )
+        self.assertEqual(invalid.repair_class, "review")
+
+    def test_required_fts_name_must_be_a_table_not_a_view(self) -> None:
+        lesson = self.add_lesson(
+            "Required table replaced by view",
+            category="error",
+            evidence=False,
+        )
+        self.approve(lesson)
+        health = DataHealth(self.database)
+        stale_plan = health.audit().repair_plan
+        self.assertTrue(
+            any(action.kind == "reject_lesson" for action in stale_plan.actions)
+        )
+        connection = sqlite3.connect(self.database.path)
+        try:
+            connection.execute("DROP TABLE lesson_fts")
+            connection.execute(
+                """
+                CREATE VIEW lesson_fts AS
+                SELECT
+                    '' AS lesson_id,
+                    '' AS owner_user_id,
+                    '' AS title,
+                    '' AS summary,
+                    '' AS content,
+                    '' AS tags
+                WHERE 0
+                """
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        with self.database.connect() as connection:
+            before = {
+                table: [
+                    tuple(row)
+                    for row in connection.execute(
+                        f"SELECT * FROM {table} ORDER BY rowid"
+                    ).fetchall()
+                ]
+                for table in ("lessons", "lesson_events")
+            }
+
+        audit = health.audit()
+        repair = health.repair(stale_plan)
+
+        self.assertEqual(audit.repair_plan.actions, ())
+        finding = next(
+            finding
+            for finding in audit.findings
+            if finding.code == "schema_incompatible"
+        )
+        self.assertEqual(finding.repair_class, "forbidden")
+        self.assertEqual(repair.applied_count, 0)
+        self.assertTrue(
+            all(
+                outcome.reason == "precondition_failed"
+                for outcome in repair.outcomes
+            )
+        )
+        with self.database.connect() as connection:
+            after = {
+                table: [
+                    tuple(row)
+                    for row in connection.execute(
+                        f"SELECT * FROM {table} ORDER BY rowid"
+                    ).fetchall()
+                ]
+                for table in ("lessons", "lesson_events")
+            }
+        self.assertEqual(before, after)
+        self.assertEqual(self.store.get_entry(lesson["id"])["status"], "approved")
+
+    def test_required_ordinary_name_view_is_schema_incompatible(self) -> None:
+        lesson = self.add_lesson(
+            "Ordinary table replaced by view",
+            category="error",
+            evidence=False,
+        )
+        self.approve(lesson)
+        health = DataHealth(self.database)
+        stale_plan = health.audit().repair_plan
+        connection = sqlite3.connect(self.database.path)
+        try:
+            connection.execute("PRAGMA foreign_keys = OFF")
+            connection.execute("DROP TABLE evidence")
+            connection.execute(
+                """
+                CREATE VIEW evidence AS
+                SELECT
+                    '' AS id,
+                    '' AS source_id,
+                    NULL AS artifact_id,
+                    '' AS kind,
+                    '' AS locator,
+                    '' AS excerpt,
+                    '' AS description,
+                    '' AS created_at
+                WHERE 0
+                """
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        with self.database.connect() as connection:
+            before = [
+                tuple(row)
+                for row in connection.execute(
+                    "SELECT * FROM lesson_events ORDER BY rowid"
+                ).fetchall()
+            ]
+
+        audit = health.audit()
+        repair = health.repair(stale_plan)
+
+        self.assertIn(
+            "schema_incompatible",
+            {finding.code for finding in audit.findings},
+        )
+        self.assertEqual(audit.repair_plan.actions, ())
+        self.assertEqual(repair.applied_count, 0)
+        with self.database.connect() as connection:
+            after = [
+                tuple(row)
+                for row in connection.execute(
+                    "SELECT * FROM lesson_events ORDER BY rowid"
+                ).fetchall()
+            ]
+        self.assertEqual(before, after)
+        self.assertEqual(self.store.get_entry(lesson["id"])["status"], "approved")
+
 
 if __name__ == "__main__":
     unittest.main()

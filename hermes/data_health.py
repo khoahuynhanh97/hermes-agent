@@ -145,10 +145,10 @@ def _valid_timestamp(value: str | None) -> bool:
     if text.endswith("Z"):
         text = f"{text[:-1]}+00:00"
     try:
-        datetime.fromisoformat(text)
+        parsed = datetime.fromisoformat(text)
     except ValueError:
         return False
-    return True
+    return parsed.tzinfo is not None and parsed.utcoffset() is not None
 
 
 def _action(
@@ -438,22 +438,7 @@ class DataHealth:
                     )
                 )
 
-            foreign_key_rows = connection.execute(
-                "PRAGMA foreign_key_check"
-            ).fetchall()
-            foreign_key_violations = len(foreign_key_rows)
-            if foreign_key_violations:
-                findings.append(
-                    self._finding(
-                        "foreign_key_violation",
-                        "error",
-                        "database",
-                        str(self.database.path),
-                        "forbidden",
-                        {"violation_count": foreign_key_violations},
-                    )
-                )
-
+            foreign_key_violations = 0
             schema_version = int(
                 connection.execute("PRAGMA user_version").fetchone()[0]
             )
@@ -462,7 +447,7 @@ class DataHealth:
                 for row in connection.execute(
                     """
                     SELECT name FROM sqlite_master
-                    WHERE type IN ('table', 'view')
+                    WHERE type = 'table'
                     """
                 ).fetchall()
             }
@@ -491,6 +476,22 @@ class DataHealth:
                     counts=_empty_counts(),
                     findings=tuple(findings),
                     repair_plan=RepairPlan(),
+                )
+
+            foreign_key_rows = connection.execute(
+                "PRAGMA foreign_key_check"
+            ).fetchall()
+            foreign_key_violations = len(foreign_key_rows)
+            if foreign_key_violations:
+                findings.append(
+                    self._finding(
+                        "foreign_key_violation",
+                        "error",
+                        "database",
+                        str(self.database.path),
+                        "forbidden",
+                        {"violation_count": foreign_key_violations},
+                    )
                 )
 
             counts = {
@@ -1075,7 +1076,7 @@ class DataHealth:
                 for row in connection.execute(
                     """
                     SELECT name FROM sqlite_master
-                    WHERE type IN ('table', 'view')
+                    WHERE type = 'table'
                     """
                 ).fetchall()
             }
