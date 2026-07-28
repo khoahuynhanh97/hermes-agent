@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -46,7 +47,13 @@ REQUIRED_BACKUP_TABLES = (
     "workflow_steps",
     "workflows",
 )
-VERIFICATION_COUNT_TABLES = ("lessons", "sources", "lesson_events")
+VERIFICATION_COUNT_TABLES = (
+    "lessons",
+    "sources",
+    "evidence",
+    "lesson_events",
+    "lesson_fts",
+)
 
 _SAFE_OPERATION_DETAILS = {
     ("backup", "invalid_source"): "backup source is invalid",
@@ -91,6 +98,7 @@ class BackupVerification(TypedDict):
     schema_version: int
     required_tables_missing: list[str]
     counts: dict[str, int]
+    sha256: str
     detail: str
 
 
@@ -146,6 +154,14 @@ def _label(value: str) -> str:
 
 def _sqlite_uri(path: Path, **query: str) -> str:
     return f"{path.expanduser().resolve().as_uri()}?{urlencode(query)}"
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 class SQLiteBackupManager:
@@ -271,6 +287,7 @@ class SQLiteBackupManager:
         schema_version: int = 0,
         required_tables_missing: list[str] | None = None,
         counts: dict[str, int] | None = None,
+        sha256: str = "",
     ) -> BackupVerification:
         return {
             "ok": False,
@@ -286,6 +303,7 @@ class SQLiteBackupManager:
             "counts": counts or {
                 table: 0 for table in VERIFICATION_COUNT_TABLES
             },
+            "sha256": sha256,
             "detail": detail,
         }
 
@@ -308,6 +326,7 @@ class SQLiteBackupManager:
                 "backup file does not exist",
             )
         try:
+            digest = _sha256_file(candidate)
             with closing(
                 sqlite3.connect(
                     _sqlite_uri(
@@ -388,6 +407,7 @@ class SQLiteBackupManager:
             "schema_version": schema_version,
             "required_tables_missing": required_tables_missing,
             "counts": counts,
+            "sha256": digest,
             "detail": detail,
         }
 

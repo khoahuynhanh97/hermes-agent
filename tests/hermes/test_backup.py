@@ -91,8 +91,11 @@ class BackupTests(unittest.TestCase):
                 "counts": {
                     "lessons": 1,
                     "sources": 1,
+                    "evidence": 0,
                     "lesson_events": 2,
+                    "lesson_fts": 1,
                 },
+                "sha256": self._sha256(paths[-1]),
                 "detail": "ok",
             },
         )
@@ -370,8 +373,15 @@ class BackupTests(unittest.TestCase):
                 self.assertIn("required_tables_missing", verification)
                 self.assertEqual(
                     verification["counts"],
-                    {"lessons": 0, "sources": 0, "lesson_events": 0},
+                    {
+                        "lessons": 0,
+                        "sources": 0,
+                        "evidence": 0,
+                        "lesson_events": 0,
+                        "lesson_fts": 0,
+                    },
                 )
+                self.assertIn("sha256", verification)
                 self.assertTrue(verification["detail"])
 
     def test_verify_rejects_unsupported_schema_version(self) -> None:
