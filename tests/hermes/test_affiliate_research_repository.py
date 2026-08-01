@@ -320,3 +320,17 @@ def test_repository_persists_score_reference_ideas_runs_and_projection_rows(data
     assert rows["ideas"][0]["id"] == idea.id
     assert rows["references"][0]["id"] == saved_reference.id
     assert rows["runs"][0]["counters"] == {"imported": 1, "shortlisted": 1}
+
+
+def test_projection_failures_are_persisted_and_cleared_without_new_table(database):
+    repo = repository(database)
+    repo.create_run("run-1", "42", "key-1")
+    repo.finish_run("run-1", {"imported": 1, "shortlisted": 1, "packaged": 0})
+
+    recorded = repo.record_projection_failure("run-1", "sheets", "outage", retryable=True)
+
+    assert recorded["counters"]["projection_failures"] == {
+        "sheets": {"detail": "outage", "retryable": True}
+    }
+    cleared = repo.clear_projection_failure("run-1", "sheets")
+    assert "projection_failures" not in cleared["counters"]

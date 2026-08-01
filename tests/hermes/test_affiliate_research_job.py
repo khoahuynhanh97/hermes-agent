@@ -53,3 +53,59 @@ def test_affiliate_worker_marks_validation_errors_non_retryable(tmp_path):
     assert worker.process_next_job() is True
     assert jobs.get("affiliate")["state"] == "failed"
     assert jobs.get("affiliate")["attempts"] == 1
+
+
+def test_affiliate_worker_requeues_when_projections_are_pending(tmp_path):
+    from core.affiliate_research_jobs import AffiliateResearchJobWorker
+
+    jobs = JobRepository(Database(tmp_path / "hermes.db"))
+    jobs.enqueue("affiliate", "42", "affiliate_product_research", {}, max_attempts=2)
+    worker = AffiliateResearchJobWorker(
+        jobs,
+        handler=lambda _job: {
+            "run_id": "run-1",
+            "package_ids": ["pkg-1"],
+            "failed_projections": ["sheets"],
+        },
+    )
+
+    assert worker.process_next_job() is True
+    assert jobs.get("affiliate")["state"] == "queued"
+    assert jobs.get("affiliate")["attempts"] == 1
+
+
+def test_affiliate_worker_acknowledges_cancellation_before_handler(tmp_path):
+    from core.affiliate_research_jobs import AffiliateResearchJobWorker
+
+    jobs = JobRepository(Database(tmp_path / "hermes.db"))
+    jobs.enqueue("affiliate", "42", "affiliate_product_research", {})
+    original_claim = jobs.claim_next
+
+    def claim_and_cancel(job_type):
+        job = original_claim(job_type)
+        jobs.cancel(job["id"], "42")
+        return job
+
+    jobs.claim_next = claim_and_cancel
+    worker = AffiliateResearchJobWorker(
+        jobs,
+        handler=lambda _job: (_ for _ in ()).throw(AssertionError("handler must not run")),
+    )
+
+    assert worker.process_next_job() is True
+    assert jobs.get("affiliate")["state"] == "cancelled"
+
+
+def test_affiliate_worker_acknowledges_cancellation_after_handler(tmp_path):
+    from core.affiliate_research_jobs import AffiliateResearchJobWorker
+
+    jobs = JobRepository(Database(tmp_path / "hermes.db"))
+    jobs.enqueue("affiliate", "42", "affiliate_product_research", {})
+
+    def handle(job):
+        jobs.cancel(job["id"], "42")
+        return {"run_id": "run-1", "package_ids": ["pkg-1"]}
+
+    assert AffiliateResearchJobWorker(jobs, handle).process_next_job() is True
+    assert jobs.get("affiliate")["state"] == "cancelled"
+    assert jobs.get("affiliate")["result"] == {}

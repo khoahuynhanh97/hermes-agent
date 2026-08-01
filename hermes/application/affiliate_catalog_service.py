@@ -54,7 +54,6 @@ class AffiliateCatalogService:
             (product.platform, product.external_product_id)
             for product in self._repository.list_products(owner_user_id)
         }
-        self._repository.create_run(run_id, owner_user_id, self._run_key(owner_user_id, run_id))
         imported = updated = errors = 0
         for candidate in candidates:
             try:
@@ -102,7 +101,6 @@ class AffiliateCatalogService:
         shortlist = ranked[:maximum]
         for item in shortlist:
             self._repository.save_score(item.product.id, item.score, "shortlisted")
-        self._repository.finish_run(run_id, {"shortlisted": len(shortlist)})
         return shortlist
 
     @staticmethod
@@ -135,10 +133,6 @@ class AffiliateCatalogService:
             created_at=now,
             updated_at=now,
         )
-
-    @staticmethod
-    def _run_key(owner_user_id: str, run_id: str) -> str:
-        return hashlib.sha256(f"{owner_user_id}\0{run_id}".encode("utf-8")).hexdigest()
 
     @staticmethod
     def _category_key(category: str) -> str:

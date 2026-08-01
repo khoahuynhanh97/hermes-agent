@@ -15,6 +15,7 @@ class MemoryAffiliateRepository:
         self.snapshots = {}
         self.scores = {}
         self.runs = []
+        self.finish_calls = []
 
     def upsert_product(self, product):
         for existing in self.products.values():
@@ -60,6 +61,7 @@ class MemoryAffiliateRepository:
         return {"id": run_id}
 
     def finish_run(self, run_id, counters):
+        self.finish_calls.append((run_id, counters))
         return {"id": run_id, "counters": counters}
 
 
@@ -130,6 +132,7 @@ def test_shortlist_excludes_ineligible_products_and_breaks_score_ties_by_product
 
     assert [row.product.id for row in shortlist] == sorted(row.product.id for row in shortlist)
     assert repository.scores[next(product_id for product_id, product in repository.products.items() if product.external_product_id == "999")][1] == "ineligible"
+    assert repository.finish_calls == []
 
 
 @pytest.mark.parametrize("minimum, maximum", [(14, 15), (16, 15), (15, 26)])

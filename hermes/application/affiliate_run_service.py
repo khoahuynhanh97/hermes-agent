@@ -26,6 +26,7 @@ class RunResult:
     shortlisted: int
     package_ids: tuple[str, ...]
     reused: bool = False
+    failed_projections: tuple[str, ...] = ()
 
 
 class ProjectionFailureStore(Protocol):
@@ -115,13 +116,18 @@ class AffiliateRunService:
 
         if run.get("status") == "completed":
             result = self._result_from_completed_run(request.owner_user_id, run_id, run)
-            self._project(request.owner_user_id, result)
+            failed_projections = self._project(
+                request.owner_user_id,
+                result,
+                projections=self._pending_projections(run),
+            )
             return RunResult(
                 run_id=result.run_id,
                 imported=result.imported,
                 shortlisted=result.shortlisted,
                 package_ids=result.package_ids,
                 reused=True,
+                failed_projections=failed_projections,
             )
 
         imported = self._catalog.import_candidates(
@@ -160,8 +166,14 @@ class AffiliateRunService:
                 "packaged": len(result.package_ids),
             },
         )
-        self._project(request.owner_user_id, result)
-        return result
+        failed_projections = self._project(request.owner_user_id, result)
+        return RunResult(
+            run_id=result.run_id,
+            imported=result.imported,
+            shortlisted=result.shortlisted,
+            package_ids=result.package_ids,
+            failed_projections=failed_projections,
+        )
 
     def _result_from_completed_run(self, owner_user_id: str, run_id: str, run: dict) -> RunResult:
         counters = run.get("counters") or {}
@@ -173,16 +185,24 @@ class AffiliateRunService:
             package_ids=tuple(package.id for package in packages),
         )
 
-    def _project(self, owner_user_id: str, result: RunResult) -> None:
-        self._attempt_projection(
-            "sheets", owner_user_id, result.run_id, lambda: self._sheets.sync(owner_user_id, result.run_id)
-        )
-        self._attempt_projection(
-            "telegram",
-            owner_user_id,
-            result.run_id,
-            lambda: self._delivery.send_pending(owner_user_id, result.package_ids),
-        )
+    def _project(
+        self,
+        owner_user_id: str,
+        result: RunResult,
+        *,
+        projections: Sequence[str] = ("sheets", "telegram"),
+    ) -> tuple[str, ...]:
+        failed: list[str] = []
+        for name in projections:
+            if name == "sheets":
+                invoke = lambda: self._sheets.sync(owner_user_id, result.run_id)
+            elif name == "telegram":
+                invoke = lambda: self._delivery.send_pending(owner_user_id, result.package_ids)
+            else:
+                continue
+            if not self._attempt_projection(name, owner_user_id, result.run_id, invoke):
+                failed.append(name)
+        return tuple(failed)
 
     def _attempt_projection(
         self,
@@ -190,13 +210,26 @@ class AffiliateRunService:
         owner_user_id: str,
         run_id: str,
         invoke: Callable[[], ProjectionResult],
-    ) -> None:
+    ) -> bool:
         try:
             outcome = invoke()
         except Exception as error:
             outcome = ProjectionResult(ok=False, retryable=True, detail=str(error)[:1000])
         if not outcome.ok:
+            self._repository.record_projection_failure(
+                run_id, name, outcome.detail, retryable=outcome.retryable
+            )
             self._projection_failures.record(name, owner_user_id, run_id, outcome)
+            return False
+        self._repository.clear_projection_failure(run_id, name)
+        return True
+
+    @staticmethod
+    def _pending_projections(run: dict) -> tuple[str, ...]:
+        failures = (run.get("counters") or {}).get("projection_failures")
+        if not isinstance(failures, dict):
+            return ()
+        return tuple(name for name in ("sheets", "telegram") if name in failures)
 
     @staticmethod
     def _run_id(owner_user_id: str, idempotency_key: str) -> str:

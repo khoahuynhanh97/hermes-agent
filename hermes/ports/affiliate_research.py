@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Protocol, Sequence
+from typing import Any, Protocol, Sequence
 
 from hermes.domain.affiliate_research import (
     AffiliateProduct,
@@ -45,7 +45,13 @@ class AffiliateResearchRepository(Protocol):
 
     def create_run(self, run_id: str, owner_user_id: str, idempotency_key: str) -> dict: ...
 
-    def finish_run(self, run_id: str, counters: dict[str, int]) -> dict: ...
+    def finish_run(self, run_id: str, counters: dict[str, Any]) -> dict: ...
+
+    def record_projection_failure(
+        self, run_id: str, projection: str, detail: str, *, retryable: bool
+    ) -> dict: ...
+
+    def clear_projection_failure(self, run_id: str, projection: str) -> dict: ...
 
     def projection_rows(self, owner_user_id: str, run_id: str) -> dict[str, list[dict]]: ...
 

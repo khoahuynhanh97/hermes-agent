@@ -337,7 +337,7 @@ class SQLiteAffiliateResearchRepository:
                 raise ValueError(f"affiliate run id belongs to another owner: {run_id}")
         return self._run_from_row(row)
 
-    def finish_run(self, run_id: str, counters: dict[str, int]) -> dict:
+    def finish_run(self, run_id: str, counters: dict[str, object]) -> dict:
         now = utc_now()
         with self._database.transaction() as connection:
             cursor = connection.execute(
@@ -354,6 +354,54 @@ class SQLiteAffiliateResearchRepository:
                 "SELECT * FROM affiliate_research_runs WHERE id = ?", (run_id,)
             ).fetchone()
         return self._run_from_row(row)
+
+    def record_projection_failure(
+        self, run_id: str, projection: str, detail: str, *, retryable: bool
+    ) -> dict:
+        if not projection.strip():
+            raise ValueError("projection name is required")
+        with self._database.transaction(immediate=True) as connection:
+            row = connection.execute(
+                "SELECT * FROM affiliate_research_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            if row is None:
+                raise LookupError(f"affiliate run not found: {run_id}")
+            counters = json.loads(row["counters_json"])
+            failures = counters.get("projection_failures")
+            if not isinstance(failures, dict):
+                failures = {}
+                counters["projection_failures"] = failures
+            failures[projection] = {"detail": str(detail)[:1000], "retryable": bool(retryable)}
+            connection.execute(
+                "UPDATE affiliate_research_runs SET counters_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(counters, sort_keys=True), utc_now(), run_id),
+            )
+            updated = connection.execute(
+                "SELECT * FROM affiliate_research_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+        return self._run_from_row(updated)
+
+    def clear_projection_failure(self, run_id: str, projection: str) -> dict:
+        with self._database.transaction(immediate=True) as connection:
+            row = connection.execute(
+                "SELECT * FROM affiliate_research_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            if row is None:
+                raise LookupError(f"affiliate run not found: {run_id}")
+            counters = json.loads(row["counters_json"])
+            failures = counters.get("projection_failures")
+            if isinstance(failures, dict):
+                failures.pop(projection, None)
+                if not failures:
+                    counters.pop("projection_failures", None)
+            connection.execute(
+                "UPDATE affiliate_research_runs SET counters_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(counters, sort_keys=True), utc_now(), run_id),
+            )
+            updated = connection.execute(
+                "SELECT * FROM affiliate_research_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+        return self._run_from_row(updated)
 
     def projection_rows(self, owner_user_id: str, run_id: str) -> dict[str, list[dict]]:
         with self._database.connect() as connection:

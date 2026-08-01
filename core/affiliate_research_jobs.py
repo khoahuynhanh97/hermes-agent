@@ -53,7 +53,11 @@ class AffiliateResearchJobHandler:
             reference_urls=self._reference_urls(payload.get("reference_urls", ())),
         )
         result = self._run_service.run(request)
-        return {"run_id": result.run_id, "package_ids": list(result.package_ids)}
+        return {
+            "run_id": result.run_id,
+            "package_ids": list(result.package_ids),
+            "failed_projections": list(result.failed_projections),
+        }
 
     def _csv_path(self, value: Any) -> Path:
         raw_path = self._required_text(value, "csv_path")
@@ -105,9 +109,23 @@ class AffiliateResearchJobWorker:
         if job is None:
             return False
         try:
+            if self._jobs.is_cancel_requested(job["id"]):
+                self._jobs.acknowledge_cancel(job["id"])
+                return True
             result = self._handler(job)
+            if self._jobs.is_cancel_requested(job["id"]):
+                self._jobs.acknowledge_cancel(job["id"])
+                return True
             run_id = str(result["run_id"])
             package_ids = tuple(result["package_ids"])
+            failed_projections = tuple(result.get("failed_projections", ()))
+            if failed_projections:
+                self._jobs.fail(
+                    job["id"],
+                    f"Affiliate research projections pending: {', '.join(failed_projections)}",
+                    retryable=True,
+                )
+                return True
             self._jobs.complete(
                 job["id"],
                 {
