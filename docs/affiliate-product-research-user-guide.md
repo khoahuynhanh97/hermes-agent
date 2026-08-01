@@ -168,6 +168,13 @@ job = JobRepository(Database()).enqueue(
         "idempotency_key": "daily-2026-08-01",
         "package_limit": 10,
         "reference_urls": [],
+        "web_references": [
+            {
+                "external_product_id": "SKU-123",
+                "url": "https://manufacturer.example.com/specs",
+                "source_kind": "manufacturer"
+            }
+        ],
     },
     max_attempts=3,
 )
@@ -211,7 +218,7 @@ se duoc recover ve queue hoac cancel theo trang thai da luu.
 
 ## 8. Doc ket qua Google Sheets
 
-Hermes quan ly sau tab:
+Hermes quan ly bay tab:
 
 | Tab | Muc dich |
 | --- | --- |
@@ -221,6 +228,7 @@ Hermes quan ly sau tab:
 | `Scripts` | Kich ban, storyboard, prompt AI va evidence |
 | `Approval Queue` | Package dang cho duyet |
 | `Runs & Errors` | Trang thai run, counter va loi projection |
+| `Web Evidence` | Metadata va nguon tai lieu web cong khai (V6) |
 
 Cot canonical va `stable_id` do Hermes quan ly. Nguoi dung duoc:
 

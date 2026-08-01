@@ -49,7 +49,7 @@ def test_v5_migration_creates_run_catalog_outbox_and_provenance(tmp_path):
     database.initialize()
 
     with database.connect() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert connection.execute("PRAGMA user_version").fetchone()[0] >= 5
         tables = {
             row[0]
             for row in connection.execute(
