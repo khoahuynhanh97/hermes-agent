@@ -293,6 +293,8 @@ class SQLiteAffiliateResearchRepository:
         return self._reference_from_row(row)
 
     def save_brief(self, brief: ResearchBrief) -> ResearchBrief:
+        if not self._patterns_are_structured(brief.reference_patterns):
+            raise ValueError("research brief patterns must be structured")
         with self._database.transaction(immediate=True) as connection:
             self._require_owned_product(connection, brief.product_id, brief.owner_user_id)
             self._require_owned_run(connection, brief.run_id, brief.owner_user_id)
@@ -324,6 +326,50 @@ class SQLiteAffiliateResearchRepository:
                 "SELECT * FROM affiliate_research_briefs WHERE id = ?",
                 (brief.id,),
             ).fetchone()
+            if (
+                row["owner_user_id"] != brief.owner_user_id
+                or row["product_id"] != brief.product_id
+                or row["run_id"] != brief.run_id
+                or row["revision"] != brief.revision
+            ):
+                raise ValueError(
+                    f"conflicting research brief identity for id: {brief.id}"
+                )
+            existing_patterns = tuple(
+                json.loads(row["reference_patterns_json"])
+            )
+            existing_provenance = tuple(
+                json.loads(row["reference_pattern_provenance_json"])
+            )
+            needs_replacement = (
+                not self._patterns_are_structured(existing_patterns)
+                or (
+                    not existing_patterns
+                    and bool(brief.reference_patterns)
+                )
+                or (
+                    bool(existing_patterns)
+                    and not existing_provenance
+                )
+            )
+            if needs_replacement:
+                connection.execute(
+                    """
+                    UPDATE affiliate_research_briefs
+                    SET reference_patterns_json = ?,
+                        reference_pattern_provenance_json = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        json.dumps(brief.reference_patterns),
+                        json.dumps(brief.reference_pattern_provenance),
+                        brief.id,
+                    ),
+                )
+                row = connection.execute(
+                    "SELECT * FROM affiliate_research_briefs WHERE id = ?",
+                    (brief.id,),
+                ).fetchone()
         return self._brief_from_row(row)
 
     def save_ideas(
@@ -1045,6 +1091,19 @@ class SQLiteAffiliateResearchRepository:
             raise ValueError("score requires canonical snapshot evidence")
         if not score.snapshot_timestamps:
             raise ValueError("score requires snapshot timestamps")
+
+    @staticmethod
+    def _patterns_are_structured(patterns: Sequence[object]) -> bool:
+        required = {"hook", "pacing", "story"}
+        return all(
+            isinstance(pattern, dict)
+            and set(pattern) == required
+            and all(
+                isinstance(pattern[key], str) and pattern[key].strip()
+                for key in required
+            )
+            for pattern in patterns
+        )
 
     @staticmethod
     def _package_values(package: ContentPackage) -> tuple:

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import sqlite3
+
 import pytest
 from types import SimpleNamespace
 
@@ -627,3 +631,221 @@ def test_telegram_creates_missing_checkpoint_before_external_send(tmp_path):
             (package_id,),
         ).fetchone()
     assert tuple(checkpoint) == ("delivered", "303")
+
+
+def test_pre_v5_raw_brief_upgrade_and_fault_retry_becomes_structured(
+    tmp_path,
+):
+    from hermes.adapters.sqlite.affiliate_research_repository import (
+        SQLiteAffiliateResearchRepository,
+    )
+    from hermes.adapters.sqlite.schema_v2 import apply_schema_v2
+    from hermes.adapters.sqlite.schema_v4 import apply_schema_v4
+    from hermes.application.affiliate_content_service import AffiliateContentService
+    from hermes.db import SCHEMA_V1, SCHEMA_V3
+
+    path = tmp_path / "hermes.db"
+    brief_id = hashlib.sha256(
+        "42\0run-legacy\0p1\0brief\0r1".encode("utf-8")
+    ).hexdigest()
+    raw_pattern = "COPY THIS RAW TITLE AND CAPTION"
+    connection = sqlite3.connect(path)
+    try:
+        connection.executescript(SCHEMA_V1)
+        apply_schema_v2(connection)
+        connection.executescript(SCHEMA_V3)
+        apply_schema_v4(connection)
+        connection.execute(
+            """
+            INSERT INTO affiliate_products(
+                id, owner_user_id, platform, external_product_id, name,
+                category, price_vnd, sold_count, rating, review_count,
+                commission_rate, shop_name, product_url, image_urls_json,
+                visual_signals_json, source_type, source_url,
+                authorization_scope, rights_status, content_hash,
+                created_at, updated_at
+            ) VALUES (
+                'p1', '42', 'shopee', '1', 'Product 1', 'mouse', 300000,
+                100, 4.8, 20, 0.1, 'Shop', 'https://example.test/1',
+                '["https://example.test/1.jpg"]', '["movement"]',
+                'affiliate_csv', 'https://example.test/feed.csv',
+                'user_export', 'affiliate_reference', 'hash-1',
+                '2026-08-01T00:00:00+00:00',
+                '2026-08-01T00:00:00+00:00'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO affiliate_research_runs(
+                id, owner_user_id, idempotency_key, status, counters_json,
+                created_at, updated_at
+            ) VALUES (
+                'run-legacy', '42', 'legacy-key', 'running', '{}',
+                '2026-08-01T00:00:00+00:00',
+                '2026-08-01T00:00:00+00:00'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO affiliate_run_products(
+                run_id, product_id, observation_status, warnings_json,
+                observed_at
+            ) VALUES (
+                'run-legacy', 'p1', 'imported', '[]',
+                '2026-08-01T00:00:00+00:00'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO affiliate_references(
+                id, owner_user_id, product_id, platform, source_url, title,
+                author_name, author_url, thumbnail_url, caption, embed_html,
+                authorization_scope, rights_status, media_local_path,
+                collected_at, source_type, content_hash
+            ) VALUES (
+                'ref-legacy', '42', 'p1', 'tiktok',
+                'https://example.test/ref-legacy',
+                'Before and after fixing a cluttered desk', 'Creator', '', '',
+                'First show the problem, then reveal the clean setup', '',
+                'public_metadata', 'reference_only', '',
+                '2026-08-01T00:00:00+00:00', 'tiktok_oembed',
+                'ref-hash-legacy'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO affiliate_research_briefs(
+                id, owner_user_id, product_id, run_id, revision,
+                verified_specs_json, strengths_json, limitations_json,
+                unverified_claims_json, reference_patterns_json, created_at
+            ) VALUES (?, '42', 'p1', 'run-legacy', 1, '[]', '[]', '[]',
+                      '[]', ?, '2026-08-01T00:00:00+00:00')
+            """,
+            (brief_id, json.dumps([raw_pattern])),
+        )
+        connection.execute("PRAGMA user_version = 4")
+        connection.commit()
+    finally:
+        connection.close()
+
+    database = Database(path)
+    database.initialize()
+    with database.connect() as upgraded:
+        migrated = upgraded.execute(
+            """
+            SELECT reference_patterns_json,
+                   reference_pattern_provenance_json
+            FROM affiliate_research_briefs WHERE id = ?
+            """,
+            (brief_id,),
+        ).fetchone()
+    assert json.loads(migrated["reference_patterns_json"]) == []
+    assert raw_pattern not in migrated["reference_patterns_json"]
+
+    product = _product("p1", "1")
+    reference = ReferenceMetadata(
+        id="ref-legacy",
+        owner_user_id="42",
+        product_id="p1",
+        platform="tiktok",
+        source_url="https://example.test/ref-legacy",
+        title="Before and after fixing a cluttered desk",
+        author_name="Creator",
+        author_url="",
+        thumbnail_url="",
+        caption="First show the problem, then reveal the clean setup",
+        embed_html="",
+        authorization_scope="public_metadata",
+        rights_status="reference_only",
+        media_local_path="",
+        collected_at="2026-08-01T00:00:00+00:00",
+        source_type="tiktok_oembed",
+        content_hash="ref-hash-legacy",
+    )
+
+    class FailOnceGateway:
+        def __init__(self):
+            self.calls = []
+
+        def generate(
+            self, _product, _references, *, brief, selected_idea
+        ):
+            self.calls.append((brief, selected_idea))
+            if len(self.calls) == 1:
+                raise RuntimeError("injected post-brief failure")
+            return {
+                "audience": "office_worker",
+                "angle": "Structured angle",
+                "angle_reason": "Structured evidence",
+                "hook": "Observe the desk change.",
+                "script": "Show the product and the resulting desk layout.",
+                "duration_seconds": 45,
+                "storyboard": [
+                    {"start": 0, "end": 5, "visual": "Product on desk"}
+                ],
+                "ai_prompts": ["Use the supplied product image"],
+                "voiceover_plan": "Neutral",
+                "text_overlays": ["Desk change"],
+                "claims": [
+                    {
+                        "text": "Canonical product information",
+                        "evidence_url": product.product_url,
+                    }
+                ],
+                "warnings": [],
+            }
+
+    repository = SQLiteAffiliateResearchRepository(database)
+    gateway = FailOnceGateway()
+    service = AffiliateContentService(repository, gateway)
+    with pytest.raises(RuntimeError, match="post-brief"):
+        service.create_packages(
+            "42",
+            "run-legacy",
+            [product],
+            [reference],
+            per_run=5,
+        )
+
+    packages = service.create_packages(
+        "42", "run-legacy", [product], [reference], per_run=5
+    )
+    repeated = service.create_packages(
+        "42", "run-legacy", [product], [reference], per_run=5
+    )
+
+    assert repeated == packages
+    assert len(gateway.calls) == 2
+    first_brief, second_brief = (
+        gateway.calls[0][0],
+        gateway.calls[1][0],
+    )
+    assert first_brief == second_brief
+    assert all(
+        set(pattern) == {"hook", "pacing", "story"}
+        for pattern in first_brief.reference_patterns
+    )
+    assert first_brief.reference_pattern_provenance[0][
+        "reference_id"
+    ] == "ref-legacy"
+    with database.connect() as persisted:
+        row = persisted.execute(
+            """
+            SELECT reference_patterns_json,
+                   reference_pattern_provenance_json
+            FROM affiliate_research_briefs WHERE id = ?
+            """,
+            (brief_id,),
+        ).fetchone()
+    assert raw_pattern not in row["reference_patterns_json"]
+    assert all(
+        isinstance(item, dict)
+        for item in json.loads(row["reference_patterns_json"])
+    )
+    assert json.loads(row["reference_pattern_provenance_json"])[0][
+        "reference_id"
+    ] == "ref-legacy"

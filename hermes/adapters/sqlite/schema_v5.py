@@ -23,6 +23,18 @@ CREATE TABLE IF NOT EXISTS affiliate_projection_items (
 """
 
 _V5_BACKFILLS = """
+UPDATE affiliate_research_briefs
+SET
+    reference_patterns_json = '[]',
+    reference_pattern_provenance_json = '[]'
+WHERE json_valid(reference_patterns_json)
+  AND json_type(reference_patterns_json) = 'array'
+  AND EXISTS (
+      SELECT 1
+      FROM json_each(affiliate_research_briefs.reference_patterns_json)
+      WHERE json_each.type = 'text'
+  );
+
 UPDATE affiliate_run_products
 SET
     eligibility_status = COALESCE(
