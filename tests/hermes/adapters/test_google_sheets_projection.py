@@ -31,6 +31,16 @@ class FailingSheetsClient:
         raise RuntimeError("Sheets service unavailable")
 
 
+class SequencedProjectionRepository:
+    def __init__(self, payloads):
+        self._payloads = iter(payloads)
+        self.calls = []
+
+    def projection_rows(self, owner_user_id: str, run_id: str):
+        self.calls.append((owner_user_id, run_id))
+        return next(self._payloads)
+
+
 @pytest.fixture
 def repository():
     with TemporaryDirectory(dir=Path.cwd()) as directory:
@@ -79,6 +89,41 @@ def test_projection_reconciles_six_tabs_by_stable_id(repository):
     }
     projection.sync("42", "run-1")
     assert client.row_count("Products") == 1
+
+
+def test_second_sync_removes_stale_stable_ids_from_another_owner_and_run():
+    from hermes.adapters.google.sheets_projection import GoogleSheetsProjection
+
+    empty_rows = {
+        "references": [],
+        "ideas": [],
+        "packages": [],
+        "approval_events": [],
+    }
+    repository = SequencedProjectionRepository(
+        [
+            {
+                **empty_rows,
+                "products": [{"id": "old-product", "owner_user_id": "99", "name": "Old"}],
+                "runs": [{"id": "old-run", "owner_user_id": "99"}],
+            },
+            {
+                **empty_rows,
+                "products": [{"id": "current-product", "owner_user_id": "42", "name": "Current"}],
+                "runs": [{"id": "current-run", "owner_user_id": "42"}],
+            },
+        ]
+    )
+    client = FakeSheetsClient()
+    projection = GoogleSheetsProjection(repository, client, "sheet-123")
+
+    projection.sync("99", "old-run")
+    result = projection.sync("42", "current-run")
+
+    assert result.ok is True
+    assert [row[0] for row in client.tabs["Products"][1:]] == ["current-product"]
+    assert [row[0] for row in client.tabs["Runs & Errors"][1:]] == ["current-run"]
+    assert repository.calls == [("99", "old-run"), ("42", "current-run")]
 
 
 def test_sheet_outage_returns_retryable_result_without_changing_sqlite(repository):

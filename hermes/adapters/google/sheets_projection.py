@@ -93,19 +93,14 @@ class GoogleSheetsProjection:
     @classmethod
     def _reconcile(cls, current_rows: list[list[object]], payload: list[dict]) -> list[list[object]]:
         header = cls._header(current_rows, payload)
-        existing_by_id = cls._rows_by_stable_id(current_rows, header)
         desired_by_id = {str(row["id"]): row for row in payload}
-
-        reconciled = []
-        seen_ids = set()
-        for stable_id, existing in existing_by_id.items():
-            row = desired_by_id.get(stable_id)
-            reconciled.append(cls._encode_row(stable_id, row, header) if row else existing)
-            seen_ids.add(stable_id)
-        for stable_id, row in desired_by_id.items():
-            if stable_id not in seen_ids:
-                reconciled.append(cls._encode_row(stable_id, row, header))
-        return [header, *reconciled]
+        return [
+            header,
+            *[
+                cls._encode_row(stable_id, row, header)
+                for stable_id, row in desired_by_id.items()
+            ],
+        ]
 
     @staticmethod
     def _header(current_rows: list[list[object]], payload: list[dict]) -> list[str]:
@@ -113,19 +108,6 @@ class GoogleSheetsProjection:
         fields = {key for row in payload for key in row if key != "id"}
         fields.update(column for column in existing_header if column != "stable_id")
         return ["stable_id", *sorted(fields)]
-
-    @staticmethod
-    def _rows_by_stable_id(current_rows: list[list[object]], header: list[str]) -> dict[str, list[object]]:
-        if not current_rows or not current_rows[0] or current_rows[0][0] != "stable_id":
-            return {}
-        existing_header = [str(value) for value in current_rows[0]]
-        rows: dict[str, list[object]] = {}
-        for raw_row in current_rows[1:]:
-            values = {column: raw_row[index] if index < len(raw_row) else "" for index, column in enumerate(existing_header)}
-            stable_id = str(values.get("stable_id", ""))
-            if stable_id:
-                rows[stable_id] = [values.get(column, "") for column in header]
-        return rows
 
     @staticmethod
     def _encode_row(stable_id: str, row: dict, header: list[str]) -> list[object]:
