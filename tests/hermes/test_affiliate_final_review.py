@@ -40,12 +40,12 @@ def _product(product_id: str, external_id: str) -> AffiliateProduct:
     )
 
 
-def test_v4_migration_creates_run_catalog_outbox_and_provenance(tmp_path):
+def test_v5_migration_creates_run_catalog_outbox_and_provenance(tmp_path):
     database = Database(tmp_path / "hermes.db")
     database.initialize()
 
     with database.connect() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
         tables = {
             row[0]
             for row in connection.execute(
@@ -82,6 +82,14 @@ def test_v4_migration_creates_run_catalog_outbox_and_provenance(tmp_path):
         "evidence_ids_json",
         "snapshot_timestamps_json",
     } <= run_columns
+    with database.connect() as connection:
+        brief_columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(affiliate_research_briefs)"
+            )
+        }
+    assert "reference_pattern_provenance_json" in brief_columns
 
 
 def test_run_catalog_and_projection_outbox_are_durable(tmp_path):
@@ -380,8 +388,18 @@ def test_reference_patterns_and_angles_are_abstract_and_evidence_specific():
             content_hash=content_hash,
         )
 
-    first_reference = reference("p1", "ref-1", "COPY THIS TITLE", "ref-hash-1")
-    second_reference = reference("p2", "ref-2", "ANOTHER RAW TITLE", "ref-hash-2")
+    first_reference = reference(
+        "p1",
+        "ref-1",
+        "COPY THIS TITLE before and after a cluttered desk",
+        "ref-hash-1",
+    )
+    second_reference = reference(
+        "p2",
+        "ref-2",
+        "ANOTHER RAW TITLE compare mouse A versus mouse B",
+        "ref-hash-2",
+    )
     first_brief = AffiliateContentService._brief_for(
         first_product, "42", "run-1", [first_reference]
     )
@@ -401,9 +419,12 @@ def test_reference_patterns_and_angles_are_abstract_and_evidence_specific():
         first_product, "42", "run-1", alternate_brief
     )
 
-    assert all("COPY THIS TITLE" not in value for value in first_brief.reference_patterns)
     assert all(
-        "ANOTHER RAW TITLE" not in value
+        "COPY THIS TITLE" not in str(value)
+        for value in first_brief.reference_patterns
+    )
+    assert all(
+        "ANOTHER RAW TITLE" not in str(value)
         for value in second_brief.reference_patterns
     )
     assert first_brief.reference_patterns != second_brief.reference_patterns
@@ -531,3 +552,78 @@ def test_telegram_crash_after_first_send_retries_only_unresolved_package(tmp_pat
             ("run-1", package_ids[1]),
         ).fetchone()[0]
     assert second_message_id == "202"
+
+
+def test_telegram_creates_missing_checkpoint_before_external_send(tmp_path):
+    from hermes.adapters.sqlite.affiliate_research_repository import (
+        SQLiteAffiliateResearchRepository,
+    )
+    from hermes.adapters.telegram.affiliate_review import TelegramReviewDelivery
+    from hermes.application.affiliate_content_service import AffiliateContentService
+
+    database = Database(tmp_path / "hermes.db")
+    repository = SQLiteAffiliateResearchRepository(database)
+    repository.create_run("run-1", "42", "key-1")
+    product = repository.upsert_product(_product("p1", "1"))
+    repository.record_run_product("run-1", product.id)
+    package_id = AffiliateContentService._initial_package_id(
+        "42", "run-1", product.id
+    )
+    repository.save_package(
+        ContentPackage(
+            id=package_id,
+            owner_user_id="42",
+            product_id=product.id,
+            run_id="run-1",
+            revision=1,
+            status=PackageStatus.PENDING_REVIEW,
+            audience="office_worker",
+            angle="Evidence angle",
+            angle_reason="Evidence reason",
+            hook="Evidence hook",
+            script="Evidence script",
+            duration_seconds=45,
+            storyboard=(),
+            ai_prompts=(),
+            voiceover_plan="Voice",
+            text_overlays=(),
+            claims=(),
+            warnings=(),
+            asset_rights={},
+            created_at="2026-08-01T00:00:00+00:00",
+            updated_at="2026-08-01T00:00:00+00:00",
+        )
+    )
+    repository.complete_run("run-1", {"packaged": 1}, ("telegram",))
+
+    class InspectingBot:
+        def send_photo(self, **_kwargs):
+            with database.connect() as connection:
+                checkpoint = connection.execute(
+                    """
+                    SELECT status FROM affiliate_projection_items
+                    WHERE run_id = 'run-1' AND projection = 'telegram'
+                      AND item_id = ?
+                    """,
+                    (package_id,),
+                ).fetchone()
+            assert checkpoint is not None
+            assert checkpoint["status"] == "pending"
+            return SimpleNamespace(message_id=303)
+
+    result = TelegramReviewDelivery(
+        repository, InspectingBot(), chat_id="42"
+    ).send_pending("42", [package_id])
+
+    assert result.ok is True
+    with database.connect() as connection:
+        checkpoint = connection.execute(
+            """
+            SELECT status, external_message_id
+            FROM affiliate_projection_items
+            WHERE run_id = 'run-1' AND projection = 'telegram'
+              AND item_id = ?
+            """,
+            (package_id,),
+        ).fetchone()
+    assert tuple(checkpoint) == ("delivered", "303")

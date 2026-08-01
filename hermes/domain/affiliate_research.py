@@ -137,8 +137,9 @@ class ResearchBrief:
     strengths: tuple[str, ...]
     limitations: tuple[str, ...]
     unverified_claims: tuple[str, ...]
-    reference_patterns: tuple[str, ...]
+    reference_patterns: tuple[dict[str, str], ...]
     created_at: str
+    reference_pattern_provenance: tuple[dict[str, object], ...] = ()
 
 
 class PackageStatus(str, Enum):

@@ -134,6 +134,11 @@ class TelegramReviewDelivery:
                 package = packages.get(package_id)
                 if package is None or package.status.value != "pending_review":
                     continue
+                ensure_item = getattr(
+                    self._repository, "ensure_projection_item", None
+                )
+                if ensure_item is not None:
+                    ensure_item(package.run_id, "telegram", package.id)
                 pending_items = getattr(
                     self._repository, "pending_projection_items", None
                 )

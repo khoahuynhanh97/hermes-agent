@@ -95,6 +95,13 @@ class AffiliateResearchRepository(Protocol):
         item_ids: Sequence[str],
     ) -> list[str]: ...
 
+    def ensure_projection_item(
+        self,
+        run_id: str,
+        projection: str,
+        item_id: str,
+    ) -> None: ...
+
     def mark_projection_item_delivered(
         self,
         run_id: str,

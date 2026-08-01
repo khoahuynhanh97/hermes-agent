@@ -181,6 +181,58 @@ def test_package_is_valid_keeps_reference_rights_and_persists_ideas(repository, 
     assert len(repository.ideas) == 3
 
 
+def test_content_service_uses_injected_reference_pattern_abstractor(
+    repository, product, reference
+):
+    from hermes.application.affiliate_content_service import AffiliateContentService
+    from hermes.application.reference_pattern_abstractor import (
+        ReferencePattern,
+    )
+
+    class StubAbstractor:
+        def __init__(self):
+            self.calls = []
+
+        def abstract(self, references):
+            self.calls.append(tuple(references))
+            return (
+                ReferencePattern(
+                    hook="observable problem reveal",
+                    pacing="stepwise demonstration",
+                    story="friction-intervention-outcome",
+                    provenance={
+                        "reference_id": reference.id,
+                        "source_type": reference.source_type,
+                        "content_hash": reference.content_hash,
+                        "collected_at": reference.collected_at,
+                        "observable_fields": ("title", "caption"),
+                        "matched_signals": ("problem_solution",),
+                    },
+                ),
+            )
+
+    abstractor = StubAbstractor()
+    AffiliateContentService(
+        repository,
+        FakeContentGateway(valid_payload()),
+        reference_pattern_abstractor=abstractor,
+    ).create_packages(
+        "42", "run-1", [product], [reference], per_run=5
+    )
+
+    assert abstractor.calls == [(reference,)]
+    assert repository.brief.reference_patterns == (
+        {
+            "hook": "observable problem reveal",
+            "pacing": "stepwise demonstration",
+            "story": "friction-intervention-outcome",
+        },
+    )
+    assert repository.brief.reference_pattern_provenance[0][
+        "reference_id"
+    ] == reference.id
+
+
 def test_content_service_rejects_references_without_reference_only_rights(repository, product, reference):
     from hermes.application.affiliate_content_service import (
         AffiliateContentService,

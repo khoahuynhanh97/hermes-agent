@@ -301,8 +301,9 @@ class SQLiteAffiliateResearchRepository:
                 INSERT OR IGNORE INTO affiliate_research_briefs(
                     id, owner_user_id, product_id, run_id, revision,
                     verified_specs_json, strengths_json, limitations_json,
-                    unverified_claims_json, reference_patterns_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    unverified_claims_json, reference_patterns_json,
+                    reference_pattern_provenance_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     brief.id,
@@ -315,6 +316,7 @@ class SQLiteAffiliateResearchRepository:
                     json.dumps(brief.limitations),
                     json.dumps(brief.unverified_claims),
                     json.dumps(brief.reference_patterns),
+                    json.dumps(brief.reference_pattern_provenance),
                     brief.created_at,
                 ),
             )
@@ -675,6 +677,49 @@ class SQLiteAffiliateResearchRepository:
                 )
             }
         return [item_id for item_id in item_ids if item_id not in delivered]
+
+    def ensure_projection_item(
+        self,
+        run_id: str,
+        projection: str,
+        item_id: str,
+    ) -> None:
+        now = utc_now()
+        with self._database.transaction(immediate=True) as connection:
+            outbox = connection.execute(
+                """
+                SELECT 1 FROM affiliate_projection_outbox
+                WHERE run_id = ? AND projection = ?
+                """,
+                (run_id, projection),
+            ).fetchone()
+            if outbox is None:
+                raise LookupError(
+                    f"affiliate projection outbox entry not found: "
+                    f"{run_id}/{projection}"
+                )
+            if projection == "telegram":
+                package = connection.execute(
+                    """
+                    SELECT 1 FROM affiliate_content_packages
+                    WHERE id = ? AND run_id = ?
+                    """,
+                    (item_id, run_id),
+                ).fetchone()
+                if package is None:
+                    raise LookupError(
+                        f"affiliate package not found in run: "
+                        f"{run_id}/{item_id}"
+                    )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO affiliate_projection_items(
+                    run_id, projection, item_id, status, external_message_id,
+                    attempts, created_at, updated_at
+                ) VALUES (?, ?, ?, 'pending', '', 0, ?, ?)
+                """,
+                (run_id, projection, item_id, now, now),
+            )
 
     def mark_projection_item_delivered(
         self,
@@ -1077,6 +1122,7 @@ class SQLiteAffiliateResearchRepository:
 
     @staticmethod
     def _brief_from_row(row: sqlite3.Row) -> ResearchBrief:
+        keys = set(row.keys())
         return ResearchBrief(
             id=row["id"],
             owner_user_id=row["owner_user_id"],
@@ -1089,6 +1135,11 @@ class SQLiteAffiliateResearchRepository:
             unverified_claims=tuple(json.loads(row["unverified_claims_json"])),
             reference_patterns=tuple(json.loads(row["reference_patterns_json"])),
             created_at=row["created_at"],
+            reference_pattern_provenance=tuple(
+                json.loads(row["reference_pattern_provenance_json"])
+                if "reference_pattern_provenance_json" in keys
+                else ()
+            ),
         )
 
     @staticmethod

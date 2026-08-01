@@ -8,10 +8,11 @@ from typing import Iterator
 
 from hermes.adapters.sqlite.schema_v2 import apply_schema_v2
 from hermes.adapters.sqlite.schema_v4 import apply_schema_v4
+from hermes.adapters.sqlite.schema_v5 import apply_schema_v5
 from .config import HermesPaths
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -368,6 +369,10 @@ class Database:
             if current_version < 4:
                 apply_schema_v4(connection)
                 connection.execute("PRAGMA user_version = 4")
+
+            if current_version < 5:
+                apply_schema_v5(connection)
+                connection.execute("PRAGMA user_version = 5")
             
         finally:
             connection.close()
