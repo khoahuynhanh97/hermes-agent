@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from hermes.adapters.affiliate.shopee_csv import ShopeeAffiliateCsvSource
+from hermes.affiliate_config import AffiliateResearchSettings, load_affiliate_research_settings
 from hermes.application.affiliate_run_service import AffiliateRunRequest, AffiliateRunService
 from hermes.jobs import JobRepository
 
@@ -25,10 +26,12 @@ class AffiliateResearchJobHandler:
         run_service: AffiliateRunService,
         *,
         csv_validator: Callable[[Path, str], None] | None = None,
+        default_package_limit: int = 10,
     ):
         self._import_directory = Path(import_directory).expanduser().resolve()
         self._run_service = run_service
         self._csv_validator = csv_validator or self._validate_csv
+        self._default_package_limit = self._package_limit(default_package_limit)
 
     def __call__(self, job: Mapping[str, Any]) -> dict[str, Any]:
         payload = job.get("payload")
@@ -49,7 +52,7 @@ class AffiliateResearchJobHandler:
             owner_user_id=owner_user_id,
             idempotency_key=self._required_text(payload.get("idempotency_key"), "idempotency_key"),
             csv_path=str(csv_path),
-            package_limit=self._package_limit(payload.get("package_limit", 10)),
+            package_limit=self._package_limit(payload.get("package_limit", self._default_package_limit)),
             reference_urls=self._reference_urls(payload.get("reference_urls", ())),
         )
         result = self._run_service.run(request)
@@ -156,13 +159,24 @@ class AffiliateResearchJobWorker:
 
 
 def build_affiliate_research_job_handler(
-    import_directory: str | Path,
+    import_directory: str | Path | None = None,
     *,
     run_service: AffiliateRunService | None = None,
     review_delivery_factory: Callable[[Any], Any] | None = None,
+    sheets_projection_factory: Callable[[Any], Any] | None = None,
+    settings: AffiliateResearchSettings | None = None,
 ) -> AffiliateResearchJobHandler:
-    """Build the production composition without connecting to external projections."""
+    """Build the production composition without import-time credential or network access."""
+    configuration = settings
+    if configuration is None and (import_directory is None or run_service is None):
+        configuration = load_affiliate_research_settings()
+    resolved_import_directory = import_directory or configuration.import_directory
+    default_package_limit = configuration.package_limit if configuration is not None else 10
     if run_service is None:
+        from hermes.adapters.google.sheets_projection import (
+            DisabledSheetsProjection,
+            GoogleSheetsProjection,
+        )
         from hermes.adapters.model.affiliate_content_gateway import AffiliateContentGateway
         from hermes.adapters.sqlite.affiliate_research_repository import SQLiteAffiliateResearchRepository
         from hermes.application.affiliate_catalog_service import AffiliateCatalogService
@@ -172,11 +186,21 @@ def build_affiliate_research_job_handler(
         from hermes.llm import HermesLLMGateway
 
         repository = SQLiteAffiliateResearchRepository(Database())
+        if configuration.google_sheets_enabled:
+            projection_factory = sheets_projection_factory or GoogleSheetsProjection.from_environment
+            sheets_projection = projection_factory(repository)
+        else:
+            sheets_projection = DisabledSheetsProjection()
         delivery_factory = review_delivery_factory or review_delivery_from_environment
         run_service = AffiliateRunService(
             repository,
             AffiliateCatalogService(repository),
             AffiliateContentService(repository, AffiliateContentGateway(HermesLLMGateway())),
+            sheets_projection=sheets_projection,
             review_delivery=delivery_factory(repository),
         )
-    return AffiliateResearchJobHandler(import_directory, run_service)
+    return AffiliateResearchJobHandler(
+        resolved_import_directory,
+        run_service,
+        default_package_limit=default_package_limit,
+    )
