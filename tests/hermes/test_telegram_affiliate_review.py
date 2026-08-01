@@ -67,7 +67,7 @@ class FakeRepository:
     def list_packages(self, owner_user_id):
         return [item for item in self.packages.values() if item.owner_user_id == owner_user_id]
 
-    def list_products(self, _owner_user_id):
+    def list_products(self, _owner_user_id, run_id=None):
         return [
             SimpleNamespace(
                 id="product-1",
@@ -226,6 +226,27 @@ def test_review_delivery_falls_back_when_async_photo_delivery_fails():
 
     assert result.ok is True
     assert bot.messages[0]["text"]
+
+
+def test_actual_production_package_id_delivers_with_valid_callbacks():
+    from hermes.adapters.telegram.affiliate_review import TelegramReviewDelivery
+    from hermes.application.affiliate_content_service import AffiliateContentService
+
+    package_id = AffiliateContentService._initial_package_id(
+        "42", "run-1", "product-1"
+    )
+    repository = FakeRepository()
+    repository.packages = {package_id: package(package_id)}
+    bot = FakeBot()
+
+    result = TelegramReviewDelivery(repository, bot, chat_id="42").send_pending(
+        "42", [package_id]
+    )
+
+    assert result.ok is True
+    assert bot.messages
+    assert len(f"affiliate_approve:{package_id}".encode("utf-8")) <= 64
+    assert len(f"affiliate_revise:{package_id}:r2".encode("utf-8")) <= 64
 
 
 def test_review_delivery_factory_is_disabled_without_telegram_configuration():

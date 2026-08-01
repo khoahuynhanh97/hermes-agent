@@ -194,7 +194,12 @@ class AffiliateRunService:
         if complete_run is None:
             self._repository.finish_run(run_id, counters)
         else:
-            complete_run(run_id, counters, ("sheets", "telegram"))
+            complete_run(
+                run_id,
+                counters,
+                ("sheets", "telegram"),
+                projection_items={"telegram": result.package_ids},
+            )
         failures = self._project(request.owner_user_id, result)
         return RunResult(
             run_id=result.run_id,

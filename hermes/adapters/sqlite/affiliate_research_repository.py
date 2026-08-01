@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import asdict
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from hermes.db import Database, utc_now
 from hermes.domain.affiliate_research import (
@@ -150,11 +150,16 @@ class SQLiteAffiliateResearchRepository:
             else:
                 rows = connection.execute(
                     """
-                    SELECT product.* FROM affiliate_products AS product
+                    SELECT
+                        product.*,
+                        observation.score AS run_score,
+                        observation.score_reason AS run_score_reason,
+                        observation.score_confidence AS run_score_confidence
+                    FROM affiliate_products AS product
                     JOIN affiliate_run_products AS observation
                       ON observation.product_id = product.id
                     WHERE product.owner_user_id = ? AND observation.run_id = ?
-                    ORDER BY score DESC, updated_at DESC, id
+                    ORDER BY observation.score DESC, product.updated_at DESC, product.id
                     """,
                     (owner_user_id, run_id),
                 ).fetchall()
@@ -195,6 +200,66 @@ class SQLiteAffiliateResearchRepository:
             )
             if cursor.rowcount != 1:
                 raise LookupError(f"affiliate product not found: {product_id}")
+
+    def save_run_score(
+        self,
+        run_id: str,
+        product_id: str,
+        score: ScoreBreakdown,
+        eligibility_status: str,
+        *,
+        rank: int | None = None,
+        shortlisted: bool = False,
+    ) -> None:
+        now = utc_now()
+        with self._database.transaction(immediate=True) as connection:
+            run = connection.execute(
+                "SELECT owner_user_id FROM affiliate_research_runs WHERE id = ?",
+                (run_id,),
+            ).fetchone()
+            if run is None:
+                raise LookupError(f"affiliate run not found: {run_id}")
+            self._require_owned_product(connection, product_id, run["owner_user_id"])
+            self._validate_score_evidence(
+                score, run["owner_user_id"], product_id
+            )
+            score_json = json.dumps(
+                {
+                    "components": score.components,
+                    "growth_rate": score.growth_rate,
+                    "evidence_ids": score.evidence_ids,
+                    "snapshot_timestamps": score.snapshot_timestamps,
+                },
+                sort_keys=True,
+            )
+            cursor = connection.execute(
+                """
+                UPDATE affiliate_run_products SET
+                    eligibility_status = ?, score = ?, score_json = ?,
+                    score_reason = ?, score_confidence = ?, rank = ?,
+                    shortlisted = ?, evidence_ids_json = ?,
+                    snapshot_timestamps_json = ?, observed_at = ?
+                WHERE run_id = ? AND product_id = ?
+                """,
+                (
+                    eligibility_status,
+                    score.total,
+                    score_json,
+                    score.reason,
+                    score.confidence,
+                    rank,
+                    int(shortlisted),
+                    json.dumps(score.evidence_ids),
+                    json.dumps(score.snapshot_timestamps),
+                    now,
+                    run_id,
+                    product_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise LookupError(
+                    f"affiliate run product not found: {run_id}/{product_id}"
+                )
 
     def save_reference(self, reference: ReferenceMetadata) -> ReferenceMetadata:
         with self._database.transaction() as connection:
@@ -271,10 +336,18 @@ class SQLiteAffiliateResearchRepository:
                 connection.execute(
                     """
                     INSERT OR IGNORE INTO affiliate_run_products(
-                        run_id, product_id, observation_status, warnings_json, observed_at
-                    ) VALUES (?, ?, 'imported', '[]', ?)
+                        run_id, product_id, observation_status, warnings_json,
+                        eligibility_status, score, score_json, score_reason,
+                        score_confidence, shortlisted, observed_at
+                    )
+                    SELECT
+                        ?, id, 'imported', '[]', eligibility_status, score,
+                        score_json, score_reason, score_confidence,
+                        CASE WHEN eligibility_status = 'shortlisted' THEN 1 ELSE 0 END,
+                        ?
+                    FROM affiliate_products WHERE id = ?
                     """,
-                    (idea.run_id, idea.product_id, utc_now()),
+                    (idea.run_id, utc_now(), idea.product_id),
                 )
                 connection.execute(
                     """
@@ -314,10 +387,18 @@ class SQLiteAffiliateResearchRepository:
             connection.execute(
                 """
                 INSERT OR IGNORE INTO affiliate_run_products(
-                    run_id, product_id, observation_status, warnings_json, observed_at
-                ) VALUES (?, ?, 'imported', '[]', ?)
+                    run_id, product_id, observation_status, warnings_json,
+                    eligibility_status, score, score_json, score_reason,
+                    score_confidence, shortlisted, observed_at
+                )
+                SELECT
+                    ?, id, 'imported', '[]', eligibility_status, score,
+                    score_json, score_reason, score_confidence,
+                    CASE WHEN eligibility_status = 'shortlisted' THEN 1 ELSE 0 END,
+                    ?
+                FROM affiliate_products WHERE id = ?
                 """,
-                (package.run_id, package.product_id, utc_now()),
+                (package.run_id, utc_now(), package.product_id),
             )
             connection.execute(
                 """
@@ -504,8 +585,16 @@ class SQLiteAffiliateResearchRepository:
         run_id: str,
         counters: dict[str, object],
         projections: Sequence[str],
+        *,
+        projection_items: Mapping[str, Sequence[str]] | None = None,
     ) -> dict:
         now = utc_now()
+        item_map = projection_items or {}
+        unknown = set(item_map) - set(projections)
+        if unknown:
+            raise ValueError(
+                f"projection items require an outbox projection: {sorted(unknown)}"
+            )
         with self._database.transaction(immediate=True) as connection:
             run = connection.execute(
                 "SELECT owner_user_id FROM affiliate_research_runs WHERE id = ?",
@@ -535,6 +624,18 @@ class SQLiteAffiliateResearchRepository:
                     """,
                     (run_id, projection, run["owner_user_id"], now, now),
                 )
+                for item_id in item_map.get(projection, ()):
+                    if not item_id.strip():
+                        raise ValueError("projection item id is required")
+                    connection.execute(
+                        """
+                        INSERT OR IGNORE INTO affiliate_projection_items(
+                            run_id, projection, item_id, status, attempts,
+                            external_message_id, created_at, updated_at
+                        ) VALUES (?, ?, ?, 'pending', 0, '', ?, ?)
+                        """,
+                        (run_id, projection, item_id, now, now),
+                    )
             row = connection.execute(
                 "SELECT * FROM affiliate_research_runs WHERE id = ?", (run_id,)
             ).fetchone()
@@ -551,6 +652,60 @@ class SQLiteAffiliateResearchRepository:
                 (run_id,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def pending_projection_items(
+        self,
+        run_id: str,
+        projection: str,
+        item_ids: Sequence[str],
+    ) -> list[str]:
+        if not item_ids:
+            return []
+        placeholders = ", ".join("?" for _ in item_ids)
+        with self._database.connect() as connection:
+            delivered = {
+                row["item_id"]
+                for row in connection.execute(
+                    f"""
+                    SELECT item_id FROM affiliate_projection_items
+                    WHERE run_id = ? AND projection = ?
+                      AND item_id IN ({placeholders}) AND status = 'delivered'
+                    """,
+                    (run_id, projection, *item_ids),
+                )
+            }
+        return [item_id for item_id in item_ids if item_id not in delivered]
+
+    def mark_projection_item_delivered(
+        self,
+        run_id: str,
+        projection: str,
+        item_id: str,
+        external_message_id: str = "",
+    ) -> None:
+        now = utc_now()
+        with self._database.transaction(immediate=True) as connection:
+            cursor = connection.execute(
+                """
+                UPDATE affiliate_projection_items
+                SET status = 'delivered', attempts = attempts + 1,
+                    external_message_id = ?, updated_at = ?, delivered_at = ?
+                WHERE run_id = ? AND projection = ? AND item_id = ?
+                """,
+                (
+                    str(external_message_id),
+                    now,
+                    now,
+                    run_id,
+                    projection,
+                    item_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise LookupError(
+                    "affiliate projection item not found: "
+                    f"{run_id}/{projection}/{item_id}"
+                )
 
     def mark_projection_result(
         self,
@@ -691,15 +846,43 @@ class SQLiteAffiliateResearchRepository:
             products = self._projection_query(
                 connection,
                 """
-                SELECT product.*, observation.warnings_json AS stale_warnings_json
+                SELECT
+                    product.*,
+                    observation.warnings_json AS stale_warnings_json,
+                    observation.eligibility_status AS run_eligibility_status,
+                    observation.score AS run_score,
+                    observation.score_json AS run_score_payload_json,
+                    observation.score_reason AS run_score_reason,
+                    observation.score_confidence AS run_score_confidence,
+                    observation.rank AS run_rank,
+                    observation.shortlisted AS run_shortlisted,
+                    observation.evidence_ids_json AS run_evidence_ids_json,
+                    observation.snapshot_timestamps_json
+                        AS run_snapshot_timestamps_json
                 FROM affiliate_products AS product
                 JOIN affiliate_run_products AS observation
                   ON observation.product_id = product.id
                 WHERE product.owner_user_id = ? AND observation.run_id = ?
-                ORDER BY product.score DESC, product.id
+                ORDER BY observation.score DESC, product.id
                 """,
                 (owner_user_id, run_id),
             )
+            for product in products:
+                product["eligibility_status"] = product.pop(
+                    "run_eligibility_status"
+                )
+                product["score"] = product.pop("run_score")
+                product["score_json"] = product.pop("run_score_payload")
+                product["score_reason"] = product.pop("run_score_reason")
+                product["score_confidence"] = product.pop(
+                    "run_score_confidence"
+                )
+                product["rank"] = product.pop("run_rank")
+                product["shortlisted"] = product.pop("run_shortlisted")
+                product["evidence_ids"] = product.pop("run_evidence_ids")
+                product["snapshot_timestamps"] = product.pop(
+                    "run_snapshot_timestamps"
+                )
             ideas = self._projection_query(
                 connection,
                 "SELECT * FROM affiliate_content_ideas WHERE owner_user_id = ? AND run_id = ? ORDER BY created_at, id",
@@ -791,6 +974,34 @@ class SQLiteAffiliateResearchRepository:
             raise LookupError(f"affiliate run does not belong to owner: {run_id}")
 
     @staticmethod
+    def _validate_score_evidence(
+        score: ScoreBreakdown, owner_user_id: str, product_id: str
+    ) -> None:
+        source_prefix = f"source:{owner_user_id}:{product_id}:"
+        snapshot_prefix = f"snapshot:{owner_user_id}:{product_id}:"
+        invalid = [
+            evidence_id
+            for evidence_id in score.evidence_ids
+            if not evidence_id.startswith((source_prefix, snapshot_prefix))
+        ]
+        if invalid:
+            raise ValueError(
+                f"score evidence must be owner-scoped: {invalid[0]}"
+            )
+        if not any(
+            evidence_id.startswith(source_prefix)
+            for evidence_id in score.evidence_ids
+        ):
+            raise ValueError("score requires canonical source evidence")
+        if not any(
+            evidence_id.startswith(snapshot_prefix)
+            for evidence_id in score.evidence_ids
+        ):
+            raise ValueError("score requires canonical snapshot evidence")
+        if not score.snapshot_timestamps:
+            raise ValueError("score requires snapshot timestamps")
+
+    @staticmethod
     def _package_values(package: ContentPackage) -> tuple:
         return (
             package.id,
@@ -818,6 +1029,18 @@ class SQLiteAffiliateResearchRepository:
 
     @staticmethod
     def _product_from_row(row: sqlite3.Row) -> AffiliateProduct:
+        keys = set(row.keys())
+        score = row["run_score"] if "run_score" in keys else row["score"]
+        score_reason = (
+            row["run_score_reason"]
+            if "run_score_reason" in keys
+            else row["score_reason"]
+        )
+        score_confidence = (
+            row["run_score_confidence"]
+            if "run_score_confidence" in keys
+            else row["score_confidence"]
+        )
         return AffiliateProduct(
             id=row["id"], owner_user_id=row["owner_user_id"], platform=row["platform"],
             external_product_id=row["external_product_id"], name=row["name"],
@@ -829,8 +1052,8 @@ class SQLiteAffiliateResearchRepository:
             source_type=row["source_type"], source_url=row["source_url"],
             authorization_scope=row["authorization_scope"], rights_status=row["rights_status"],
             content_hash=row["content_hash"], created_at=row["created_at"], updated_at=row["updated_at"],
-            score=row["score"], score_reason=row["score_reason"],
-            score_confidence=row["score_confidence"],
+            score=score, score_reason=score_reason,
+            score_confidence=score_confidence,
         )
 
     @staticmethod

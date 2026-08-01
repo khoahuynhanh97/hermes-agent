@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Protocol, Sequence
+from typing import Any, Mapping, Protocol, Sequence
 
 from hermes.domain.affiliate_research import (
     AffiliateProduct,
@@ -35,6 +35,17 @@ class AffiliateResearchRepository(Protocol):
     def list_snapshots(self, product_id: str) -> list[ProductSnapshot]: ...
 
     def save_score(self, product_id: str, score: ScoreBreakdown, eligibility_status: str) -> None: ...
+
+    def save_run_score(
+        self,
+        run_id: str,
+        product_id: str,
+        score: ScoreBreakdown,
+        eligibility_status: str,
+        *,
+        rank: int | None = None,
+        shortlisted: bool = False,
+    ) -> None: ...
 
     def save_reference(self, reference: ReferenceMetadata) -> ReferenceMetadata: ...
 
@@ -71,9 +82,26 @@ class AffiliateResearchRepository(Protocol):
         run_id: str,
         counters: dict[str, Any],
         projections: Sequence[str],
+        *,
+        projection_items: Mapping[str, Sequence[str]] | None = None,
     ) -> dict: ...
 
     def pending_projections(self, run_id: str) -> list[dict]: ...
+
+    def pending_projection_items(
+        self,
+        run_id: str,
+        projection: str,
+        item_ids: Sequence[str],
+    ) -> list[str]: ...
+
+    def mark_projection_item_delivered(
+        self,
+        run_id: str,
+        projection: str,
+        item_id: str,
+        external_message_id: str = "",
+    ) -> None: ...
 
     def mark_projection_result(
         self,

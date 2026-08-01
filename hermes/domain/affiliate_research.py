@@ -80,6 +80,8 @@ class ScoreBreakdown:
     reason: str
     confidence: str
     growth_rate: float | None
+    evidence_ids: tuple[str, ...] = ()
+    snapshot_timestamps: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 from hermes.domain.affiliate_research import (
@@ -93,25 +93,73 @@ class AffiliateCatalogService:
         category_sales = self._category_sales(products)
         ranked: list[RankedProduct] = []
         for product in products:
+            snapshots = self._repository.list_snapshots(product.id)
+            evidence_ids, snapshot_timestamps = self._score_evidence(
+                product, owner_user_id, snapshots
+            )
             decision = self._policy.evaluate(product)
             if not decision.eligible:
-                self._repository.save_score(product.id, self._ineligible_score(decision.reason), "ineligible")
+                self._save_score(
+                    run_id,
+                    product.id,
+                    self._ineligible_score(
+                        decision.reason,
+                        evidence_ids,
+                        snapshot_timestamps,
+                    ),
+                    "ineligible",
+                )
                 continue
-            snapshots = self._repository.list_snapshots(product.id)
             previous_sales = snapshots[-2].sold_count if len(snapshots) > 1 else None
-            score = self._scorer.score(
-                product,
-                category_sales=category_sales[self._category_key(product.category)],
-                previous_sold_count=previous_sales,
-                seen_before=len(snapshots) > 1,
+            score = replace(
+                self._scorer.score(
+                    product,
+                    category_sales=category_sales[
+                        self._category_key(product.category)
+                    ],
+                    previous_sold_count=previous_sales,
+                    seen_before=len(snapshots) > 1,
+                ),
+                evidence_ids=evidence_ids,
+                snapshot_timestamps=snapshot_timestamps,
             )
-            self._repository.save_score(product.id, score, "eligible")
             ranked.append(RankedProduct(product, score))
         ranked.sort(key=lambda item: (-item.score.total, item.product.id))
         shortlist = ranked[:maximum]
-        for item in shortlist:
-            self._repository.save_score(item.product.id, item.score, "shortlisted")
+        for rank, item in enumerate(ranked, start=1):
+            shortlisted = rank <= maximum
+            self._save_score(
+                run_id,
+                item.product.id,
+                item.score,
+                "shortlisted" if shortlisted else "eligible",
+                rank=rank,
+                shortlisted=shortlisted,
+            )
         return shortlist
+
+    def _save_score(
+        self,
+        run_id: str,
+        product_id: str,
+        score: ScoreBreakdown,
+        eligibility_status: str,
+        *,
+        rank: int | None = None,
+        shortlisted: bool = False,
+    ) -> None:
+        save_run_score = getattr(self._repository, "save_run_score", None)
+        if save_run_score is not None:
+            save_run_score(
+                run_id,
+                product_id,
+                score,
+                eligibility_status,
+                rank=rank,
+                shortlisted=shortlisted,
+            )
+            return
+        self._repository.save_score(product_id, score, eligibility_status)
 
     @staticmethod
     def _product_from_candidate(candidate: ProductCandidate, owner_user_id: str) -> AffiliateProduct:
@@ -162,5 +210,38 @@ class AffiliateCatalogService:
         }
 
     @staticmethod
-    def _ineligible_score(reason: str) -> ScoreBreakdown:
-        return ScoreBreakdown(0.0, {}, reason, "low", None)
+    def _score_evidence(
+        product: AffiliateProduct,
+        owner_user_id: str,
+        snapshots: list,
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        source_fingerprint = product.content_hash or hashlib.sha256(
+            product.source_url.encode("utf-8")
+        ).hexdigest()
+        evidence_ids = [
+            f"source:{owner_user_id}:{product.id}:{source_fingerprint}"
+        ]
+        evidence_ids.extend(
+            f"snapshot:{owner_user_id}:{product.id}:{snapshot.snapshot_date}"
+            for snapshot in snapshots
+        )
+        return (
+            tuple(evidence_ids),
+            tuple(snapshot.collected_at for snapshot in snapshots),
+        )
+
+    @staticmethod
+    def _ineligible_score(
+        reason: str,
+        evidence_ids: tuple[str, ...] = (),
+        snapshot_timestamps: tuple[str, ...] = (),
+    ) -> ScoreBreakdown:
+        return ScoreBreakdown(
+            0.0,
+            {},
+            reason,
+            "low",
+            None,
+            evidence_ids=evidence_ids,
+            snapshot_timestamps=snapshot_timestamps,
+        )

@@ -9,6 +9,15 @@ CREATE TABLE IF NOT EXISTS affiliate_run_products (
     product_id TEXT NOT NULL REFERENCES affiliate_products(id) ON DELETE CASCADE,
     observation_status TEXT NOT NULL DEFAULT 'imported',
     warnings_json TEXT NOT NULL DEFAULT '[]',
+    eligibility_status TEXT NOT NULL DEFAULT 'candidate',
+    score REAL,
+    score_json TEXT NOT NULL DEFAULT '{}',
+    score_reason TEXT NOT NULL DEFAULT '',
+    score_confidence TEXT NOT NULL DEFAULT 'low',
+    rank INTEGER,
+    shortlisted INTEGER NOT NULL DEFAULT 0 CHECK(shortlisted IN (0, 1)),
+    evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+    snapshot_timestamps_json TEXT NOT NULL DEFAULT '[]',
     observed_at TEXT NOT NULL,
     PRIMARY KEY(run_id, product_id)
 );
@@ -25,6 +34,23 @@ CREATE TABLE IF NOT EXISTS affiliate_projection_outbox (
     updated_at TEXT NOT NULL,
     delivered_at TEXT,
     PRIMARY KEY(run_id, projection)
+);
+
+CREATE TABLE IF NOT EXISTS affiliate_projection_items (
+    run_id TEXT NOT NULL REFERENCES affiliate_research_runs(id) ON DELETE CASCADE,
+    projection TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending', 'delivered')),
+    external_message_id TEXT NOT NULL DEFAULT '',
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    delivered_at TEXT,
+    PRIMARY KEY(run_id, projection, item_id),
+    FOREIGN KEY(run_id, projection)
+        REFERENCES affiliate_projection_outbox(run_id, projection)
+        ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS affiliate_research_briefs (
@@ -53,6 +79,39 @@ INSERT OR IGNORE INTO affiliate_run_products(
 )
 SELECT run_id, product_id, 'imported', '[]', created_at
 FROM affiliate_content_packages;
+
+UPDATE affiliate_run_products
+SET
+    eligibility_status = COALESCE(
+        (SELECT eligibility_status FROM affiliate_products
+         WHERE affiliate_products.id = affiliate_run_products.product_id),
+        'candidate'
+    ),
+    score = (
+        SELECT score FROM affiliate_products
+        WHERE affiliate_products.id = affiliate_run_products.product_id
+    ),
+    score_json = COALESCE(
+        (SELECT score_json FROM affiliate_products
+         WHERE affiliate_products.id = affiliate_run_products.product_id),
+        '{}'
+    ),
+    score_reason = COALESCE(
+        (SELECT score_reason FROM affiliate_products
+         WHERE affiliate_products.id = affiliate_run_products.product_id),
+        ''
+    ),
+    score_confidence = COALESCE(
+        (SELECT score_confidence FROM affiliate_products
+         WHERE affiliate_products.id = affiliate_run_products.product_id),
+        'low'
+    ),
+    shortlisted = CASE
+        WHEN (SELECT eligibility_status FROM affiliate_products
+              WHERE affiliate_products.id = affiliate_run_products.product_id)
+             = 'shortlisted'
+        THEN 1 ELSE 0
+    END;
 
 INSERT OR IGNORE INTO affiliate_projection_outbox(
     run_id, projection, owner_user_id, status, attempts, detail, created_at, updated_at
@@ -107,6 +166,8 @@ CREATE INDEX IF NOT EXISTS idx_affiliate_run_products_run
     ON affiliate_run_products(run_id, product_id);
 CREATE INDEX IF NOT EXISTS idx_affiliate_projection_pending
     ON affiliate_projection_outbox(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_affiliate_projection_items_pending
+    ON affiliate_projection_items(run_id, projection, status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_affiliate_briefs_run
     ON affiliate_research_briefs(run_id, product_id, revision DESC);
 """
@@ -148,12 +209,36 @@ def apply_schema_v4(connection: sqlite3.Connection) -> None:
             "selected",
             "INTEGER NOT NULL DEFAULT 0 CHECK(selected IN (0, 1))",
         )
+        for column, declaration in (
+            ("eligibility_status", "TEXT NOT NULL DEFAULT 'candidate'"),
+            ("score", "REAL"),
+            ("score_json", "TEXT NOT NULL DEFAULT '{}'"),
+            ("score_reason", "TEXT NOT NULL DEFAULT ''"),
+            ("score_confidence", "TEXT NOT NULL DEFAULT 'low'"),
+            ("rank", "INTEGER"),
+            (
+                "shortlisted",
+                "INTEGER NOT NULL DEFAULT 0 CHECK(shortlisted IN (0, 1))",
+            ),
+            ("evidence_ids_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("snapshot_timestamps_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ):
+            _ensure_column(
+                connection,
+                "affiliate_run_products",
+                column,
+                declaration,
+            )
         connection.executescript(
             """
             CREATE INDEX IF NOT EXISTS idx_affiliate_run_products_run
                 ON affiliate_run_products(run_id, product_id);
             CREATE INDEX IF NOT EXISTS idx_affiliate_projection_pending
                 ON affiliate_projection_outbox(status, updated_at);
+            CREATE INDEX IF NOT EXISTS idx_affiliate_projection_items_pending
+                ON affiliate_projection_items(
+                    run_id, projection, status, updated_at
+                );
             CREATE INDEX IF NOT EXISTS idx_affiliate_briefs_run
                 ON affiliate_research_briefs(run_id, product_id, revision DESC);
             """

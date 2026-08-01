@@ -134,7 +134,16 @@ class TelegramReviewDelivery:
                 package = packages.get(package_id)
                 if package is None or package.status.value != "pending_review":
                     continue
-                product = self._product(owner_user_id, package.product_id)
+                pending_items = getattr(
+                    self._repository, "pending_projection_items", None
+                )
+                if pending_items is not None and not pending_items(
+                    package.run_id, "telegram", (package.id,)
+                ):
+                    continue
+                product = self._product(
+                    owner_user_id, package.product_id, package.run_id
+                )
                 product_name = getattr(product, "name", package.product_id)
                 score = getattr(product, "score", None)
                 score_reason = getattr(product, "score_reason", "")
@@ -148,7 +157,7 @@ class TelegramReviewDelivery:
                 )
                 if image_urls:
                     try:
-                        self._resolve(
+                        sent_message = self._resolve(
                             self._bot.send_photo(
                                 chat_id=self._chat_id,
                                 photo=image_urls[0],
@@ -158,7 +167,7 @@ class TelegramReviewDelivery:
                             )
                         )
                     except Exception:
-                        self._resolve(
+                        sent_message = self._resolve(
                             self._bot.send_message(
                                 chat_id=self._chat_id,
                                 text=render_package_html(
@@ -173,7 +182,7 @@ class TelegramReviewDelivery:
                             )
                         )
                 else:
-                    self._resolve(
+                    sent_message = self._resolve(
                         self._bot.send_message(
                             chat_id=self._chat_id,
                             text=message,
@@ -181,20 +190,35 @@ class TelegramReviewDelivery:
                             reply_markup=self._markup(package.id),
                         )
                     )
+                mark_delivered = getattr(
+                    self._repository, "mark_projection_item_delivered", None
+                )
+                if mark_delivered is not None:
+                    mark_delivered(
+                        package.run_id,
+                        "telegram",
+                        package.id,
+                        str(getattr(sent_message, "message_id", "") or ""),
+                    )
         except Exception as error:
             return ProjectionResult(ok=False, retryable=True, detail=str(error)[:1000])
         return ProjectionResult(ok=True, retryable=False, detail="delivered")
 
-    def _product(self, owner_user_id: str, product_id: str) -> Any:
-        for product in self._repository.list_products(owner_user_id):
+    def _product(
+        self, owner_user_id: str, product_id: str, run_id: str
+    ) -> Any:
+        for product in self._repository.list_products(
+            owner_user_id, run_id=run_id
+        ):
             if product.id == product_id:
                 return product
         return None
 
     @staticmethod
-    def _resolve(result: Any) -> None:
+    def _resolve(result: Any) -> Any:
         if inspect.isawaitable(result):
-            asyncio.run(result)
+            return asyncio.run(result)
+        return result
 
     @staticmethod
     def _markup(package_id: str) -> Any:

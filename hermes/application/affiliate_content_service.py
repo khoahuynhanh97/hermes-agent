@@ -169,37 +169,91 @@ class AffiliateContentService:
         brief: ResearchBrief,
     ) -> list[ContentIdea]:
         now = datetime.now(timezone.utc).isoformat()
-        angles = (
-            ("office_worker", "Gon gàng góc làm việc", "Nhấn vào thay đổi bố cục có thể quan sát."),
-            ("remote_worker", "Thao tác bàn làm việc", "Cho thấy một tình huống làm việc quen thuộc."),
-            ("tech_shopper", "Chi tiết sản phẩm", "Dẫn từ hình ảnh sản phẩm sang thông tin có nguồn."),
+        audiences = (
+            ("office_worker", "workspace improvement"),
+            ("remote_worker", "repeatable daily use"),
+            ("tech_shopper", "evidence-led product comparison"),
         )
-        ranked = [
+        signals = tuple(sorted(set(product.visual_signals))) or (
+            f"{product.category} form and function",
+        )
+        patterns = brief.reference_patterns or (
+            "hook=problem-first contrast; pacing=setup-proof-verdict; "
+            "structure=use-case-demonstration-limitation",
+        )
+        evidence_fingerprint = hashlib.sha256(
+            "\0".join(
+                (
+                    product.id,
+                    product.content_hash,
+                    *(
+                        str(spec.get("content_hash", ""))
+                        for spec in brief.verified_specs
+                    ),
+                    *patterns,
+                )
+            ).encode("utf-8")
+        ).hexdigest()
+        drafts = []
+        for index, (audience, outcome) in enumerate(audiences, start=1):
+            digest = hashlib.sha256(
+                f"{evidence_fingerprint}\0{audience}\0{index}".encode("utf-8")
+            ).digest()
+            signal = signals[digest[0] % len(signals)]
+            pattern = patterns[digest[1] % len(patterns)]
+            pattern_fields = {
+                key.strip(): value.strip()
+                for part in pattern.split(";")
+                if "=" in part
+                for key, value in (part.split("=", 1),)
+            }
+            hook_lens = pattern_fields.get(
+                "hook", "problem-first evidence"
+            )
+            angle = (
+                f"{product.name}: {outcome} through {signal} "
+                f"with a {hook_lens}"
+            )
+            drafts.append(
+                (
+                    round(
+                        75.0
+                        + digest[2] / 255 * 15.0
+                        + min(6.0, len(brief.verified_specs) * 1.5),
+                        2,
+                    ),
+                    audience,
+                    angle,
+                    (
+                        f"Use {signal} as the observable proof for "
+                        f"{product.category}; apply the abstract pattern "
+                        f"'{pattern}' from evidence {evidence_fingerprint[:12]}."
+                    ),
+                )
+            )
+        drafts.sort(key=lambda item: (-item[0], item[1], item[2]))
+        return [
             ContentIdea(
-                id=hashlib.sha256(f"{product.id}\0{run_id}\0{index}".encode("utf-8")).hexdigest(),
+                id=hashlib.sha256(
+                    f"{product.id}\0{run_id}\0{audience}\0{angle}".encode(
+                        "utf-8"
+                    )
+                ).hexdigest(),
                 owner_user_id=owner_user_id,
                 product_id=product.id,
                 run_id=run_id,
                 audience=audience,
                 angle=angle,
-                rationale=(
-                    f"{rationale} Evidence: {len(brief.verified_specs)} verified specs, "
-                    f"{len(brief.reference_patterns)} reference patterns."
-                ),
+                rationale=rationale,
                 created_at=now,
-                score=round(
-                    80.0
-                    - index * 5
-                    + min(10.0, len(brief.verified_specs) * 2.0)
-                    + min(5.0, len(brief.reference_patterns)),
-                    2,
-                ),
-                rank=index,
-                selected=index == 1,
+                score=score,
+                rank=rank,
+                selected=rank == 1,
             )
-            for index, (audience, angle, rationale) in enumerate(angles, start=1)
+            for rank, (score, audience, angle, rationale) in enumerate(
+                drafts, start=1
+            )
         ]
-        return ranked
 
     @staticmethod
     def _brief_for(
@@ -249,12 +303,7 @@ class AffiliateContentService:
             )
             if condition
         )
-        patterns = tuple(
-            value
-            for reference in references
-            for value in (reference.title.strip(), reference.caption.strip())
-            if value
-        )
+        patterns = AffiliateContentService._reference_patterns(references)
         brief_id = hashlib.sha256(
             f"{owner_user_id}\0{run_id}\0{product.id}\0brief\0r1".encode("utf-8")
         ).hexdigest()
@@ -275,6 +324,50 @@ class AffiliateContentService:
             reference_patterns=patterns,
             created_at=now,
         )
+
+    @staticmethod
+    def _reference_patterns(
+        references: Sequence[ReferenceMetadata],
+    ) -> tuple[str, ...]:
+        hooks = (
+            "curiosity-led reveal",
+            "problem-first contrast",
+            "specific-benefit tease",
+            "visual transformation setup",
+            "qualified comparison",
+        )
+        pacing = (
+            "fast hook then proof beat then qualified takeaway",
+            "three-beat setup then demo then verdict",
+            "calm setup then detail proof then limitation",
+            "contrast then mechanism then call to action",
+        )
+        structures = (
+            "problem-demonstration-benefit-limitation",
+            "before-state-product-reveal-proof-call-to-action",
+            "use-case-visual-proof-tradeoff-call-to-action",
+            "question-evidence-comparison-qualified-verdict",
+        )
+        patterns = []
+        for reference in sorted(references, key=lambda item: item.id):
+            fingerprint = hashlib.sha256(
+                "\0".join(
+                    (
+                        reference.id,
+                        reference.content_hash,
+                        reference.source_url,
+                        reference.source_type,
+                    )
+                ).encode("utf-8")
+            ).digest()
+            patterns.append(
+                "evidence-pattern="
+                f"{fingerprint.hex()[:12]}; "
+                f"hook={hooks[fingerprint[0] % len(hooks)]}; "
+                f"pacing={pacing[fingerprint[1] % len(pacing)]}; "
+                f"structure={structures[fingerprint[2] % len(structures)]}"
+            )
+        return tuple(patterns)
 
     def _generate(
         self,
@@ -373,11 +466,12 @@ class AffiliateContentService:
     def _initial_package_id(
         owner_user_id: str, run_id: str, product_id: str
     ) -> str:
-        return hashlib.sha256(
+        digest = hashlib.sha256(
             f"{owner_user_id}\0{run_id}\0{product_id}\0package\0r1".encode(
                 "utf-8"
             )
-        ).hexdigest()
+        ).hexdigest()[:24]
+        return f"pkg_{digest}"
 
     @staticmethod
     def _canonicalize_claims(
