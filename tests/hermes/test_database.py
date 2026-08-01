@@ -62,7 +62,7 @@ class DatabaseTests(unittest.TestCase):
             }
             version = connection.execute("PRAGMA user_version").fetchone()[0]
 
-        self.assertEqual(version, 5)
+        self.assertEqual(version, 6)
         self.assertTrue(
             {
                 "affiliate_products",
@@ -110,8 +110,41 @@ class DatabaseTests(unittest.TestCase):
         with database.connect() as connection:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
             source = connection.execute("SELECT id FROM sources").fetchone()[0]
-        self.assertEqual(version, 5)
+        self.assertEqual(version, 6)
         self.assertEqual(source, "source-1")
+
+    def test_v5_database_migrates_to_v6_without_losing_existing_data(self) -> None:
+        from hermes.adapters.sqlite.schema_v2 import apply_schema_v2
+        from hermes.adapters.sqlite.schema_v4 import apply_schema_v4
+        from hermes.adapters.sqlite.schema_v5 import apply_schema_v5
+        from hermes.adapters.sqlite.schema_v6 import apply_schema_v6
+        from hermes.db import Database, SCHEMA_V1, SCHEMA_V3
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            connection.executescript(SCHEMA_V1)
+            apply_schema_v2(connection)
+            connection.executescript(SCHEMA_V3)
+            apply_schema_v4(connection)
+            apply_schema_v5(connection)
+            connection.execute("PRAGMA user_version = 5")
+            connection.commit()
+        finally:
+            connection.close()
+
+        database = Database(self.db_path)
+        database.initialize()
+
+        with database.connect() as connection:
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+        self.assertEqual(version, 6)
+        self.assertTrue({"web_documents", "affiliate_run_web_documents"}.issubset(tables))
 
     def test_v3_projection_failure_is_backfilled_into_v4_outbox(self) -> None:
         from hermes.adapters.sqlite.schema_v2 import apply_schema_v2
@@ -285,7 +318,7 @@ class DatabaseTests(unittest.TestCase):
                 """
             ).fetchall()
 
-        self.assertEqual(version, 5)
+        self.assertEqual(version, 6)
         self.assertEqual(
             tuple(observation),
             ("shortlisted", 82.5, "legacy score", "high", 1),
