@@ -157,7 +157,7 @@ class FakeCsvSource:
 
 def test_offline_crawl4ai_affiliate_acceptance_flow(tmp_path):
     db_path = tmp_path / "acceptance.db"
-    
+
     # 1. Create a V5 database manually then initialize to run V6 migration
     import sqlite3
     conn = sqlite3.connect(db_path)

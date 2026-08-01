@@ -104,7 +104,7 @@ class WebDocumentNormalizer:
         # Evaluate dynamic fallback recommendation
         lowered_text = markdown_text.lower()
         has_main_or_article = soup.find("main") is not None or soup.find("article") is not None
-        
+
         dynamic_fallback = False
         if len(markdown_text) < 300:
             dynamic_fallback = True
