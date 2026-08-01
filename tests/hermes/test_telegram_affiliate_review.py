@@ -165,6 +165,69 @@ def test_review_delivery_returns_retryable_failure_on_transport_error():
     assert "offline" in result.detail
 
 
+def test_review_delivery_factory_is_disabled_without_telegram_configuration():
+    from hermes.adapters.telegram.affiliate_review import review_delivery_from_environment
+    from hermes.application.affiliate_run_service import DisabledReviewDelivery
+
+    delivery = review_delivery_from_environment(
+        FakeRepository(), environ={}, bot_factory=lambda _token: pytest.fail("bot must stay lazy")
+    )
+
+    assert isinstance(delivery, DisabledReviewDelivery)
+
+
+def test_review_delivery_factory_uses_injected_bot_when_configured():
+    from hermes.adapters.telegram.affiliate_review import TelegramReviewDelivery, review_delivery_from_environment
+
+    bot = FakeBot()
+    delivery = review_delivery_from_environment(
+        FakeRepository(),
+        environ={"TELEGRAM_BOT_TOKEN": "test-token", "TELEGRAM_REVIEW_CHAT_ID": "42"},
+        bot_factory=lambda token: bot if token == "test-token" else pytest.fail("wrong token"),
+    )
+
+    assert isinstance(delivery, TelegramReviewDelivery)
+    assert delivery._bot is bot
+    assert delivery._chat_id == "42"
+
+
+def test_job_handler_injects_environment_review_delivery(monkeypatch):
+    import core.affiliate_research_jobs as jobs
+    import hermes.adapters.model.affiliate_content_gateway as content_gateway_module
+    import hermes.adapters.sqlite.affiliate_research_repository as repository_module
+    import hermes.application.affiliate_catalog_service as catalog_module
+    import hermes.application.affiliate_content_service as content_module
+    import hermes.db as database_module
+    import hermes.llm as llm_module
+
+    repository = FakeRepository()
+    delivery = object()
+    captured = {}
+
+    class CapturingRunService:
+        def __init__(self, *args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(jobs, "AffiliateRunService", CapturingRunService)
+    monkeypatch.setattr(repository_module, "SQLiteAffiliateResearchRepository", lambda _database: repository)
+    monkeypatch.setattr(database_module, "Database", lambda: object())
+    monkeypatch.setattr(catalog_module, "AffiliateCatalogService", lambda _repository: object())
+    monkeypatch.setattr(content_module, "AffiliateContentService", lambda *_args: object())
+    monkeypatch.setattr(content_gateway_module, "AffiliateContentGateway", lambda _gateway: object())
+    monkeypatch.setattr(llm_module, "HermesLLMGateway", lambda: object())
+
+    handler = jobs.build_affiliate_research_job_handler(
+        ".",
+        review_delivery_factory=lambda supplied_repository: delivery
+        if supplied_repository is repository
+        else pytest.fail("wrong repository"),
+    )
+
+    assert isinstance(handler, jobs.AffiliateResearchJobHandler)
+    assert captured["kwargs"]["review_delivery"] is delivery
+
+
 def test_callback_rejects_unauthorized_user(monkeypatch):
     import core.learning_review
     import importlib

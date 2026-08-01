@@ -159,6 +159,7 @@ def build_affiliate_research_job_handler(
     import_directory: str | Path,
     *,
     run_service: AffiliateRunService | None = None,
+    review_delivery_factory: Callable[[Any], Any] | None = None,
 ) -> AffiliateResearchJobHandler:
     """Build the production composition without connecting to external projections."""
     if run_service is None:
@@ -166,13 +167,16 @@ def build_affiliate_research_job_handler(
         from hermes.adapters.sqlite.affiliate_research_repository import SQLiteAffiliateResearchRepository
         from hermes.application.affiliate_catalog_service import AffiliateCatalogService
         from hermes.application.affiliate_content_service import AffiliateContentService
+        from hermes.adapters.telegram.affiliate_review import review_delivery_from_environment
         from hermes.db import Database
         from hermes.llm import HermesLLMGateway
 
         repository = SQLiteAffiliateResearchRepository(Database())
+        delivery_factory = review_delivery_factory or review_delivery_from_environment
         run_service = AffiliateRunService(
             repository,
             AffiliateCatalogService(repository),
             AffiliateContentService(repository, AffiliateContentGateway(HermesLLMGateway())),
+            review_delivery=delivery_factory(repository),
         )
     return AffiliateResearchJobHandler(import_directory, run_service)

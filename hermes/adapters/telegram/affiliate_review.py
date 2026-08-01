@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import os
+from collections.abc import Mapping
 from html import escape
 from typing import Any, Callable, Sequence
 
+from hermes.application.affiliate_run_service import DisabledReviewDelivery
 from hermes.domain.affiliate_research import ContentPackage, ProjectionResult
 from hermes.ports.affiliate_research import AffiliateResearchRepository
 
@@ -14,6 +17,25 @@ _CALLBACK_PREFIXES = {
     "revise": "affiliate_revise",
     "reject": "affiliate_reject",
 }
+
+
+def review_delivery_from_environment(
+    repository: AffiliateResearchRepository,
+    *,
+    environ: Mapping[str, str] | None = None,
+    bot_factory: Callable[[str], Any] | None = None,
+) -> TelegramReviewDelivery | DisabledReviewDelivery:
+    """Create Telegram delivery only when both required environment values exist."""
+    settings = os.environ if environ is None else environ
+    token = str(settings.get("TELEGRAM_BOT_TOKEN", "")).strip()
+    chat_id = str(settings.get("TELEGRAM_REVIEW_CHAT_ID", "")).strip()
+    if not token or not chat_id:
+        return DisabledReviewDelivery()
+    if bot_factory is None:
+        from telegram import Bot
+
+        bot_factory = lambda configured_token: Bot(token=configured_token)
+    return TelegramReviewDelivery(repository, bot_factory(token), chat_id)
 
 
 def parse_review_callback(data: str) -> tuple[str, str] | None:
