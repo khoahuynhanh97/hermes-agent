@@ -379,3 +379,123 @@ exactly the ten Wave 2 files listed above.
   after Telegram accepts a message but before SQLite records its returned
   message ID can still duplicate that one message. Persisted package
   checkpoints prevent repeats after the checkpoint transaction completes.
+
+# Re-review Wave 3
+
+Implementation commit: `a77af9970` (`fix: complete affiliate re-review wave 3`)
+
+## Completed Findings
+
+1. `hermes/adapters/sqlite/schema_v4.py` was restored to the exact shape
+   committed at `57b869749`. Wave 2 schema fields, backfills, indexes, and the
+   package checkpoint table now live in the idempotent
+   `hermes/adapters/sqlite/schema_v5.py`. `SCHEMA_VERSION` and SQLite
+   `user_version` are now 5.
+2. V5 backfills a pending checkpoint for every pending-review package attached
+   to a pending Telegram outbox. Runtime delivery calls
+   `ensure_projection_item()` in an immediate SQLite transaction before any
+   external send. Existing delivered checkpoints remain unchanged.
+3. `ReferencePatternAbstractor` is an injected deterministic component. It
+   maps observable title/caption/platform semantics to controlled structured
+   `hook`, `pacing`, and `story` labels. It stores reference ID, source type,
+   content hash, collection time, observable fields, and matched semantic
+   signals as brief provenance. It never copies source title/caption wording
+   into pattern labels.
+
+## V5 Migration
+
+V4 remains immutable and V3 remains unchanged.
+
+V5 owns:
+
+- `affiliate_projection_items`
+- Run-scoped eligibility, score, score payload, reason, confidence, rank,
+  shortlist, evidence IDs, and snapshot timestamps on
+  `affiliate_run_products`
+- `affiliate_research_briefs.reference_pattern_provenance_json`
+- Legacy global score backfill into unscored run observations
+- Pending Telegram package-checkpoint backfill
+- `idx_affiliate_projection_items_pending`
+
+The upgrade test constructs a real database using V1, V2, V3, and the restored
+pre-Wave-2 V4 migration, confirms Wave 2 fields are absent, inserts a completed
+run with a pending Telegram outbox/package, sets `user_version = 4`, then
+upgrades through `Database.initialize()`. It also invokes V5 twice more to
+verify direct migration idempotency.
+
+## Wave 3 Changed Files
+
+- `hermes/adapters/sqlite/affiliate_research_repository.py`
+- `hermes/adapters/sqlite/schema_v4.py`
+- `hermes/adapters/sqlite/schema_v5.py`
+- `hermes/adapters/telegram/affiliate_review.py`
+- `hermes/application/affiliate_content_service.py`
+- `hermes/application/reference_pattern_abstractor.py`
+- `hermes/db.py`
+- `hermes/domain/affiliate_research.py`
+- `hermes/ports/affiliate_research.py`
+- `tests/hermes/application/test_affiliate_content_service.py`
+- `tests/hermes/application/test_reference_pattern_abstractor.py`
+- `tests/hermes/test_affiliate_final_review.py`
+- `tests/hermes/test_database.py`
+
+## Wave 3 TDD And Fault Evidence
+
+Initial RED command:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\hermes\test_database.py::DatabaseTests::test_pre_wave2_v4_upgrades_to_v5_and_backfills_telegram_packages tests\hermes\test_affiliate_final_review.py::test_v5_migration_creates_run_catalog_outbox_and_provenance tests\hermes\test_affiliate_final_review.py::test_telegram_creates_missing_checkpoint_before_external_send tests\hermes\application\test_reference_pattern_abstractor.py tests\hermes\application\test_affiliate_content_service.py::test_content_service_uses_injected_reference_pattern_abstractor -q --basetemp .pytest-wave3-red
+```
+
+Result: `6 failed in 0.64s`. Failures directly demonstrated the mutated V4,
+missing V5/version bump, absent pre-send checkpoint, and missing
+abstractor/injection.
+
+First GREEN command added the evidence-specific angle test to those targets
+and used `--basetemp .pytest-wave3-green1`.
+
+Result: `7 passed in 0.62s`.
+
+Tightened migration-idempotency, runtime checkpoint, semantic abstraction,
+injection, and angle command:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\hermes\test_database.py::DatabaseTests::test_pre_wave2_v4_upgrades_to_v5_and_backfills_telegram_packages tests\hermes\test_affiliate_final_review.py::test_telegram_creates_missing_checkpoint_before_external_send tests\hermes\application\test_reference_pattern_abstractor.py tests\hermes\application\test_affiliate_content_service.py::test_content_service_uses_injected_reference_pattern_abstractor tests\hermes\test_affiliate_final_review.py::test_reference_patterns_and_angles_are_abstract_and_evidence_specific -q --basetemp .pytest-wave3-tightened
+```
+
+Result: `6 passed in 0.56s`.
+
+Final focused affiliate and migration suite:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\hermes\domain\test_affiliate_research.py tests\hermes\test_affiliate_research_repository.py tests\hermes\adapters\test_shopee_affiliate_csv.py tests\hermes\adapters\test_tiktok_public_reference.py tests\hermes\application\test_affiliate_catalog_service.py tests\hermes\application\test_affiliate_content_service.py tests\hermes\application\test_reference_pattern_abstractor.py tests\hermes\application\test_affiliate_run_service.py tests\hermes\adapters\test_google_sheets_projection.py tests\hermes\test_telegram_affiliate_review.py tests\hermes\test_affiliate_research_job.py tests\hermes\test_affiliate_research_acceptance.py tests\hermes\test_affiliate_final_review.py tests\hermes\test_job_repository.py tests\hermes\test_database.py -q --basetemp .pytest-wave3-final2
+```
+
+Result: `134 passed in 8.07s`. No test was slow or hung.
+
+## Wave 3 Static Verification
+
+`py_compile` was run against all 13 changed Python production/test files,
+including V4, V5, the abstractor, repository, Telegram adapter, and migration
+tests.
+
+Result: exit code 0 with no output.
+
+Scoped and staged `git diff --check` both returned exit code 0. The immutable
+baseline command:
+
+```powershell
+git diff --exit-code 57b869749 -- hermes/adapters/sqlite/schema_v4.py
+```
+
+returned exit code 0 and
+`schema_v4_matches_57b869749=True`.
+
+## Wave 3 Constraints And Concerns
+
+- No live network, Telegram, Sheets, TikTok, Shopee, LLM, or paid call was
+  made.
+- Only the focused affiliate and migration suite was run.
+- Protected files, runtime data, user media, and unrelated dirty files were
+  not modified or staged by Wave 3.
+- No unresolved Wave 3 finding remains.
