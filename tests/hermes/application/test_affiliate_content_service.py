@@ -359,8 +359,33 @@ def test_first_hand_detection_scans_all_package_text_fields(repository, product,
 def test_overlap_detects_padded_copied_passages_but_ignores_short_generic_hooks():
     from hermes.application.affiliate_content_service import AffiliateContentService
 
-    assert not AffiliateContentService._is_high_overlap("Gon hon", "Gon hon")
+    assert AffiliateContentService._is_high_overlap("Gon hon", "  gon   HON ")
+    assert not AffiliateContentService._is_high_overlap("Gon hon", "Ban sach")
     assert AffiliateContentService._is_high_overlap(
         "Mo dau moi. Dat chuot dung vi tri de thao tac de dang. Ket thuc moi.",
         "Dat chuot dung vi tri de thao tac de dang.",
     )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("voiceover_plan", "I   tried the product."),
+        ("ai_prompts", ["I used the supplied product image on a desk."]),
+        ("claims", [{"text": "My experience with this setup", "evidence_url": "https://example.test/products/101"}]),
+        ("text_overlays", ["T\u00f4i review con chuot nay"]),
+        ("storyboard", [{"start": 0, "end": 5, "visual": "M\u00ecnh review chuot tren ban"}]),
+    ],
+)
+def test_first_hand_detection_rejects_clear_english_and_vietnamese_variants(
+    repository, product, field, value
+):
+    from hermes.application.affiliate_content_service import (
+        AffiliateContentService,
+        ContentValidationError,
+    )
+
+    with pytest.raises(ContentValidationError, match="first-hand"):
+        AffiliateContentService(repository, FakeContentGateway(valid_payload(**{field: value}))).create_packages(
+            "42", "run-1", [product], per_run=5
+        )

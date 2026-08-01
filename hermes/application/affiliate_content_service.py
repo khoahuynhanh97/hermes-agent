@@ -32,9 +32,9 @@ _REQUIRED_TEXT_FIELDS = (
     "voiceover_plan",
 )
 _FIRST_HAND_PATTERNS = (
-    "\\b(?:t\u00f4i|m\u00ecnh)\\s+(?:(?:\u0111\u00e3)\\s+)?(?:d\u00f9ng|th\u1eed|tr\u1ea3i\\s+nghi\u1ec7m|s\u1edf\\s+h\u1eefu)\\b",
+    "\\b(?:t\u00f4i|m\u00ecnh)\\s+(?:(?:\u0111\u00e3)\\s+)?(?:d\u00f9ng|th\u1eed|tr\u1ea3i\\s+nghi\u1ec7m|review|s\u1edf\\s+h\u1eefu)\\b",
     "\\bsau\\s+khi\\s+d\u00f9ng\\b",
-    r"\bI\s+(?:used|tested|own)\b",
+    r"\bI\s+(?:tried|used|tested|own)\b",
     r"\bmy\s+(?:experience|review|desk)\b",
 )
 _TOKEN_PATTERN = re.compile(r"[\w]+", re.UNICODE)
@@ -277,6 +277,8 @@ class AffiliateContentService:
     def _is_high_overlap(left: str, right: str) -> bool:
         left_normalized = AffiliateContentService._normalize_text(left)
         right_normalized = AffiliateContentService._normalize_text(right)
+        if left_normalized == right_normalized:
+            return bool(left_normalized)
         left_tokens = _TOKEN_PATTERN.findall(left_normalized)
         right_tokens = _TOKEN_PATTERN.findall(right_normalized)
         if min(len(left_tokens), len(right_tokens)) < 5:
