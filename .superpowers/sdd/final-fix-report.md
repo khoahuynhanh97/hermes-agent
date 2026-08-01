@@ -499,3 +499,95 @@ returned exit code 0 and
 - Protected files, runtime data, user media, and unrelated dirty files were
   not modified or staged by Wave 3.
 - No unresolved Wave 3 finding remains.
+
+# Final V4 Brief Compatibility Fix
+
+Implementation commit: `4f5266f9a` (`fix: normalize legacy affiliate briefs`)
+
+## Finding Resolution
+
+Pre-Wave-3 V4 databases may contain
+`affiliate_research_briefs.reference_patterns_json` as `list[str]`, including
+copied title/caption wording. The compatibility fix has two idempotent layers:
+
+1. V5 detects arrays containing JSON text elements and atomically replaces
+   both pattern and provenance payloads with empty arrays. This removes copied
+   wording during the V4-to-V5 upgrade and is safe to run repeatedly.
+2. `SQLiteAffiliateResearchRepository.save_brief()` validates the newly
+   abstracted payload, verifies the existing brief identity, and uses one
+   `BEGIN IMMEDIATE` transaction to replace legacy/missing structured patterns
+   and provenance together. A structured provenanced row is reused unchanged
+   on subsequent retries.
+
+This guarantees `_ideas_for()` receives either structured pattern dictionaries
+or its empty-pattern fallback, never a legacy raw string.
+
+V4 remains byte-for-diff identical to commit `57b869749`. Only V5 and
+repository retry behavior changed.
+
+## Changed Files
+
+- `hermes/adapters/sqlite/schema_v5.py`
+- `hermes/adapters/sqlite/affiliate_research_repository.py`
+- `tests/hermes/test_affiliate_final_review.py`
+
+## TDD And Fault Evidence
+
+The test creates a real V1/V2/V3/V4 database, inserts a V4 brief containing a
+raw copied string, sets `user_version = 4`, upgrades through V5, and verifies
+that raw wording is removed. It then injects a gateway failure after the
+repository has persisted the structured brief, retries successfully, retries
+again, and verifies:
+
+- Pattern objects contain exactly `hook`, `pacing`, and `story`.
+- Provenance contains the canonical reference ID.
+- Both gateway attempts receive the same canonical brief.
+- The third package retry does not call the gateway again.
+- Persisted pattern/provenance JSON remains structured and raw-wording-free.
+
+Initial RED command:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\hermes\test_affiliate_final_review.py::test_pre_v5_raw_brief_upgrade_and_fault_retry_becomes_structured -q --basetemp .pytest-final-compat-red
+```
+
+Result: `1 failed in 0.25s` because V5 retained the raw string.
+
+GREEN command:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\hermes\test_affiliate_final_review.py::test_pre_v5_raw_brief_upgrade_and_fault_retry_becomes_structured -q --basetemp .pytest-final-compat-green1
+```
+
+Result: `1 passed in 0.21s`.
+
+Focused migration/content/final command:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\hermes\test_database.py tests\hermes\test_affiliate_research_repository.py tests\hermes\application\test_affiliate_content_service.py tests\hermes\application\test_reference_pattern_abstractor.py tests\hermes\test_affiliate_final_review.py -q --basetemp .pytest-final-compat-targeted
+```
+
+Result: `61 passed in 1.98s`.
+
+Final focused affiliate and migration suite:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\hermes\domain\test_affiliate_research.py tests\hermes\test_affiliate_research_repository.py tests\hermes\adapters\test_shopee_affiliate_csv.py tests\hermes\adapters\test_tiktok_public_reference.py tests\hermes\application\test_affiliate_catalog_service.py tests\hermes\application\test_affiliate_content_service.py tests\hermes\application\test_reference_pattern_abstractor.py tests\hermes\application\test_affiliate_run_service.py tests\hermes\adapters\test_google_sheets_projection.py tests\hermes\test_telegram_affiliate_review.py tests\hermes\test_affiliate_research_job.py tests\hermes\test_affiliate_research_acceptance.py tests\hermes\test_affiliate_final_review.py tests\hermes\test_job_repository.py tests\hermes\test_database.py -q --basetemp .pytest-final-compat-suite
+```
+
+Result: `135 passed in 8.11s`. No test was slow or hung.
+
+## Static And Scope Verification
+
+`py_compile` ran against the three changed Python files and returned exit code
+0 with no output. Scoped and staged `git diff --check` returned exit code 0.
+
+```powershell
+git diff --exit-code 57b869749 -- hermes/adapters/sqlite/schema_v4.py
+```
+
+Result: exit code 0 and `schema_v4_matches_57b869749=True`.
+
+No live/network/paid call or broad test suite was used. Protected files,
+runtime data, user media, and unrelated dirty files were not modified or
+staged. No unresolved compatibility finding remains.
