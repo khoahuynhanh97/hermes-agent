@@ -237,3 +237,145 @@ Result: exit code 0 with no whitespace errors.
 - Existing unrelated dirty files remain in the workspace.
 - No unresolved Critical or Important final-review finding remains within the
   requested scope.
+
+# Re-review Wave 2
+
+Implementation commit: `5a7afa43e` (`fix: complete affiliate re-review wave 2`)
+
+## Completed Findings
+
+1. Production package IDs now use `pkg_` plus a deterministic 24-character
+   digest. Revision suffixes remain compact, and actual production IDs pass
+   through `TelegramReviewDelivery` with all callback payloads below Telegram's
+   64-byte limit.
+2. V4 now contains `affiliate_projection_items`. Run completion creates
+   Telegram package checkpoints in the same transaction as the batch outbox.
+   Each successful send persists package status, Telegram message ID when
+   available, attempts, and delivery timestamps. Retry skips delivered
+   packages.
+3. Eligibility, score payload, reason, confidence, rank, shortlist flag,
+   canonical evidence IDs, and snapshot timestamps now persist on
+   `affiliate_run_products`. Run-scoped repository reads, projection rows, and
+   Telegram review rendering use that observation. A later score for the same
+   product no longer changes an older run projection.
+4. Research briefs convert references into deterministic abstract
+   hook/pacing/structure patterns without copying titles or captions. Content
+   planning produces three deterministic, scored, ranked
+   product/audience/evidence-specific angles and selects exactly one winner.
+5. `ScoreBreakdown` now carries canonical evidence IDs and snapshot
+   timestamps. Catalog scoring attaches owner/product-scoped source and
+   snapshot IDs to eligible and ineligible results. Repository validation
+   requires both evidence classes and at least one snapshot timestamp.
+
+## V4 Extension
+
+V3 was not modified.
+
+New V4 table:
+
+- `affiliate_projection_items`
+
+New `affiliate_run_products` columns:
+
+- `eligibility_status`
+- `score`
+- `score_json`
+- `score_reason`
+- `score_confidence`
+- `rank`
+- `shortlisted`
+- `evidence_ids_json`
+- `snapshot_timestamps_json`
+
+V4 also backfills legacy global score state into pre-existing run observations
+for backward compatibility. New production scoring writes only the run
+observation.
+
+## Wave 2 Changed Files
+
+- `hermes/adapters/sqlite/affiliate_research_repository.py`
+- `hermes/adapters/sqlite/schema_v4.py`
+- `hermes/adapters/telegram/affiliate_review.py`
+- `hermes/application/affiliate_catalog_service.py`
+- `hermes/application/affiliate_content_service.py`
+- `hermes/application/affiliate_run_service.py`
+- `hermes/domain/affiliate_research.py`
+- `hermes/ports/affiliate_research.py`
+- `tests/hermes/test_affiliate_final_review.py`
+- `tests/hermes/test_telegram_affiliate_review.py`
+
+## Wave 2 TDD And Fault Evidence
+
+Initial Wave 2 RED command:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\hermes\test_affiliate_final_review.py::test_v4_migration_creates_run_catalog_outbox_and_provenance tests\hermes\test_affiliate_final_review.py::test_later_run_score_does_not_mutate_older_projection tests\hermes\test_affiliate_final_review.py::test_catalog_score_persists_owner_scoped_source_and_snapshot_evidence tests\hermes\test_affiliate_final_review.py::test_reference_patterns_and_angles_are_abstract_and_evidence_specific tests\hermes\test_affiliate_final_review.py::test_telegram_crash_after_first_send_retries_only_unresolved_package tests\hermes\test_telegram_affiliate_review.py::test_actual_production_package_id_delivers_with_valid_callbacks -q --basetemp .pytest-wave2-red
+```
+
+Result: `6 failed in 0.60s`. The failures directly covered missing V4 item
+checkpoints/run score fields, missing score evidence, raw reference copying,
+unsupported per-item completion, and oversized production callbacks.
+
+First Wave 2 GREEN command used the same six test nodes with
+`--basetemp .pytest-wave2-green`.
+
+Result: `6 passed in 0.56s`.
+
+The focused suite then exposed one backward-compatibility regression:
+
+```text
+test_repository_persists_score_reference_ideas_runs_and_projection_rows
+```
+
+Observed result: `128 passed, 1 failed in 8.03s`. The legacy test writes
+`save_score()` before creating a run observation. The observation insert now
+copies legacy global score state only when it must create that missing row;
+production run observations remain authoritative.
+
+Isolated regression verification:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\hermes\test_affiliate_research_repository.py::test_repository_persists_score_reference_ideas_runs_and_projection_rows -q --basetemp .pytest-wave2-isolated
+```
+
+Result: `1 passed in 0.11s`.
+
+Tightened message-ID and same-product/different-evidence verification:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\hermes\test_affiliate_final_review.py::test_later_run_score_does_not_mutate_older_projection tests\hermes\test_affiliate_final_review.py::test_catalog_score_persists_owner_scoped_source_and_snapshot_evidence tests\hermes\test_affiliate_final_review.py::test_reference_patterns_and_angles_are_abstract_and_evidence_specific tests\hermes\test_affiliate_final_review.py::test_telegram_crash_after_first_send_retries_only_unresolved_package tests\hermes\test_telegram_affiliate_review.py::test_actual_production_package_id_delivers_with_valid_callbacks -q --basetemp .pytest-wave2-tightened
+```
+
+Result: `5 passed in 0.54s`.
+
+Final focused suite:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\hermes\domain\test_affiliate_research.py tests\hermes\test_affiliate_research_repository.py tests\hermes\adapters\test_shopee_affiliate_csv.py tests\hermes\adapters\test_tiktok_public_reference.py tests\hermes\application\test_affiliate_catalog_service.py tests\hermes\application\test_affiliate_content_service.py tests\hermes\application\test_affiliate_run_service.py tests\hermes\adapters\test_google_sheets_projection.py tests\hermes\test_telegram_affiliate_review.py tests\hermes\test_affiliate_research_job.py tests\hermes\test_affiliate_research_acceptance.py tests\hermes\test_affiliate_final_review.py tests\hermes\test_job_repository.py tests\hermes\test_database.py -q --basetemp .pytest-wave2-final-suite
+```
+
+Result: `129 passed in 7.90s`. No test was slow or hung.
+
+## Wave 2 Static Verification
+
+```powershell
+.\.venv\Scripts\python.exe -m py_compile hermes\adapters\sqlite\schema_v4.py hermes\domain\affiliate_research.py hermes\ports\affiliate_research.py hermes\adapters\sqlite\affiliate_research_repository.py hermes\application\affiliate_catalog_service.py hermes\application\affiliate_content_service.py hermes\application\affiliate_run_service.py hermes\adapters\telegram\affiliate_review.py tests\hermes\test_affiliate_final_review.py tests\hermes\test_telegram_affiliate_review.py
+```
+
+Result: exit code 0 with no output.
+
+Scoped `git diff --check` and staged `git diff --cached --check` both returned
+exit code 0 with no whitespace errors. The staged implementation contained
+exactly the ten Wave 2 files listed above.
+
+## Wave 2 Constraints And Concerns
+
+- No live network, Telegram, Sheets, TikTok, Shopee, or paid model call was
+  made.
+- No broad test suite was run.
+- Protected files, runtime data, and user media were not modified or staged.
+- Existing unrelated dirty files remain untouched.
+- Telegram does not provide an idempotency key for sends. A process death
+  after Telegram accepts a message but before SQLite records its returned
+  message ID can still duplicate that one message. Persisted package
+  checkpoints prevent repeats after the checkpoint transaction completes.
