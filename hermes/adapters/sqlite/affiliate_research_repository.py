@@ -1010,6 +1010,19 @@ class SQLiteAffiliateResearchRepository:
                 "SELECT * FROM affiliate_research_runs WHERE id = ? AND owner_user_id = ?",
                 (run_id, owner_user_id),
             )
+            web_documents = self._projection_query(
+                connection,
+                """
+                SELECT DISTINCT d.id, arwd.run_id, arwd.product_id, arwd.source_kind,
+                                d.title, d.final_url, d.acquisition_method, d.content_hash,
+                                d.rights_status, d.warnings_json, d.acquired_at
+                FROM web_documents AS d
+                JOIN affiliate_run_web_documents AS arwd ON arwd.document_id = d.id
+                WHERE d.owner_user_id = ? AND arwd.run_id = ?
+                ORDER BY d.acquired_at, d.id
+                """,
+                (owner_user_id, run_id),
+            )
         return {
             "products": products,
             "references": references,
@@ -1017,6 +1030,7 @@ class SQLiteAffiliateResearchRepository:
             "packages": packages,
             "approval_events": events,
             "runs": runs,
+            "web_documents": web_documents,
         }
 
     @staticmethod

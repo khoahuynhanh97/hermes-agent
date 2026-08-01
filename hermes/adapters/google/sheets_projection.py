@@ -81,6 +81,24 @@ class GoogleSheetsProjection:
                 }
             )
 
+        web_evidence = []
+        for doc in projection_rows.get("web_documents", []):
+            web_evidence.append(
+                {
+                    "id": doc["id"],
+                    "run_id": doc.get("run_id", ""),
+                    "product_id": doc.get("product_id", ""),
+                    "source_kind": doc.get("source_kind", ""),
+                    "title": doc.get("title", ""),
+                    "final_url": doc.get("final_url", ""),
+                    "acquisition_method": doc.get("acquisition_method", ""),
+                    "content_hash": doc.get("content_hash", ""),
+                    "rights_status": doc.get("rights_status", ""),
+                    "warnings": doc.get("warnings", []),
+                    "acquired_at": doc.get("acquired_at", ""),
+                }
+            )
+
         return {
             "Products": products,
             "Shortlist": [
@@ -90,6 +108,7 @@ class GoogleSheetsProjection:
             "Scripts": projection_rows.get("packages", []),
             "Approval Queue": approval_queue,
             "Runs & Errors": projection_rows.get("runs", []),
+            "Web Evidence": web_evidence,
         }
 
     @classmethod

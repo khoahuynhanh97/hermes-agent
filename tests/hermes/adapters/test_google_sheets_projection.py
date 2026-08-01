@@ -75,7 +75,7 @@ def repository():
         yield repo
 
 
-def test_projection_reconciles_six_tabs_by_stable_id(repository):
+def test_projection_reconciles_seven_tabs_by_stable_id(repository):
     from hermes.adapters.google.sheets_projection import GoogleSheetsProjection
 
     client = FakeSheetsClient()
@@ -85,7 +85,7 @@ def test_projection_reconciles_six_tabs_by_stable_id(repository):
 
     assert result.ok is True
     assert set(client.tabs) == {
-        "Products", "Shortlist", "Ideas", "Scripts", "Approval Queue", "Runs & Errors"
+        "Products", "Shortlist", "Ideas", "Scripts", "Approval Queue", "Runs & Errors", "Web Evidence"
     }
     projection.sync("42", "run-1")
     assert client.row_count("Products") == 1
