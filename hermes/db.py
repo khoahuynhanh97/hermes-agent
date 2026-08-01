@@ -10,7 +10,7 @@ from hermes.adapters.sqlite.schema_v2 import apply_schema_v2
 from .config import HermesPaths
 
 
-SCHEMA_VERSION = 2  # Updated schema version
+SCHEMA_VERSION = 3
 
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -176,6 +176,140 @@ CREATE VIRTUAL TABLE IF NOT EXISTS lesson_fts USING fts5(
 );
 """
 
+SCHEMA_V3 = """
+CREATE TABLE IF NOT EXISTS affiliate_products (
+    id TEXT PRIMARY KEY,
+    owner_user_id TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    external_product_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    category TEXT NOT NULL,
+    price_vnd INTEGER NOT NULL CHECK(price_vnd >= 0),
+    sold_count INTEGER,
+    rating REAL,
+    review_count INTEGER,
+    commission_rate REAL,
+    shop_name TEXT NOT NULL DEFAULT '',
+    product_url TEXT NOT NULL DEFAULT '',
+    image_urls_json TEXT NOT NULL DEFAULT '[]',
+    visual_signals_json TEXT NOT NULL DEFAULT '[]',
+    source_type TEXT NOT NULL,
+    source_url TEXT NOT NULL DEFAULT '',
+    authorization_scope TEXT NOT NULL,
+    rights_status TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    eligibility_status TEXT NOT NULL DEFAULT 'candidate',
+    score REAL,
+    score_json TEXT NOT NULL DEFAULT '{}',
+    score_reason TEXT NOT NULL DEFAULT '',
+    score_confidence TEXT NOT NULL DEFAULT 'low',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(owner_user_id, platform, external_product_id)
+);
+
+CREATE TABLE IF NOT EXISTS affiliate_research_runs (
+    id TEXT PRIMARY KEY,
+    owner_user_id TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running'
+        CHECK(status IN ('running', 'completed', 'failed')),
+    counters_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    finished_at TEXT,
+    UNIQUE(owner_user_id, idempotency_key)
+);
+
+CREATE TABLE IF NOT EXISTS affiliate_product_snapshots (
+    product_id TEXT NOT NULL REFERENCES affiliate_products(id) ON DELETE CASCADE,
+    snapshot_date TEXT NOT NULL,
+    price_vnd INTEGER NOT NULL CHECK(price_vnd >= 0),
+    sold_count INTEGER,
+    rating REAL,
+    review_count INTEGER,
+    commission_rate REAL,
+    collected_at TEXT NOT NULL,
+    PRIMARY KEY(product_id, snapshot_date),
+    UNIQUE(product_id, snapshot_date)
+);
+
+CREATE TABLE IF NOT EXISTS affiliate_references (
+    id TEXT PRIMARY KEY,
+    owner_user_id TEXT NOT NULL,
+    product_id TEXT NOT NULL REFERENCES affiliate_products(id) ON DELETE CASCADE,
+    platform TEXT NOT NULL,
+    source_url TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    author_name TEXT NOT NULL DEFAULT '',
+    author_url TEXT NOT NULL DEFAULT '',
+    thumbnail_url TEXT NOT NULL DEFAULT '',
+    caption TEXT NOT NULL DEFAULT '',
+    embed_html TEXT NOT NULL DEFAULT '',
+    authorization_scope TEXT NOT NULL,
+    rights_status TEXT NOT NULL,
+    media_local_path TEXT NOT NULL DEFAULT '',
+    collected_at TEXT NOT NULL,
+    UNIQUE(owner_user_id, source_url)
+);
+
+CREATE TABLE IF NOT EXISTS affiliate_content_ideas (
+    id TEXT PRIMARY KEY,
+    owner_user_id TEXT NOT NULL,
+    product_id TEXT NOT NULL REFERENCES affiliate_products(id) ON DELETE CASCADE,
+    run_id TEXT NOT NULL REFERENCES affiliate_research_runs(id) ON DELETE CASCADE,
+    audience TEXT NOT NULL,
+    angle TEXT NOT NULL,
+    rationale TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(owner_user_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS affiliate_content_packages (
+    id TEXT PRIMARY KEY,
+    owner_user_id TEXT NOT NULL,
+    product_id TEXT NOT NULL REFERENCES affiliate_products(id) ON DELETE CASCADE,
+    run_id TEXT NOT NULL REFERENCES affiliate_research_runs(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL CHECK(revision > 0),
+    status TEXT NOT NULL CHECK(status IN ('pending_review', 'approved', 'revision_requested', 'rejected')),
+    audience TEXT NOT NULL,
+    angle TEXT NOT NULL,
+    angle_reason TEXT NOT NULL,
+    hook TEXT NOT NULL,
+    script TEXT NOT NULL,
+    duration_seconds INTEGER NOT NULL CHECK(duration_seconds > 0),
+    storyboard_json TEXT NOT NULL DEFAULT '[]',
+    ai_prompts_json TEXT NOT NULL DEFAULT '[]',
+    voiceover_plan TEXT NOT NULL DEFAULT '',
+    text_overlays_json TEXT NOT NULL DEFAULT '[]',
+    claims_json TEXT NOT NULL DEFAULT '[]',
+    warnings_json TEXT NOT NULL DEFAULT '[]',
+    asset_rights_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(owner_user_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS affiliate_approval_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    package_id TEXT NOT NULL REFERENCES affiliate_content_packages(id) ON DELETE CASCADE,
+    owner_user_id TEXT NOT NULL,
+    action TEXT NOT NULL CHECK(action IN ('approve', 'revise', 'reject')),
+    reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_affiliate_products_owner ON affiliate_products(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_affiliate_products_score ON affiliate_products(owner_user_id, score DESC);
+CREATE INDEX IF NOT EXISTS idx_affiliate_snapshots_product ON affiliate_product_snapshots(product_id, snapshot_date DESC);
+CREATE INDEX IF NOT EXISTS idx_affiliate_references_product ON affiliate_references(product_id, collected_at DESC);
+CREATE INDEX IF NOT EXISTS idx_affiliate_ideas_run ON affiliate_content_ideas(run_id, product_id);
+CREATE INDEX IF NOT EXISTS idx_affiliate_packages_owner_status ON affiliate_content_packages(owner_user_id, status);
+CREATE INDEX IF NOT EXISTS idx_affiliate_packages_run ON affiliate_content_packages(run_id, product_id);
+CREATE INDEX IF NOT EXISTS idx_affiliate_events_package ON affiliate_approval_events(package_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_affiliate_runs_owner_status ON affiliate_research_runs(owner_user_id, status);
+"""
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -225,6 +359,10 @@ class Database:
             if current_version < 2:
                 apply_schema_v2(connection)
                 connection.execute("PRAGMA user_version = 2")
+
+            if current_version < 3:
+                connection.executescript(SCHEMA_V3)
+                connection.execute("PRAGMA user_version = 3")
             
         finally:
             connection.close()
@@ -241,4 +379,3 @@ class Database:
             raise
         finally:
             connection.close()
-

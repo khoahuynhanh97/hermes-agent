@@ -47,6 +47,59 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(journal_mode.lower(), "wal")
         self.assertEqual(foreign_keys, 1)
 
+    def test_initialize_creates_affiliate_schema(self) -> None:
+        from hermes.db import Database
+
+        database = Database(self.db_path)
+        database.initialize()
+
+        with database.connect() as connection:
+            names = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+
+        self.assertEqual(version, 3)
+        self.assertTrue(
+            {
+                "affiliate_products",
+                "affiliate_product_snapshots",
+                "affiliate_references",
+                "affiliate_content_ideas",
+                "affiliate_content_packages",
+                "affiliate_approval_events",
+                "affiliate_research_runs",
+            }.issubset(names)
+        )
+
+    def test_v2_database_migrates_to_v3_without_losing_existing_data(self) -> None:
+        from hermes.db import Database
+
+        database = Database(self.db_path)
+        database.initialize()
+        with database.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO sources(
+                    id, owner_user_id, source_type, source_key, confidence,
+                    acquisition_status, metadata_json, created_at, updated_at
+                ) VALUES ('source-1', '42', 'text', 'source:one', 'high', 'ready', '{}',
+                          '2026-08-01T00:00:00+00:00', '2026-08-01T00:00:00+00:00')
+                """
+            )
+            connection.execute("PRAGMA user_version = 2")
+
+        database.initialize()
+
+        with database.connect() as connection:
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            source = connection.execute("SELECT id FROM sources").fetchone()[0]
+        self.assertEqual(version, 3)
+        self.assertEqual(source, "source-1")
+
     def test_foreign_keys_reject_orphan_evidence(self) -> None:
         from hermes.db import Database
 
