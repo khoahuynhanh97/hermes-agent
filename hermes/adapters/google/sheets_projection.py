@@ -94,13 +94,20 @@ class GoogleSheetsProjection:
     def _reconcile(cls, current_rows: list[list[object]], payload: list[dict]) -> list[list[object]]:
         header = cls._header(current_rows, payload)
         desired_by_id = {str(row["id"]): row for row in payload}
-        return [
-            header,
-            *[
-                cls._encode_row(stable_id, row, header)
-                for stable_id, row in desired_by_id.items()
-            ],
-        ]
+        reconciled = []
+        seen_ids = set()
+        if current_rows and current_rows[0] and str(current_rows[0][0]) == "stable_id":
+            for current_row in current_rows[1:]:
+                stable_id = str(current_row[0]) if current_row else ""
+                if stable_id in desired_by_id and stable_id not in seen_ids:
+                    reconciled.append(
+                        cls._encode_row(stable_id, desired_by_id[stable_id], header)
+                    )
+                    seen_ids.add(stable_id)
+        for stable_id, row in desired_by_id.items():
+            if stable_id not in seen_ids:
+                reconciled.append(cls._encode_row(stable_id, row, header))
+        return [header, *reconciled]
 
     @staticmethod
     def _header(current_rows: list[list[object]], payload: list[dict]) -> list[str]:

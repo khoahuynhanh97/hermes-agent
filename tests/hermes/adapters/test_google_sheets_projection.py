@@ -126,6 +126,50 @@ def test_second_sync_removes_stale_stable_ids_from_another_owner_and_run():
     assert repository.calls == [("99", "old-run"), ("42", "current-run")]
 
 
+def test_second_sync_preserves_sheet_order_updates_values_drops_stale_and_appends_new():
+    from hermes.adapters.google.sheets_projection import GoogleSheetsProjection
+
+    empty_rows = {
+        "references": [],
+        "ideas": [],
+        "packages": [],
+        "approval_events": [],
+        "runs": [],
+    }
+    repository = SequencedProjectionRepository(
+        [
+            {
+                **empty_rows,
+                "products": [
+                    {"id": "second", "name": "Second old"},
+                    {"id": "stale", "name": "Stale"},
+                    {"id": "first", "name": "First old"},
+                ],
+            },
+            {
+                **empty_rows,
+                "products": [
+                    {"id": "first", "name": "First updated"},
+                    {"id": "second", "name": "Second updated"},
+                    {"id": "new", "name": "New"},
+                ],
+            },
+        ]
+    )
+    client = FakeSheetsClient()
+    projection = GoogleSheetsProjection(repository, client, "sheet-123")
+
+    projection.sync("42", "run-1")
+    result = projection.sync("42", "run-1")
+
+    header, *rows = client.tabs["Products"]
+    records = [dict(zip(header, row)) for row in rows]
+    assert result.ok is True
+    assert header[0] == "stable_id"
+    assert [row["stable_id"] for row in records] == ["second", "first", "new"]
+    assert [row["name"] for row in records] == ["Second updated", "First updated", "New"]
+
+
 def test_sheet_outage_returns_retryable_result_without_changing_sqlite(repository):
     from hermes.adapters.google.sheets_projection import GoogleSheetsProjection
 
