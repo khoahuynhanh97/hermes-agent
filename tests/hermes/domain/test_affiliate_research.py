@@ -38,6 +38,21 @@ def test_price_policy_has_keyboard_exception():
     assert policy.evaluate(product(price_vnd=1_600_000, category="keyboard")).eligible is False
 
 
+def test_keyboard_price_score_normalizes_category_at_price_boundaries():
+    policy = ProductPolicy()
+    scorer = ProductScorer()
+    eligible_product = product(category=" Keyboard ", price_vnd=1_500_000)
+
+    assert policy.evaluate(eligible_product).eligible is True
+    assert scorer.score(
+        eligible_product,
+        category_sales=(100, 12_000),
+        previous_sold_count=11_500,
+        seen_before=False,
+    ).components["price"] > 0
+    assert policy.evaluate(product(category=" KEYBOARD ", price_vnd=1_500_001)).eligible is False
+
+
 def test_score_is_explainable_and_totals_one_hundred():
     result = ProductScorer().score(
         product(),

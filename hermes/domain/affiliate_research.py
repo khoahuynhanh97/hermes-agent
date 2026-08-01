@@ -5,6 +5,10 @@ from enum import Enum
 from math import log1p
 
 
+def _normalize_category(category: str) -> str:
+    return category.strip().lower().replace(" ", "_").replace("-", "_")
+
+
 @dataclass(frozen=True)
 class ProductCandidate:
     owner_user_id: str
@@ -181,7 +185,7 @@ class ProductPolicy:
     _KEYBOARD_MAX_PRICE = 1_500_000
 
     def evaluate(self, product: AffiliateProduct) -> EligibilityDecision:
-        category = product.category.strip().lower().replace(" ", "_").replace("-", "_")
+        category = _normalize_category(product.category)
         if category not in self._ALLOWED_CATEGORIES:
             return EligibilityDecision(False, "category is outside the supported technology niche")
 
@@ -261,7 +265,8 @@ class ProductScorer:
 
     @staticmethod
     def _price_score(product: AffiliateProduct) -> float:
-        maximum = 1_500_000 if product.category.lower() in {"keyboard", "keyboards"} else 500_000
+        category = _normalize_category(product.category)
+        maximum = 1_500_000 if category in {"keyboard", "keyboards"} else 500_000
         if not 200_000 <= product.price_vnd <= maximum:
             return 0.0
         midpoint = (200_000 + maximum) / 2
