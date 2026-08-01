@@ -48,6 +48,19 @@ class JobRepositoryTests(unittest.TestCase):
         self.assertIsNone(third)
         self.assertEqual([row["id"] for row in jobs.list_jobs(owner_user_id=42)], ["job-1"])
 
+    def test_claim_next_filters_by_type_without_claiming_legacy_jobs(self) -> None:
+        from hermes.jobs import JobRepository
+
+        jobs = JobRepository(self.database)
+        jobs.enqueue("legacy", 42, "learning", {"n": 1})
+        jobs.enqueue("affiliate", 42, "affiliate_product_research", {"n": 2})
+
+        claimed = jobs.claim_next("affiliate_product_research")
+
+        self.assertEqual(claimed["id"], "affiliate")
+        self.assertEqual(jobs.get("legacy")["state"], "queued")
+        self.assertEqual(jobs.claim_next()["id"], "legacy")
+
     def test_retry_is_bounded_and_manual_retry_requires_owner(self) -> None:
         from hermes.jobs import JobRepository
 

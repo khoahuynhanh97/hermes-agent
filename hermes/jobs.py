@@ -66,17 +66,19 @@ class JobRepository:
             row = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
         return self._row(row) if row else None
 
-    def claim_next(self) -> dict | None:
+    def claim_next(self, job_type: str | None = None) -> dict | None:
+        """Atomically claim the next available job, optionally for one job type."""
         now = utc_now()
         with self.database.transaction(immediate=True) as connection:
             row = connection.execute(
                 """
                 SELECT * FROM jobs
                 WHERE state = 'queued' AND cancel_requested = 0 AND available_at <= ?
+                  AND (? IS NULL OR job_type = ?)
                 ORDER BY available_at ASC, created_at ASC, id ASC
                 LIMIT 1
                 """,
-                (now,),
+                (now, job_type, job_type),
             ).fetchone()
             if not row:
                 return None
