@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -53,8 +54,8 @@ def product() -> AffiliateProduct:
     )
 
 
-def package(*, package_id: str = "package-1", revision: int = 1) -> ContentPackage:
-    return ContentPackage(
+def package(*, package_id: str = "package-1", revision: int = 1, **overrides) -> ContentPackage:
+    value = ContentPackage(
         id=package_id,
         owner_user_id="42",
         product_id="product-1",
@@ -77,6 +78,28 @@ def package(*, package_id: str = "package-1", revision: int = 1) -> ContentPacka
         created_at="2026-08-01T00:00:00+00:00",
         updated_at="2026-08-01T00:00:00+00:00",
     )
+    return replace(value, **overrides)
+
+
+def reference(**overrides) -> ReferenceMetadata:
+    value = ReferenceMetadata(
+        id="reference-1",
+        owner_user_id="42",
+        product_id="product-1",
+        platform="tiktok",
+        source_url="https://example.test/reference/1",
+        title="Reference title",
+        author_name="Creator",
+        author_url="https://example.test/creator",
+        thumbnail_url="https://example.test/thumb.jpg",
+        caption="Reference caption",
+        embed_html="<blockquote></blockquote>",
+        authorization_scope="public_metadata",
+        rights_status="reference_only",
+        media_local_path="",
+        collected_at="2026-08-01T00:00:00+00:00",
+    )
+    return replace(value, **overrides)
 
 
 def repository(database):
@@ -91,12 +114,25 @@ def test_upsert_and_snapshot_are_idempotent(database, product):
     repo = repository(database)
 
     first = repo.upsert_product(product)
-    second = repo.upsert_product(replace(product, name="Updated mouse"))
+    second = repo.upsert_product(
+        replace(
+            product,
+            name="Updated mouse",
+            source_type="manual",
+            source_url="https://example.test/product/101",
+            authorization_scope="owner_submission",
+            rights_status="licensed_reference",
+        )
+    )
     repo.record_snapshot(first.id, "2026-08-01", product)
     repo.record_snapshot(first.id, "2026-08-01", product)
 
     assert first.id == second.id == product.id
     assert [item.name for item in repo.list_products("42")] == ["Updated mouse"]
+    assert second.source_type == "manual"
+    assert second.source_url == "https://example.test/product/101"
+    assert second.authorization_scope == "owner_submission"
+    assert second.rights_status == "licensed_reference"
     assert len(repo.list_snapshots(first.id)) == 1
 
 
@@ -119,6 +155,24 @@ def test_package_lookup_is_owner_scoped_and_revisions_are_preserved(database, pr
         ("package-1", 1),
         ("package-2", 2),
     ]
+
+
+def test_save_package_rejects_conflicting_retry_payload(database, product):
+    repo = repository(database)
+    repo.upsert_product(product)
+    repo.create_run("run-1", "42", "key-1")
+    saved = repo.save_package(package())
+
+    assert repo.save_package(package()) == saved
+    with pytest.raises(ValueError, match="conflicting package payload"):
+        repo.save_package(package(revision=2))
+    with pytest.raises(ValueError, match="conflicting package payload"):
+        repo.save_package(package(hook="A changed retry payload"))
+
+    assert repo.get_package(saved.id, "42") == saved
+    with database.connect() as connection:
+        count = connection.execute("SELECT COUNT(*) FROM affiliate_content_packages").fetchone()[0]
+    assert count == 1
 
 
 @pytest.mark.parametrize(
@@ -150,14 +204,24 @@ def test_transition_package_appends_one_event_and_is_idempotent(database, produc
     ]
 
 
-def test_invalid_package_transition_rolls_back_without_event(database, product):
+def test_package_transition_rolls_back_when_event_insert_fails(database, product):
     repo = repository(database)
     repo.upsert_product(product)
     repo.create_run("run-1", "42", "key-1")
     saved = repo.save_package(package())
+    with database.connect() as connection:
+        connection.execute(
+            """
+            CREATE TRIGGER fail_affiliate_event_insert
+            BEFORE INSERT ON affiliate_approval_events
+            BEGIN
+                SELECT RAISE(ABORT, 'forced event insert failure');
+            END
+            """
+        )
 
-    with pytest.raises(ValueError, match="unsupported package action"):
-        repo.transition_package(saved.id, "42", "publish", "not supported")
+    with pytest.raises(sqlite3.IntegrityError, match="forced event insert failure"):
+        repo.transition_package(saved.id, "42", "approve", "review decision")
 
     assert repo.get_package(saved.id, "42") == saved
     with database.connect() as connection:
@@ -166,6 +230,44 @@ def test_invalid_package_transition_rolls_back_without_event(database, product):
             (saved.id,),
         ).fetchone()[0]
     assert event_count == 0
+
+
+def test_child_records_reject_cross_owner_parents_without_partial_writes(database, product):
+    repo = repository(database)
+    repo.upsert_product(product)
+    repo.upsert_product(replace(product, id="product-2", owner_user_id="99", external_product_id="202"))
+    repo.create_run("run-1", "42", "key-1")
+    repo.create_run("run-2", "99", "key-2")
+    idea = ContentIdea(
+        id="idea-1",
+        owner_user_id="42",
+        product_id=product.id,
+        run_id="run-2",
+        audience="office_worker",
+        angle="Desk comfort",
+        rationale="Visible benefit",
+        created_at="2026-08-01T00:00:00+00:00",
+    )
+
+    with pytest.raises(LookupError, match="does not belong to owner"):
+        repo.save_reference(reference(product_id="product-2"))
+    with pytest.raises(LookupError, match="does not belong to owner"):
+        repo.save_ideas(product.id, "run-2", [idea])
+    with pytest.raises(LookupError, match="does not belong to owner"):
+        repo.save_package(package(product_id="product-2"))
+    with pytest.raises(LookupError, match="does not belong to owner"):
+        repo.save_package(package(package_id="package-2", run_id="run-2"))
+
+    with database.connect() as connection:
+        counts = {
+            table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in ("affiliate_references", "affiliate_content_ideas", "affiliate_content_packages")
+        }
+    assert counts == {
+        "affiliate_references": 0,
+        "affiliate_content_ideas": 0,
+        "affiliate_content_packages": 0,
+    }
 
 
 def test_repository_persists_score_reference_ideas_runs_and_projection_rows(database, product):
@@ -177,23 +279,7 @@ def test_repository_persists_score_reference_ideas_runs_and_projection_rows(data
         ScoreBreakdown(82.5, {"sales": 45.0}, "strong sales", "high", 0.2),
         "shortlisted",
     )
-    reference = ReferenceMetadata(
-        id="reference-1",
-        owner_user_id="42",
-        product_id=product.id,
-        platform="tiktok",
-        source_url="https://example.test/reference/1",
-        title="Reference title",
-        author_name="Creator",
-        author_url="https://example.test/creator",
-        thumbnail_url="https://example.test/thumb.jpg",
-        caption="Reference caption",
-        embed_html="<blockquote></blockquote>",
-        authorization_scope="public_metadata",
-        rights_status="reference_only",
-        media_local_path="",
-        collected_at="2026-08-01T00:00:00+00:00",
-    )
+    saved_reference = reference()
     idea = ContentIdea(
         id="idea-1",
         owner_user_id="42",
@@ -205,7 +291,7 @@ def test_repository_persists_score_reference_ideas_runs_and_projection_rows(data
         created_at="2026-08-01T00:00:00+00:00",
     )
 
-    assert repo.save_reference(reference) == reference
+    assert repo.save_reference(saved_reference) == saved_reference
     assert repo.save_ideas(product.id, "run-1", [idea]) == [idea]
     assert repo.create_run("run-2", "42", "key-1")["id"] == "run-1"
     assert repo.finish_run("run-1", {"imported": 1, "shortlisted": 1})["status"] == "completed"
@@ -213,5 +299,5 @@ def test_repository_persists_score_reference_ideas_runs_and_projection_rows(data
     rows = repo.projection_rows("42", "run-1")
     assert rows["products"][0]["eligibility_status"] == "shortlisted"
     assert rows["ideas"][0]["id"] == idea.id
-    assert rows["references"][0]["id"] == reference.id
+    assert rows["references"][0]["id"] == saved_reference.id
     assert rows["runs"][0]["counters"] == {"imported": 1, "shortlisted": 1}

@@ -76,11 +76,13 @@ class DatabaseTests(unittest.TestCase):
         )
 
     def test_v2_database_migrates_to_v3_without_losing_existing_data(self) -> None:
-        from hermes.db import Database
+        from hermes.adapters.sqlite.schema_v2 import apply_schema_v2
+        from hermes.db import Database, SCHEMA_V1
 
-        database = Database(self.db_path)
-        database.initialize()
-        with database.transaction() as connection:
+        connection = sqlite3.connect(self.db_path)
+        try:
+            connection.executescript(SCHEMA_V1)
+            apply_schema_v2(connection)
             connection.execute(
                 """
                 INSERT INTO sources(
@@ -91,7 +93,18 @@ class DatabaseTests(unittest.TestCase):
                 """
             )
             connection.execute("PRAGMA user_version = 2")
+            connection.commit()
+            names = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+        finally:
+            connection.close()
+        self.assertNotIn("affiliate_products", names)
 
+        database = Database(self.db_path)
         database.initialize()
 
         with database.connect() as connection:

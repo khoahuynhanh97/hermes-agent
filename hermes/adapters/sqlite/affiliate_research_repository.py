@@ -46,10 +46,11 @@ class SQLiteAffiliateResearchRepository:
                     UPDATE affiliate_products SET
                         name = ?, category = ?, price_vnd = ?, sold_count = ?, rating = ?,
                         review_count = ?, commission_rate = ?, shop_name = ?, product_url = ?,
-                        image_urls_json = ?, visual_signals_json = ?, content_hash = ?, updated_at = ?
+                        image_urls_json = ?, visual_signals_json = ?, source_type = ?, source_url = ?,
+                        authorization_scope = ?, rights_status = ?, content_hash = ?, updated_at = ?
                     WHERE id = ?
                     """,
-                    self._product_values(product, include_identity=False) + (product_id,),
+                    self._product_current_values(product) + (product.updated_at, product_id),
                 )
             else:
                 connection.execute(
@@ -61,7 +62,15 @@ class SQLiteAffiliateResearchRepository:
                         authorization_scope, rights_status, content_hash, created_at, updated_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    self._product_values(product, include_identity=True),
+                    (
+                        product.id,
+                        product.owner_user_id,
+                        product.platform,
+                        product.external_product_id,
+                        *self._product_current_values(product),
+                        product.created_at,
+                        product.updated_at,
+                    ),
                 )
             row = connection.execute(
                 "SELECT * FROM affiliate_products WHERE id = ?", (product_id,)
@@ -166,6 +175,9 @@ class SQLiteAffiliateResearchRepository:
 
     def save_reference(self, reference: ReferenceMetadata) -> ReferenceMetadata:
         with self._database.transaction() as connection:
+            self._require_owned_product(
+                connection, reference.product_id, reference.owner_user_id
+            )
             connection.execute(
                 """
                 INSERT OR IGNORE INTO affiliate_references(
@@ -189,8 +201,10 @@ class SQLiteAffiliateResearchRepository:
     ) -> list[ContentIdea]:
         if any(idea.product_id != product_id or idea.run_id != run_id for idea in ideas):
             raise ValueError("content ideas must match the supplied product and run")
-        with self._database.transaction() as connection:
+        with self._database.transaction(immediate=True) as connection:
             for idea in ideas:
+                self._require_owned_product(connection, idea.product_id, idea.owner_user_id)
+                self._require_owned_run(connection, idea.run_id, idea.owner_user_id)
                 connection.execute(
                     """
                     INSERT OR IGNORE INTO affiliate_content_ideas(
@@ -211,6 +225,8 @@ class SQLiteAffiliateResearchRepository:
 
     def save_package(self, package: ContentPackage) -> ContentPackage:
         with self._database.transaction(immediate=True) as connection:
+            self._require_owned_product(connection, package.product_id, package.owner_user_id)
+            self._require_owned_run(connection, package.run_id, package.owner_user_id)
             connection.execute(
                 """
                 INSERT OR IGNORE INTO affiliate_content_packages(
@@ -223,12 +239,12 @@ class SQLiteAffiliateResearchRepository:
                 self._package_values(package),
             )
             row = connection.execute(
-                "SELECT * FROM affiliate_content_packages WHERE id = ? AND owner_user_id = ?",
-                (package.id, package.owner_user_id),
+                "SELECT * FROM affiliate_content_packages WHERE id = ?", (package.id,)
             ).fetchone()
-            if row is None:
-                raise ValueError(f"affiliate package id belongs to another owner: {package.id}")
-        return self._package_from_row(row)
+            saved = self._package_from_row(row)
+            if saved != package:
+                raise ValueError(f"conflicting package payload for id: {package.id}")
+        return saved
 
     def get_package(self, package_id: str, owner_user_id: str) -> ContentPackage | None:
         with self._database.connect() as connection:
@@ -380,8 +396,8 @@ class SQLiteAffiliateResearchRepository:
         }
 
     @staticmethod
-    def _product_values(product: AffiliateProduct, *, include_identity: bool) -> tuple:
-        mutable = (
+    def _product_current_values(product: AffiliateProduct) -> tuple:
+        return (
             product.name,
             product.category,
             product.price_vnd,
@@ -393,25 +409,36 @@ class SQLiteAffiliateResearchRepository:
             product.product_url,
             json.dumps(product.image_urls),
             json.dumps(product.visual_signals),
-            product.content_hash,
-            product.updated_at,
-        )
-        if not include_identity:
-            return mutable
-        return (
-            product.id,
-            product.owner_user_id,
-            product.platform,
-            product.external_product_id,
-            *mutable[:11],
             product.source_type,
             product.source_url,
             product.authorization_scope,
             product.rights_status,
-            mutable[11],
-            product.created_at,
-            mutable[12],
+            product.content_hash,
         )
+
+    @staticmethod
+    def _require_owned_product(
+        connection: sqlite3.Connection, product_id: str, owner_user_id: str
+    ) -> None:
+        row = connection.execute(
+            "SELECT owner_user_id FROM affiliate_products WHERE id = ?", (product_id,)
+        ).fetchone()
+        if row is None:
+            raise LookupError(f"affiliate product not found: {product_id}")
+        if row["owner_user_id"] != owner_user_id:
+            raise LookupError(f"affiliate product does not belong to owner: {product_id}")
+
+    @staticmethod
+    def _require_owned_run(
+        connection: sqlite3.Connection, run_id: str, owner_user_id: str
+    ) -> None:
+        row = connection.execute(
+            "SELECT owner_user_id FROM affiliate_research_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        if row is None:
+            raise LookupError(f"affiliate run not found: {run_id}")
+        if row["owner_user_id"] != owner_user_id:
+            raise LookupError(f"affiliate run does not belong to owner: {run_id}")
 
     @staticmethod
     def _package_values(package: ContentPackage) -> tuple:
