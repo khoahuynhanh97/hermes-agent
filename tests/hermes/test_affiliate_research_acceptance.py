@@ -189,7 +189,7 @@ def test_200_product_run_is_idempotent_and_produces_review_packages(tmp_path, mo
 
 
 def test_affiliate_configuration_validates_limits_and_redacts_credentials(tmp_path):
-    from hermes.affiliate_config import load_affiliate_research_settings
+    from hermes.affiliate_config import AffiliateResearchSettings, load_affiliate_research_settings
 
     settings = load_affiliate_research_settings(
         {
@@ -216,6 +216,32 @@ def test_affiliate_configuration_validates_limits_and_redacts_credentials(tmp_pa
             }
         )
     assert "secret-service-account.json" not in str(error.value)
+
+    for missing_setting in (
+        "GOOGLE_SHEETS_CREDENTIALS_FILE",
+        "GOOGLE_SHEETS_SPREADSHEET_ID",
+    ):
+        enabled_google = {
+            "GOOGLE_SHEETS_ENABLED": "1",
+            "GOOGLE_SHEETS_CREDENTIALS_FILE": "secret-service-account.json",
+            "GOOGLE_SHEETS_SPREADSHEET_ID": "spreadsheet-id",
+        }
+        enabled_google[missing_setting] = ""
+        with pytest.raises(ValueError) as error:
+            AffiliateResearchSettings.from_environment(enabled_google)
+        assert missing_setting in str(error.value)
+        assert "secret-service-account.json" not in str(error.value)
+
+    configured = AffiliateResearchSettings.from_environment(
+        {
+            "AFFILIATE_IMPORT_DIR": str(tmp_path / "configured-imports"),
+            "GOOGLE_SHEETS_ENABLED": "1",
+            "GOOGLE_SHEETS_CREDENTIALS_FILE": "protected.json",
+            "GOOGLE_SHEETS_SPREADSHEET_ID": "spreadsheet-id",
+        }
+    )
+    assert configured.google_sheets_enabled is True
+    assert "protected.json" not in repr(configured)
 
 
 def test_production_composition_disables_external_projections_when_not_configured(monkeypatch, tmp_path):
@@ -253,7 +279,7 @@ def test_production_composition_disables_external_projections_when_not_configure
         google_sheets_enabled=False,
         google_sheets_credentials_file="",
         google_sheets_spreadsheet_id="",
-        shortlist_limit=25,
+        shortlist_limit=15,
         package_limit=10,
     )
     handler = jobs.build_affiliate_research_job_handler(settings=settings)
@@ -261,6 +287,7 @@ def test_production_composition_disables_external_projections_when_not_configure
     assert isinstance(handler, jobs.AffiliateResearchJobHandler)
     assert isinstance(captured["kwargs"]["sheets_projection"], DisabledSheetsProjection)
     assert isinstance(captured["kwargs"]["review_delivery"], DisabledReviewDelivery)
+    assert captured["kwargs"]["shortlist_limit"] == 15
 
     configured_projection = object()
     factory_repositories = []
@@ -270,13 +297,13 @@ def test_production_composition_disables_external_projections_when_not_configure
         lambda repository: factory_repositories.append(repository) or configured_projection,
     )
     enabled_handler = jobs.build_affiliate_research_job_handler(
-        settings=AffiliateResearchSettings(
-            import_directory=tmp_path / "imports",
-            google_sheets_enabled=True,
-            google_sheets_credentials_file="protected.json",
-            google_sheets_spreadsheet_id="spreadsheet-id",
-            shortlist_limit=25,
-            package_limit=10,
+        settings=AffiliateResearchSettings.from_environment(
+            {
+                "AFFILIATE_IMPORT_DIR": str(tmp_path / "imports"),
+                "GOOGLE_SHEETS_ENABLED": "1",
+                "GOOGLE_SHEETS_CREDENTIALS_FILE": "protected.json",
+                "GOOGLE_SHEETS_SPREADSHEET_ID": "spreadsheet-id",
+            }
         )
     )
 

@@ -19,35 +19,45 @@ class AffiliateResearchSettings:
     shortlist_limit: int = 25
     package_limit: int = 10
 
+    @classmethod
+    def from_environment(
+        cls,
+        environ: Mapping[str, str] | None = None,
+    ) -> AffiliateResearchSettings:
+        """Read and validate affiliate settings without logging sensitive values."""
+        values = os.environ if environ is None else environ
+        google_sheets_enabled = _boolean(values.get("GOOGLE_SHEETS_ENABLED", "0"))
+        credentials_file = str(values.get("GOOGLE_SHEETS_CREDENTIALS_FILE", "")).strip()
+        spreadsheet_id = str(values.get("GOOGLE_SHEETS_SPREADSHEET_ID", "")).strip()
+        if google_sheets_enabled and (not credentials_file or not spreadsheet_id):
+            raise ValueError(
+                "GOOGLE_SHEETS_ENABLED requires GOOGLE_SHEETS_CREDENTIALS_FILE "
+                "and GOOGLE_SHEETS_SPREADSHEET_ID."
+            )
+        return cls(
+            import_directory=_import_directory(values),
+            google_sheets_enabled=google_sheets_enabled,
+            google_sheets_credentials_file=credentials_file,
+            google_sheets_spreadsheet_id=spreadsheet_id,
+            shortlist_limit=_bounded_integer(
+                values.get("AFFILIATE_RESEARCH_SHORTLIST_LIMIT", "25"),
+                "AFFILIATE_RESEARCH_SHORTLIST_LIMIT",
+                minimum=15,
+                maximum=25,
+            ),
+            package_limit=_bounded_integer(
+                values.get("AFFILIATE_RESEARCH_PACKAGE_LIMIT", "10"),
+                "AFFILIATE_RESEARCH_PACKAGE_LIMIT",
+                minimum=5,
+                maximum=10,
+            ),
+        )
+
 
 def load_affiliate_research_settings(
     environ: Mapping[str, str] | None = None,
 ) -> AffiliateResearchSettings:
-    """Read and validate affiliate settings without logging sensitive values."""
-    values = os.environ if environ is None else environ
-    import_directory = _import_directory(values)
-    return AffiliateResearchSettings(
-        import_directory=import_directory,
-        google_sheets_enabled=_boolean(values.get("GOOGLE_SHEETS_ENABLED", "0")),
-        google_sheets_credentials_file=str(
-            values.get("GOOGLE_SHEETS_CREDENTIALS_FILE", "")
-        ).strip(),
-        google_sheets_spreadsheet_id=str(
-            values.get("GOOGLE_SHEETS_SPREADSHEET_ID", "")
-        ).strip(),
-        shortlist_limit=_bounded_integer(
-            values.get("AFFILIATE_RESEARCH_SHORTLIST_LIMIT", "25"),
-            "AFFILIATE_RESEARCH_SHORTLIST_LIMIT",
-            minimum=15,
-            maximum=25,
-        ),
-        package_limit=_bounded_integer(
-            values.get("AFFILIATE_RESEARCH_PACKAGE_LIMIT", "10"),
-            "AFFILIATE_RESEARCH_PACKAGE_LIMIT",
-            minimum=5,
-            maximum=10,
-        ),
-    )
+    return AffiliateResearchSettings.from_environment(environ)
 
 
 def _import_directory(values: Mapping[str, str]) -> Path:

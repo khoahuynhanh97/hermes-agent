@@ -107,6 +107,7 @@ class AffiliateRunService:
         projection_failures: ProjectionFailureStore | None = None,
         reference_collector: ReferenceCollector | None = None,
         snapshot_date: Callable[[], str] | None = None,
+        shortlist_limit: int = 25,
     ):
         self._repository = repository
         self._catalog = catalog_service
@@ -117,6 +118,13 @@ class AffiliateRunService:
         self._projection_failures = projection_failures or DisabledProjectionFailureStore()
         self._reference_collector = reference_collector or DisabledReferenceCollector()
         self._snapshot_date = snapshot_date or (lambda: date.today().isoformat())
+        if (
+            isinstance(shortlist_limit, bool)
+            or not isinstance(shortlist_limit, int)
+            or not 15 <= shortlist_limit <= 25
+        ):
+            raise ValueError("shortlist_limit must be between 15 and 25")
+        self._shortlist_limit = shortlist_limit
 
     def run(self, request: AffiliateRunRequest) -> RunResult:
         self._validate_request(request)
@@ -156,7 +164,7 @@ class AffiliateRunService:
             owner_user_id=request.owner_user_id,
             run_id=run_id,
             minimum=15,
-            maximum=25,
+            maximum=self._shortlist_limit,
         )
         references = self._reference_collector.collect(
             request.owner_user_id, [item.product if hasattr(item, "product") else item for item in shortlisted], request.reference_urls

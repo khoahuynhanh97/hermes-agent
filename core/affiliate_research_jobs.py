@@ -198,6 +198,7 @@ def build_affiliate_research_job_handler(
             AffiliateContentService(repository, AffiliateContentGateway(HermesLLMGateway())),
             sheets_projection=sheets_projection,
             review_delivery=delivery_factory(repository),
+            shortlist_limit=configuration.shortlist_limit,
         )
     return AffiliateResearchJobHandler(
         resolved_import_directory,

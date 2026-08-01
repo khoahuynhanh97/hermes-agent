@@ -235,6 +235,24 @@ def test_same_idempotency_key_returns_existing_run_and_retries_projection():
     assert repository.list_packages("42", first.run_id) == [_Package("package-1"), _Package("package-2")]
 
 
+def test_configured_shortlist_limit_controls_scoring_maximum():
+    from hermes.application.affiliate_run_service import AffiliateRunRequest, AffiliateRunService
+
+    repository = _Repository()
+    catalog = _Catalog()
+    service = AffiliateRunService(
+        repository,
+        catalog,
+        _Content(repository),
+        source_factory=lambda path: {"csv": path},
+        shortlist_limit=15,
+    )
+
+    service.run(AffiliateRunRequest("42", "run-key-shortlist-15", "products.csv", package_limit=5))
+
+    assert catalog.shortlist_calls[0][2:] == (15, 15)
+
+
 def test_package_failure_leaves_run_running_and_retry_is_not_reused():
     from hermes.application.affiliate_run_service import AffiliateRunRequest, AffiliateRunService
 

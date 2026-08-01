@@ -19,9 +19,9 @@ AFFILIATE_RESEARCH_SHORTLIST_LIMIT=25
 AFFILIATE_RESEARCH_PACKAGE_LIMIT=10
 ```
 
-`AFFILIATE_IMPORT_DIR` defaults to `<HERMES_DATA_DIR>/affiliate_imports`. Shortlist limits must be 15 through 25; package limits must be 5 through 10. Create the import directory with host permissions restricted to the operator.
+`AFFILIATE_IMPORT_DIR` defaults to `<HERMES_DATA_DIR>/affiliate_imports`. Shortlist limits must be 15 through 25; `AFFILIATE_RESEARCH_SHORTLIST_LIMIT` is the production scoring maximum. Package limits must be 5 through 10. Create the import directory with host permissions restricted to the operator.
 
-Google Sheets is disabled unless `GOOGLE_SHEETS_ENABLED=1`. Create a dedicated Google service account, share only the target workbook with that service-account email, and store its JSON key outside the repository. Point `GOOGLE_SHEETS_CREDENTIALS_FILE` at that protected file and set `GOOGLE_SHEETS_SPREADSHEET_ID`. Never commit the key, copy it into SQLite, paste it into Telegram, or add it to a run artifact.
+Google Sheets is disabled unless `GOOGLE_SHEETS_ENABLED=1`. When enabled, both `GOOGLE_SHEETS_CREDENTIALS_FILE` and `GOOGLE_SHEETS_SPREADSHEET_ID` are required and are validated before job composition. Create a dedicated Google service account, share only the target workbook with that service-account email, and store its JSON key outside the repository. Point `GOOGLE_SHEETS_CREDENTIALS_FILE` at that protected file and set `GOOGLE_SHEETS_SPREADSHEET_ID`. Never commit the key, copy it into SQLite, paste it into Telegram, or add it to a run artifact.
 
 The projection owns the canonical columns and rows in these tabs: `Products`, `Shortlist`, `Ideas`, `Scripts`, `Approval Queue`, and `Runs & Errors`. Operators may add their own columns to the right of the generated fields and may edit review notes. Do not edit stable IDs, generated canonical fields, package status, or projection rows: the next sync reconciles those from SQLite.
 
