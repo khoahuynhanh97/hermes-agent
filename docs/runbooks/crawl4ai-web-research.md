@@ -127,24 +127,34 @@ When Google Sheets projection is enabled, a 7th tab named **`Web Evidence`** is 
 
 To test 10-20 public URLs in a controlled environment:
 
-1. Create a JSON input file `scratch/pilot-urls.json`:
+1. Create a JSON input file `scratch/crawl4ai-pilot-urls.json` (list of objects, 10-20 entries, max 5 per host, unique URLs):
 ```json
-{
-  "urls": [
-    "https://example.com/product-specs-1",
-    "https://example.com/product-specs-2"
-  ]
-}
+[
+  {
+    "url": "https://example.com/product-specs-1",
+    "external_product_id": "SKU-001",
+    "source_kind": "manufacturer"
+  },
+  {
+    "url": "https://review.example.com/desk-lamp-review",
+    "external_product_id": "SKU-001",
+    "source_kind": "editorial_review"
+  }
+]
 ```
+
+Allowed `source_kind` values: `manufacturer`, `editorial_review`, `documentation`, `public_article`.
 
 2. Run the pilot tool:
 ```powershell
 .\.venv\Scripts\python.exe scripts\crawl4ai_pilot.py `
-  --input .\scratch\pilot-urls.json `
-  --output .\scratch\pilot-report.json
+  --input .\scratch\crawl4ai-pilot-urls.json `
+  --output .\scratch\crawl4ai-pilot-report.json
 ```
 
-3. Inspect `scratch/pilot-report.json` to verify success rates, latencies, and output sizes.
+3. Inspect `scratch/crawl4ai-pilot-report.json` to verify success rates, static-vs-rendered comparison, median/max latency, and peak memory. The report contains no raw HTML, raw Markdown, query strings, fragments, or credentials.
+
+> If Crawl4AI/Chromium is unavailable or crashes, the pilot fails fast and does not silently fall back to static-only.
 
 ---
 
