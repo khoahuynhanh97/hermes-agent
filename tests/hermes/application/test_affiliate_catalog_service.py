@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
+
 from hermes.adapters.affiliate.shopee_csv import ShopeeAffiliateCsvSource
 from hermes.application.affiliate_catalog_service import AffiliateCatalogService
 from hermes.domain.affiliate_research import ProductCandidate, ProductSnapshot
@@ -124,7 +126,20 @@ def test_shortlist_excludes_ineligible_products_and_breaks_score_ties_by_product
     ])
     service.import_candidates(source, owner_user_id="42", run_id="run-1", snapshot_date="2026-08-01")
 
-    shortlist = service.score_and_shortlist(owner_user_id="42", run_id="run-1", minimum=1, maximum=2)
+    shortlist = service.score_and_shortlist(owner_user_id="42", run_id="run-1", minimum=15, maximum=15)
 
     assert [row.product.id for row in shortlist] == sorted(row.product.id for row in shortlist)
     assert repository.scores[next(product_id for product_id, product in repository.products.items() if product.external_product_id == "999")][1] == "ineligible"
+
+
+@pytest.mark.parametrize("minimum, maximum", [(14, 15), (16, 15), (15, 26)])
+def test_shortlist_rejects_bounds_outside_the_contract(minimum, maximum):
+    service = AffiliateCatalogService(MemoryAffiliateRepository())
+
+    with pytest.raises(ValueError, match="15 <= minimum <= maximum <= 25"):
+        service.score_and_shortlist(
+            owner_user_id="42",
+            run_id="run-1",
+            minimum=minimum,
+            maximum=maximum,
+        )

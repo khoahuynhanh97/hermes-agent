@@ -112,10 +112,13 @@ class ShopeeAffiliateCsvSource:
 
     @staticmethod
     def _parse_money(value: str) -> int:
-        digits = "".join(re.findall(r"\d", value))
-        if not digits:
-            raise ValueError("price must contain a VND amount")
-        return int(digits)
+        match = re.fullmatch(
+            r"\s*(?P<amount>\d{1,3}(?:[.,]\d{3})+|\d+)\s*(?:[^\d\s]+)?\s*",
+            value,
+        )
+        if match is None:
+            raise ValueError("price must be exactly one VND money token")
+        return int(match.group("amount").replace(".", "").replace(",", ""))
 
     @staticmethod
     def _parse_sold(value: str) -> int | None:

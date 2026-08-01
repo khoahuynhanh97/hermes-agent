@@ -78,8 +78,8 @@ class AffiliateCatalogService:
         minimum: int = 15,
         maximum: int = 25,
     ) -> list[RankedProduct]:
-        if minimum < 0 or maximum < minimum:
-            raise ValueError("shortlist bounds must satisfy 0 <= minimum <= maximum")
+        if not 15 <= minimum <= maximum <= 25:
+            raise ValueError("shortlist bounds must satisfy 15 <= minimum <= maximum <= 25")
         products = self._repository.list_products(owner_user_id)
         category_sales = self._category_sales(products)
         ranked: list[RankedProduct] = []
