@@ -17,6 +17,7 @@ class AffiliateRunRequest:
     csv_path: str
     package_limit: int = 10
     reference_urls: tuple[str, ...] = ()
+    web_references: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,15 @@ class DisabledReferenceCollector:
         return ()
 
 
+class DisabledWebReferenceCollector:
+    def collect(
+        self, owner_user_id: str, run_id: str, products: Sequence[Any], web_inputs: Sequence[dict]
+    ) -> Sequence[Any]:
+        if web_inputs:
+            raise ValueError("web reference collection is not configured")
+        return ()
+
+
 class AffiliateRunService:
     """Commit the affiliate research run before attempting external projections."""
 
@@ -106,6 +116,7 @@ class AffiliateRunService:
         review_delivery: ReviewDelivery | None = None,
         projection_failures: ProjectionFailureStore | None = None,
         reference_collector: ReferenceCollector | None = None,
+        web_reference_collector: Any | None = None,
         snapshot_date: Callable[[], str] | None = None,
         shortlist_limit: int = 25,
     ):
@@ -117,6 +128,7 @@ class AffiliateRunService:
         self._delivery = review_delivery or DisabledReviewDelivery()
         self._projection_failures = projection_failures or DisabledProjectionFailureStore()
         self._reference_collector = reference_collector or DisabledReferenceCollector()
+        self._web_reference_collector = web_reference_collector or DisabledWebReferenceCollector()
         self._snapshot_date = snapshot_date or (lambda: date.today().isoformat())
         if (
             isinstance(shortlist_limit, bool)
@@ -169,11 +181,15 @@ class AffiliateRunService:
         references = self._reference_collector.collect(
             request.owner_user_id, [item.product if hasattr(item, "product") else item for item in shortlisted], request.reference_urls
         )
+        web_references = self._web_reference_collector.collect(
+            request.owner_user_id, run_id, [item.product if hasattr(item, "product") else item for item in shortlisted], request.web_references
+        )
+        all_references = tuple(references) + tuple(web_references)
         packages = self._content.create_packages(
             request.owner_user_id,
             run_id,
             [item.product if hasattr(item, "product") else item for item in shortlisted],
-            references,
+            all_references,
             per_run=request.package_limit,
         )
         result = RunResult(

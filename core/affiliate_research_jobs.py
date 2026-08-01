@@ -54,6 +54,7 @@ class AffiliateResearchJobHandler:
             csv_path=str(csv_path),
             package_limit=self._package_limit(payload.get("package_limit", self._default_package_limit)),
             reference_urls=self._reference_urls(payload.get("reference_urls", ())),
+            web_references=self._web_references(payload.get("web_references", ())),
         )
         try:
             result = self._run_service.run(request)
@@ -113,6 +114,17 @@ class AffiliateResearchJobHandler:
         ):
             raise AffiliateResearchJobError("affiliate job reference_urls must be text values")
         return tuple(url.strip() for url in value)
+
+    @staticmethod
+    def _web_references(value: Any) -> tuple[dict[str, Any], ...]:
+        if not isinstance(value, (list, tuple)):
+            raise AffiliateResearchJobError("affiliate job web_references must be a list of objects")
+        res = []
+        for item in value:
+            if not isinstance(item, Mapping):
+                raise AffiliateResearchJobError("affiliate job web_references elements must be objects")
+            res.append(dict(item))
+        return tuple(res)
 
 
 class AffiliateResearchJobWorker:
@@ -202,16 +214,46 @@ def build_affiliate_research_job_handler(
             TikTokPublicReferenceAdapter,
         )
         from hermes.adapters.telegram.affiliate_review import review_delivery_from_environment
+        from hermes.adapters.web.crawl4ai_fetcher import Crawl4AIWebDocumentFetcher, Crawl4AIUnavailable
+        from hermes.adapters.web.static_fetcher import StaticWebDocumentFetcher
+        from hermes.adapters.sqlite.web_document_repository import SQLiteWebDocumentRepository
+        from hermes.application.affiliate_web_reference_service import AffiliateWebReferenceService
+        from hermes.application.web_acquisition_service import WebAcquisitionService
+        from hermes.application.web_url_policy import PublicWebUrlPolicy
+        from hermes.web_research_config import load_web_research_settings_from_env
         from hermes.db import Database
         from hermes.llm import HermesLLMGateway
 
-        repository = SQLiteAffiliateResearchRepository(Database())
+        database = Database()
+        repository = SQLiteAffiliateResearchRepository(database)
         if configuration.google_sheets_enabled:
             projection_factory = sheets_projection_factory or GoogleSheetsProjection.from_environment
             sheets_projection = projection_factory(repository)
         else:
             sheets_projection = DisabledSheetsProjection()
         delivery_factory = review_delivery_factory or review_delivery_from_environment
+
+        web_settings = load_web_research_settings_from_env()
+        url_policy = PublicWebUrlPolicy()
+        static_fetcher = StaticWebDocumentFetcher(policy=url_policy)
+        crawl4ai_fetcher = None
+        if web_settings.crawl4ai_enabled:
+            crawl4ai_fetcher = Crawl4AIWebDocumentFetcher(policy=url_policy)
+
+        acquisition_service = WebAcquisitionService(
+            static_fetcher=static_fetcher,
+            crawl4ai_fetcher=crawl4ai_fetcher,
+            settings=web_settings,
+        )
+        web_doc_repo = SQLiteWebDocumentRepository(database)
+        web_reference_service = AffiliateWebReferenceService(
+            web_acquisition_service=acquisition_service,
+            web_document_repository=web_doc_repo,
+            research_repository=repository,
+            url_policy=url_policy,
+            settings=web_settings,
+        )
+
         run_service = AffiliateRunService(
             repository,
             AffiliateCatalogService(repository),
@@ -221,6 +263,7 @@ def build_affiliate_research_job_handler(
             reference_collector=TikTokReferenceCollector(
                 repository, TikTokPublicReferenceAdapter()
             ),
+            web_reference_collector=web_reference_service,
             shortlist_limit=configuration.shortlist_limit,
         )
     return AffiliateResearchJobHandler(
