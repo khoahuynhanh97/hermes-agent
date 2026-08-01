@@ -35,6 +35,10 @@ class AffiliateResearchRepository(Protocol):
 
     def get_package(self, package_id: str, owner_user_id: str) -> ContentPackage | None: ...
 
+    def list_packages(
+        self, owner_user_id: str, run_id: str | None = None
+    ) -> list[ContentPackage]: ...
+
     def transition_package(
         self, package_id: str, owner_user_id: str, action: str, reason: str
     ) -> ContentPackage: ...

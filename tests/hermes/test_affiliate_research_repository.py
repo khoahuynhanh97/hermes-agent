@@ -157,6 +157,25 @@ def test_package_lookup_is_owner_scoped_and_revisions_are_preserved(database, pr
     ]
 
 
+def test_list_packages_filters_by_owner_and_optional_run_in_deterministic_order(database, product):
+    repo = repository(database)
+    repo.upsert_product(product)
+    repo.create_run("run-1", "42", "key-1")
+    repo.create_run("run-2", "42", "key-2")
+    repo.save_package(package(package_id="later", created_at="2026-08-01T00:00:02+00:00"))
+    repo.save_package(
+        package(
+            package_id="earlier",
+            run_id="run-2",
+            created_at="2026-08-01T00:00:01+00:00",
+        )
+    )
+
+    assert [item.id for item in repo.list_packages("42")] == ["later", "earlier"]
+    assert [item.id for item in repo.list_packages("42", "run-2")] == ["earlier"]
+    assert repo.list_packages("99") == []
+
+
 def test_save_package_rejects_conflicting_retry_payload(database, product):
     repo = repository(database)
     repo.upsert_product(product)

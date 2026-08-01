@@ -254,6 +254,30 @@ class SQLiteAffiliateResearchRepository:
             ).fetchone()
         return self._package_from_row(row) if row else None
 
+    def list_packages(
+        self, owner_user_id: str, run_id: str | None = None
+    ) -> list[ContentPackage]:
+        with self._database.connect() as connection:
+            if run_id is None:
+                rows = connection.execute(
+                    """
+                    SELECT * FROM affiliate_content_packages
+                    WHERE owner_user_id = ?
+                    ORDER BY created_at DESC, revision DESC, id DESC
+                    """,
+                    (owner_user_id,),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT * FROM affiliate_content_packages
+                    WHERE owner_user_id = ? AND run_id = ?
+                    ORDER BY created_at DESC, revision DESC, id DESC
+                    """,
+                    (owner_user_id, run_id),
+                ).fetchall()
+        return [self._package_from_row(row) for row in rows]
+
     def transition_package(
         self, package_id: str, owner_user_id: str, action: str, reason: str
     ) -> ContentPackage:
