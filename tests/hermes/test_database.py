@@ -62,7 +62,7 @@ class DatabaseTests(unittest.TestCase):
             }
             version = connection.execute("PRAGMA user_version").fetchone()[0]
 
-        self.assertEqual(version, 3)
+        self.assertEqual(version, 4)
         self.assertTrue(
             {
                 "affiliate_products",
@@ -75,7 +75,7 @@ class DatabaseTests(unittest.TestCase):
             }.issubset(names)
         )
 
-    def test_v2_database_migrates_to_v3_without_losing_existing_data(self) -> None:
+    def test_v2_database_migrates_to_v4_without_losing_existing_data(self) -> None:
         from hermes.adapters.sqlite.schema_v2 import apply_schema_v2
         from hermes.db import Database, SCHEMA_V1
 
@@ -110,8 +110,49 @@ class DatabaseTests(unittest.TestCase):
         with database.connect() as connection:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
             source = connection.execute("SELECT id FROM sources").fetchone()[0]
-        self.assertEqual(version, 3)
+        self.assertEqual(version, 4)
         self.assertEqual(source, "source-1")
+
+    def test_v3_projection_failure_is_backfilled_into_v4_outbox(self) -> None:
+        from hermes.adapters.sqlite.schema_v2 import apply_schema_v2
+        from hermes.db import Database, SCHEMA_V1, SCHEMA_V3
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            connection.executescript(SCHEMA_V1)
+            apply_schema_v2(connection)
+            connection.executescript(SCHEMA_V3)
+            connection.execute(
+                """
+                INSERT INTO affiliate_research_runs(
+                    id, owner_user_id, idempotency_key, status, counters_json,
+                    created_at, updated_at, finished_at
+                ) VALUES (
+                    'run-1', '42', 'key-1', 'completed',
+                    '{"projection_failures":{"sheets":{"detail":"offline","retryable":true}}}',
+                    '2026-08-01T00:00:00+00:00',
+                    '2026-08-01T00:00:00+00:00',
+                    '2026-08-01T00:00:00+00:00'
+                )
+                """
+            )
+            connection.execute("PRAGMA user_version = 3")
+            connection.commit()
+        finally:
+            connection.close()
+
+        database = Database(self.db_path)
+        database.initialize()
+
+        with database.connect() as migrated:
+            outbox = migrated.execute(
+                """
+                SELECT projection, status, detail
+                FROM affiliate_projection_outbox
+                WHERE run_id = 'run-1'
+                """
+            ).fetchone()
+        self.assertEqual(tuple(outbox), ("sheets", "pending", "offline"))
 
     def test_foreign_keys_reject_orphan_evidence(self) -> None:
         from hermes.db import Database

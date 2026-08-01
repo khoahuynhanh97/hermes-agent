@@ -56,6 +56,9 @@ class AffiliateProduct:
     content_hash: str
     created_at: str
     updated_at: str
+    score: float | None = None
+    score_reason: str = ""
+    score_confidence: str = "low"
 
 
 @dataclass(frozen=True)
@@ -102,6 +105,8 @@ class ReferenceMetadata:
     rights_status: str
     media_local_path: str
     collected_at: str
+    source_type: str = "tiktok_oembed"
+    content_hash: str = ""
 
 
 @dataclass(frozen=True)
@@ -113,6 +118,24 @@ class ContentIdea:
     audience: str
     angle: str
     rationale: str
+    created_at: str
+    score: float = 0.0
+    rank: int = 0
+    selected: bool = False
+
+
+@dataclass(frozen=True)
+class ResearchBrief:
+    id: str
+    owner_user_id: str
+    product_id: str
+    run_id: str
+    revision: int
+    verified_specs: tuple[dict[str, object], ...]
+    strengths: tuple[str, ...]
+    limitations: tuple[str, ...]
+    unverified_claims: tuple[str, ...]
+    reference_patterns: tuple[str, ...]
     created_at: str
 
 

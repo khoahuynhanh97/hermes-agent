@@ -203,3 +203,36 @@ def test_environment_factory_requires_configuration_without_loading_credentials(
 
     with pytest.raises(RuntimeError, match="GOOGLE_SHEETS_CREDENTIALS_FILE"):
         GoogleSheetsProjection.from_environment(repository)
+
+
+def test_operator_editable_columns_survive_resync():
+    from hermes.adapters.google.sheets_projection import GoogleSheetsProjection
+
+    payload = {
+        "products": [{"id": "p1", "name": "Canonical"}],
+        "references": [],
+        "ideas": [],
+        "packages": [],
+        "approval_events": [],
+        "runs": [],
+    }
+    client = FakeSheetsClient()
+    projection = GoogleSheetsProjection(
+        SequencedProjectionRepository([payload, payload]), client, "sheet-123"
+    )
+    projection.sync("42", "run-1")
+    header = client.tabs["Products"][0]
+    client.tabs["Products"][0] = [*header, "review_notes", "custom_priority"]
+    client.tabs["Products"][1] = [
+        *client.tabs["Products"][1],
+        "Keep this note",
+        "P1",
+    ]
+
+    projection.sync("42", "run-1")
+
+    header, row = client.tabs["Products"]
+    record = dict(zip(header, row))
+    assert record["name"] == "Canonical"
+    assert record["review_notes"] == "Keep this note"
+    assert record["custom_priority"] == "P1"

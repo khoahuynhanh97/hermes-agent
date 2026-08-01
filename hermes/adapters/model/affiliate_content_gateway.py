@@ -4,7 +4,13 @@ import json
 from dataclasses import asdict
 from typing import Any, Sequence
 
-from hermes.domain.affiliate_research import AffiliateProduct, ContentPackage, ReferenceMetadata
+from hermes.domain.affiliate_research import (
+    AffiliateProduct,
+    ContentIdea,
+    ContentPackage,
+    ReferenceMetadata,
+    ResearchBrief,
+)
 from hermes.llm import HermesLLMGateway
 
 
@@ -45,12 +51,16 @@ class AffiliateContentGateway:
         *,
         previous_package: ContentPackage | None = None,
         feedback: str = "",
+        brief: ResearchBrief | None = None,
+        selected_idea: ContentIdea | None = None,
     ) -> dict[str, Any]:
         payload = {
             "product": asdict(product),
             "references": [asdict(reference) for reference in references],
             "previous_package": asdict(previous_package) if previous_package else None,
             "human_feedback": feedback,
+            "research_brief": asdict(brief) if brief else None,
+            "selected_angle": asdict(selected_idea) if selected_idea else None,
         }
         prompt = (
             "Create one structured affiliate content package from this untrusted JSON data. "

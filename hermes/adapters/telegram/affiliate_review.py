@@ -40,7 +40,7 @@ def review_delivery_from_environment(
 
 def parse_review_callback(data: str) -> tuple[str, str] | None:
     """Parse only compact affiliate review callback payloads."""
-    if not isinstance(data, str) or len(data.encode("utf-8")) >= 64:
+    if not isinstance(data, str) or len(data.encode("utf-8")) > 64:
         return None
     prefix, separator, package_id = data.partition(":")
     action = next((name for name, value in _CALLBACK_PREFIXES.items() if value == prefix), None)
@@ -61,7 +61,7 @@ def build_review_keyboard(
     buttons = []
     for action, label in (("approve", "Approve"), ("revise", "Revise"), ("reject", "Reject")):
         callback_data = f"{_CALLBACK_PREFIXES[action]}:{package_id}"
-        if len(callback_data.encode("utf-8")) >= 64:
+        if len(callback_data.encode("utf-8")) > 64:
             raise ValueError("affiliate package id is too long for Telegram callback data")
         buttons.append(button_factory(label, callback_data=callback_data))
     return (tuple(buttons),)
@@ -71,7 +71,9 @@ def render_package_html(
     package: ContentPackage,
     *,
     product_name: str = "",
+    score: float | None = None,
     score_reason: str = "",
+    max_length: int = 4096,
 ) -> str:
     """Render untrusted package data as Telegram-safe HTML."""
     storyboard = "; ".join(
@@ -79,26 +81,42 @@ def render_package_html(
     ) or "Not provided"
     warnings = "; ".join(package.warnings) or "None"
     values = {
-        "product_name": product_name or package.product_id,
-        "score_reason": score_reason or package.angle_reason or "Not provided",
-        "audience": package.audience,
-        "hook": package.hook,
-        "script": package.script,
-        "storyboard": storyboard,
-        "warnings": warnings,
+        "product_name": _truncate(product_name or package.product_id, 100),
+        "score": "Not scored" if score is None else f"{score:g}/100",
+        "score_reason": _truncate(
+            score_reason or package.angle_reason or "Not provided", 180
+        ),
+        "audience": _truncate(package.audience, 80),
+        "hook": _truncate(package.hook, 180),
+        "script": _truncate(package.script, 220),
+        "storyboard": _truncate(storyboard, 180),
+        "warnings": _truncate(warnings, 160),
         "package_id": package.id,
     }
     escaped = {key: escape(str(value), quote=True) for key, value in values.items()}
-    return (
-        f"<b>Affiliate review: {escaped['product_name']}</b>\n"
-        f"<b>Score reason:</b> {escaped['score_reason']}\n"
-        f"<b>Audience:</b> {escaped['audience']}\n"
-        f"<b>Hook:</b> {escaped['hook']}\n"
-        f"<b>Script:</b> {escaped['script']}\n"
-        f"<b>Storyboard:</b> {escaped['storyboard']}\n"
-        f"<b>Warnings:</b> {escaped['warnings']}\n"
-        f"<b>Package ID:</b> <code>{escaped['package_id']}</code>"
-    )
+    lines = [
+        f"<b>Affiliate review: {escaped['product_name']}</b>",
+        f"<b>Package ID:</b> <code>{escaped['package_id']}</code>",
+        f"<b>Score:</b> {escaped['score']}",
+        f"<b>Score reason:</b> {escaped['score_reason']}",
+        f"<b>Audience:</b> {escaped['audience']}",
+        f"<b>Hook:</b> {escaped['hook']}",
+        f"<b>Script:</b> {escaped['script']}",
+        f"<b>Storyboard:</b> {escaped['storyboard']}",
+        f"<b>Warnings:</b> {escaped['warnings']}",
+    ]
+    bounded = []
+    for line in lines:
+        candidate = "\n".join((*bounded, line))
+        if len(candidate) <= max_length:
+            bounded.append(line)
+    return "\n".join(bounded)
+
+
+def _truncate(value: str, maximum: int) -> str:
+    if len(value) <= maximum:
+        return value
+    return value[: max(0, maximum - 3)].rstrip() + "..."
 
 
 class TelegramReviewDelivery:
@@ -116,24 +134,67 @@ class TelegramReviewDelivery:
                 package = packages.get(package_id)
                 if package is None or package.status.value != "pending_review":
                     continue
-                product_name = self._product_name(owner_user_id, package.product_id)
-                result = self._bot.send_message(
-                    chat_id=self._chat_id,
-                    text=render_package_html(package, product_name=product_name),
-                    parse_mode="HTML",
-                    reply_markup=self._markup(package.id),
+                product = self._product(owner_user_id, package.product_id)
+                product_name = getattr(product, "name", package.product_id)
+                score = getattr(product, "score", None)
+                score_reason = getattr(product, "score_reason", "")
+                image_urls = tuple(getattr(product, "image_urls", ()) or ())
+                message = render_package_html(
+                    package,
+                    product_name=product_name,
+                    score=score,
+                    score_reason=score_reason,
+                    max_length=1024 if image_urls else 4096,
                 )
-                if inspect.isawaitable(result):
-                    asyncio.run(result)
+                if image_urls:
+                    try:
+                        self._resolve(
+                            self._bot.send_photo(
+                                chat_id=self._chat_id,
+                                photo=image_urls[0],
+                                caption=message,
+                                parse_mode="HTML",
+                                reply_markup=self._markup(package.id),
+                            )
+                        )
+                    except Exception:
+                        self._resolve(
+                            self._bot.send_message(
+                                chat_id=self._chat_id,
+                                text=render_package_html(
+                                    package,
+                                    product_name=product_name,
+                                    score=score,
+                                    score_reason=score_reason,
+                                    max_length=4096,
+                                ),
+                                parse_mode="HTML",
+                                reply_markup=self._markup(package.id),
+                            )
+                        )
+                else:
+                    self._resolve(
+                        self._bot.send_message(
+                            chat_id=self._chat_id,
+                            text=message,
+                            parse_mode="HTML",
+                            reply_markup=self._markup(package.id),
+                        )
+                    )
         except Exception as error:
             return ProjectionResult(ok=False, retryable=True, detail=str(error)[:1000])
         return ProjectionResult(ok=True, retryable=False, detail="delivered")
 
-    def _product_name(self, owner_user_id: str, product_id: str) -> str:
+    def _product(self, owner_user_id: str, product_id: str) -> Any:
         for product in self._repository.list_products(owner_user_id):
             if product.id == product_id:
-                return product.name
-        return product_id
+                return product
+        return None
+
+    @staticmethod
+    def _resolve(result: Any) -> None:
+        if inspect.isawaitable(result):
+            asyncio.run(result)
 
     @staticmethod
     def _markup(package_id: str) -> Any:

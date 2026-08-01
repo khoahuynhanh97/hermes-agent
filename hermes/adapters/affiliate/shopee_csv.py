@@ -82,8 +82,10 @@ class ShopeeAffiliateCsvSource:
             "category": category,
             "price_vnd": price_vnd,
             "sold_count": self._parse_sold(self._value(values, "sold_count")),
-            "rating": self._parse_float(self._value(values, "rating")),
-            "review_count": self._parse_integer(self._value(values, "review_count")),
+            "rating": self._parse_rating(self._value(values, "rating")),
+            "review_count": self._parse_nonnegative_integer(
+                self._value(values, "review_count")
+            ),
             "commission_rate": self._parse_percentage(self._value(values, "commission_rate")),
             "shop_name": self._value(values, "shop_name"),
             "product_url": product_url,
@@ -127,17 +129,23 @@ class ShopeeAffiliateCsvSource:
         normalized = value.strip().lower().replace(" ", "")
         if normalized.endswith("k"):
             number = normalized[:-1].replace(",", ".")
+            if re.fullmatch(r"\d+(?:\.\d+)?", number) is None:
+                raise ValueError(f"invalid integer: {value}")
             return round(float(number) * 1_000)
-        return ShopeeAffiliateCsvSource._parse_integer(normalized)
+        return ShopeeAffiliateCsvSource._parse_nonnegative_integer(normalized)
 
     @staticmethod
     def _parse_integer(value: str) -> int | None:
         if not value:
             return None
-        digits = "".join(re.findall(r"\d", value))
-        if not digits:
+        normalized = value.strip()
+        if re.fullmatch(r"\d+", normalized) is None:
             raise ValueError(f"invalid integer: {value}")
-        return int(digits)
+        return int(normalized)
+
+    @staticmethod
+    def _parse_nonnegative_integer(value: str) -> int | None:
+        return ShopeeAffiliateCsvSource._parse_integer(value)
 
     @staticmethod
     def _parse_float(value: str) -> float | None:
@@ -149,6 +157,13 @@ class ShopeeAffiliateCsvSource:
             raise ValueError(f"invalid number: {value}") from error
 
     @staticmethod
+    def _parse_rating(value: str) -> float | None:
+        rating = ShopeeAffiliateCsvSource._parse_float(value)
+        if rating is not None and not 0 <= rating <= 5:
+            raise ValueError("rating must be between 0 and 5")
+        return rating
+
+    @staticmethod
     def _parse_percentage(value: str) -> float | None:
         if not value:
             return None
@@ -157,7 +172,10 @@ class ShopeeAffiliateCsvSource:
             rate = float(normalized)
         except ValueError as error:
             raise ValueError(f"invalid commission rate: {value}") from error
-        return rate / 100 if rate > 1 or "%" in value else rate
+        parsed = rate / 100 if rate > 1 or "%" in value else rate
+        if not 0 <= parsed <= 1:
+            raise ValueError("commission rate must be between 0 and 1")
+        return parsed
 
     @staticmethod
     def _split_values(value: str) -> tuple[str, ...]:

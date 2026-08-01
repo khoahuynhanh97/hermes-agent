@@ -10,6 +10,7 @@ from hermes.domain.affiliate_research import (
     ProductSnapshot,
     ProjectionResult,
     ReferenceMetadata,
+    ResearchBrief,
     ScoreBreakdown,
 )
 
@@ -21,6 +22,14 @@ class AffiliateResearchRepository(Protocol):
         self, product_id: str, snapshot_date: str, product: AffiliateProduct
     ) -> ProductSnapshot: ...
 
+    def record_run_product(
+        self,
+        run_id: str,
+        product_id: str,
+        *,
+        warnings: Sequence[str] = (),
+    ) -> None: ...
+
     def list_products(self, owner_user_id: str, run_id: str | None = None) -> list[AffiliateProduct]: ...
 
     def list_snapshots(self, product_id: str) -> list[ProductSnapshot]: ...
@@ -29,9 +38,19 @@ class AffiliateResearchRepository(Protocol):
 
     def save_reference(self, reference: ReferenceMetadata) -> ReferenceMetadata: ...
 
+    def save_brief(self, brief: ResearchBrief) -> ResearchBrief: ...
+
     def save_ideas(self, product_id: str, run_id: str, ideas: Sequence[ContentIdea]) -> list[ContentIdea]: ...
 
     def save_package(self, package: ContentPackage) -> ContentPackage: ...
+
+    def save_revision(
+        self,
+        parent_id: str,
+        owner_user_id: str,
+        revision: ContentPackage,
+        feedback: str,
+    ) -> ContentPackage: ...
 
     def get_package(self, package_id: str, owner_user_id: str) -> ContentPackage | None: ...
 
@@ -46,6 +65,22 @@ class AffiliateResearchRepository(Protocol):
     def create_run(self, run_id: str, owner_user_id: str, idempotency_key: str) -> dict: ...
 
     def finish_run(self, run_id: str, counters: dict[str, Any]) -> dict: ...
+
+    def complete_run(
+        self,
+        run_id: str,
+        counters: dict[str, Any],
+        projections: Sequence[str],
+    ) -> dict: ...
+
+    def pending_projections(self, run_id: str) -> list[dict]: ...
+
+    def mark_projection_result(
+        self,
+        run_id: str,
+        projection: str,
+        result: ProjectionResult,
+    ) -> None: ...
 
     def record_projection_failure(
         self, run_id: str, projection: str, detail: str, *, retryable: bool

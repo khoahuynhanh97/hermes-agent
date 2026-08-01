@@ -6,6 +6,9 @@ from typing import Any
 from .db import Database, utc_now
 
 
+_DEDICATED_JOB_TYPES = ("affiliate_product_research",)
+
+
 def _dump(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
@@ -70,16 +73,29 @@ class JobRepository:
         """Atomically claim the next available job, optionally for one job type."""
         now = utc_now()
         with self.database.transaction(immediate=True) as connection:
-            row = connection.execute(
-                """
-                SELECT * FROM jobs
-                WHERE state = 'queued' AND cancel_requested = 0 AND available_at <= ?
-                  AND (? IS NULL OR job_type = ?)
-                ORDER BY available_at ASC, created_at ASC, id ASC
-                LIMIT 1
-                """,
-                (now, job_type, job_type),
-            ).fetchone()
+            if job_type is None:
+                placeholders = ", ".join("?" for _ in _DEDICATED_JOB_TYPES)
+                row = connection.execute(
+                    f"""
+                    SELECT * FROM jobs
+                    WHERE state = 'queued' AND cancel_requested = 0 AND available_at <= ?
+                      AND job_type NOT IN ({placeholders})
+                    ORDER BY available_at ASC, created_at ASC, id ASC
+                    LIMIT 1
+                    """,
+                    (now, *_DEDICATED_JOB_TYPES),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    """
+                    SELECT * FROM jobs
+                    WHERE state = 'queued' AND cancel_requested = 0 AND available_at <= ?
+                      AND job_type = ?
+                    ORDER BY available_at ASC, created_at ASC, id ASC
+                    LIMIT 1
+                    """,
+                    (now, job_type),
+                ).fetchone()
             if not row:
                 return None
             cursor = connection.execute(

@@ -12,7 +12,9 @@ from hermes.domain.affiliate_research import (
     ContentPackage,
     PackageStatus,
     ProductSnapshot,
+    ProjectionResult,
     ReferenceMetadata,
+    ResearchBrief,
     ScoreBreakdown,
 )
 
@@ -108,6 +110,33 @@ class SQLiteAffiliateResearchRepository:
             ).fetchone()
         return self._snapshot_from_row(row)
 
+    def record_run_product(
+        self,
+        run_id: str,
+        product_id: str,
+        *,
+        warnings: Sequence[str] = (),
+    ) -> None:
+        with self._database.transaction(immediate=True) as connection:
+            run = connection.execute(
+                "SELECT owner_user_id FROM affiliate_research_runs WHERE id = ?",
+                (run_id,),
+            ).fetchone()
+            if run is None:
+                raise LookupError(f"affiliate run not found: {run_id}")
+            self._require_owned_product(connection, product_id, run["owner_user_id"])
+            connection.execute(
+                """
+                INSERT INTO affiliate_run_products(
+                    run_id, product_id, observation_status, warnings_json, observed_at
+                ) VALUES (?, ?, 'imported', ?, ?)
+                ON CONFLICT(run_id, product_id) DO UPDATE SET
+                    warnings_json = excluded.warnings_json,
+                    observed_at = excluded.observed_at
+                """,
+                (run_id, product_id, json.dumps(tuple(warnings)), utc_now()),
+            )
+
     def list_products(self, owner_user_id: str, run_id: str | None = None) -> list[AffiliateProduct]:
         with self._database.connect() as connection:
             if run_id is None:
@@ -121,19 +150,13 @@ class SQLiteAffiliateResearchRepository:
             else:
                 rows = connection.execute(
                     """
-                    SELECT * FROM affiliate_products AS product
-                    WHERE owner_user_id = ? AND (
-                        EXISTS (
-                            SELECT 1 FROM affiliate_content_ideas AS idea
-                            WHERE idea.product_id = product.id AND idea.run_id = ?
-                        ) OR EXISTS (
-                            SELECT 1 FROM affiliate_content_packages AS package
-                            WHERE package.product_id = product.id AND package.run_id = ?
-                        )
-                    )
+                    SELECT product.* FROM affiliate_products AS product
+                    JOIN affiliate_run_products AS observation
+                      ON observation.product_id = product.id
+                    WHERE product.owner_user_id = ? AND observation.run_id = ?
                     ORDER BY score DESC, updated_at DESC, id
                     """,
-                    (owner_user_id, run_id, run_id),
+                    (owner_user_id, run_id),
                 ).fetchall()
         return [self._product_from_row(row) for row in rows]
 
@@ -183,8 +206,8 @@ class SQLiteAffiliateResearchRepository:
                 INSERT OR IGNORE INTO affiliate_references(
                     id, owner_user_id, product_id, platform, source_url, title, author_name,
                     author_url, thumbnail_url, caption, embed_html, authorization_scope,
-                    rights_status, media_local_path, collected_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    rights_status, media_local_path, collected_at, source_type, content_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 tuple(asdict(reference).values()),
             )
@@ -193,8 +216,48 @@ class SQLiteAffiliateResearchRepository:
                 (reference.id, reference.owner_user_id),
             ).fetchone()
             if row is None:
+                row = connection.execute(
+                    """
+                    SELECT * FROM affiliate_references
+                    WHERE owner_user_id = ? AND source_url = ?
+                    """,
+                    (reference.owner_user_id, reference.source_url),
+                ).fetchone()
+            if row is None:
                 raise ValueError(f"affiliate reference id belongs to another owner: {reference.id}")
         return self._reference_from_row(row)
+
+    def save_brief(self, brief: ResearchBrief) -> ResearchBrief:
+        with self._database.transaction(immediate=True) as connection:
+            self._require_owned_product(connection, brief.product_id, brief.owner_user_id)
+            self._require_owned_run(connection, brief.run_id, brief.owner_user_id)
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO affiliate_research_briefs(
+                    id, owner_user_id, product_id, run_id, revision,
+                    verified_specs_json, strengths_json, limitations_json,
+                    unverified_claims_json, reference_patterns_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    brief.id,
+                    brief.owner_user_id,
+                    brief.product_id,
+                    brief.run_id,
+                    brief.revision,
+                    json.dumps(brief.verified_specs),
+                    json.dumps(brief.strengths),
+                    json.dumps(brief.limitations),
+                    json.dumps(brief.unverified_claims),
+                    json.dumps(brief.reference_patterns),
+                    brief.created_at,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM affiliate_research_briefs WHERE id = ?",
+                (brief.id,),
+            ).fetchone()
+        return self._brief_from_row(row)
 
     def save_ideas(
         self, product_id: str, run_id: str, ideas: Sequence[ContentIdea]
@@ -207,11 +270,32 @@ class SQLiteAffiliateResearchRepository:
                 self._require_owned_run(connection, idea.run_id, idea.owner_user_id)
                 connection.execute(
                     """
-                    INSERT OR IGNORE INTO affiliate_content_ideas(
-                        id, owner_user_id, product_id, run_id, audience, angle, rationale, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT OR IGNORE INTO affiliate_run_products(
+                        run_id, product_id, observation_status, warnings_json, observed_at
+                    ) VALUES (?, ?, 'imported', '[]', ?)
                     """,
-                    tuple(asdict(idea).values()),
+                    (idea.run_id, idea.product_id, utc_now()),
+                )
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO affiliate_content_ideas(
+                        id, owner_user_id, product_id, run_id, audience, angle, rationale,
+                        created_at, score, rank, selected
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        idea.id,
+                        idea.owner_user_id,
+                        idea.product_id,
+                        idea.run_id,
+                        idea.audience,
+                        idea.angle,
+                        idea.rationale,
+                        idea.created_at,
+                        idea.score,
+                        idea.rank,
+                        int(idea.selected),
+                    ),
                 )
             rows = connection.execute(
                 """
@@ -227,6 +311,14 @@ class SQLiteAffiliateResearchRepository:
         with self._database.transaction(immediate=True) as connection:
             self._require_owned_product(connection, package.product_id, package.owner_user_id)
             self._require_owned_run(connection, package.run_id, package.owner_user_id)
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO affiliate_run_products(
+                    run_id, product_id, observation_status, warnings_json, observed_at
+                ) VALUES (?, ?, 'imported', '[]', ?)
+                """,
+                (package.run_id, package.product_id, utc_now()),
+            )
             connection.execute(
                 """
                 INSERT OR IGNORE INTO affiliate_content_packages(
@@ -245,6 +337,73 @@ class SQLiteAffiliateResearchRepository:
             if saved != package:
                 raise ValueError(f"conflicting package payload for id: {package.id}")
         return saved
+
+    def save_revision(
+        self,
+        parent_id: str,
+        owner_user_id: str,
+        revision: ContentPackage,
+        feedback: str,
+    ) -> ContentPackage:
+        with self._database.transaction(immediate=True) as connection:
+            parent_row = connection.execute(
+                "SELECT * FROM affiliate_content_packages WHERE id = ? AND owner_user_id = ?",
+                (parent_id, owner_user_id),
+            ).fetchone()
+            if parent_row is None:
+                raise LookupError(f"affiliate package not found: {parent_id}")
+            existing_row = connection.execute(
+                "SELECT * FROM affiliate_content_packages WHERE id = ? AND owner_user_id = ?",
+                (revision.id, owner_user_id),
+            ).fetchone()
+            if existing_row is not None:
+                return self._package_from_row(existing_row)
+            parent = self._package_from_row(parent_row)
+            if parent.status not in {
+                PackageStatus.PENDING_REVIEW,
+                PackageStatus.REVISION_REQUESTED,
+            }:
+                raise ValueError(
+                    f"cannot revise package in {parent.status.value} status"
+                )
+            self._require_owned_product(
+                connection, revision.product_id, revision.owner_user_id
+            )
+            self._require_owned_run(connection, revision.run_id, revision.owner_user_id)
+            connection.execute(
+                """
+                INSERT INTO affiliate_content_packages(
+                    id, owner_user_id, product_id, run_id, revision, status, audience, angle,
+                    angle_reason, hook, script, duration_seconds, storyboard_json, ai_prompts_json,
+                    voiceover_plan, text_overlays_json, claims_json, warnings_json, asset_rights_json,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                self._package_values(revision),
+            )
+            now = utc_now()
+            if parent.status is PackageStatus.PENDING_REVIEW:
+                connection.execute(
+                    """
+                    UPDATE affiliate_content_packages
+                    SET status = 'revision_requested', updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (now, parent_id),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO affiliate_approval_events(
+                        package_id, owner_user_id, action, reason, created_at
+                    ) VALUES (?, ?, 'revise', ?, ?)
+                    """,
+                    (parent_id, owner_user_id, feedback, now),
+                )
+            saved_row = connection.execute(
+                "SELECT * FROM affiliate_content_packages WHERE id = ?",
+                (revision.id,),
+            ).fetchone()
+        return self._package_from_row(saved_row)
 
     def get_package(self, package_id: str, owner_user_id: str) -> ContentPackage | None:
         with self._database.connect() as connection:
@@ -338,8 +497,22 @@ class SQLiteAffiliateResearchRepository:
         return self._run_from_row(row)
 
     def finish_run(self, run_id: str, counters: dict[str, object]) -> dict:
+        return self.complete_run(run_id, counters, ())
+
+    def complete_run(
+        self,
+        run_id: str,
+        counters: dict[str, object],
+        projections: Sequence[str],
+    ) -> dict:
         now = utc_now()
-        with self._database.transaction() as connection:
+        with self._database.transaction(immediate=True) as connection:
+            run = connection.execute(
+                "SELECT owner_user_id FROM affiliate_research_runs WHERE id = ?",
+                (run_id,),
+            ).fetchone()
+            if run is None:
+                raise LookupError(f"affiliate run not found: {run_id}")
             cursor = connection.execute(
                 """
                 UPDATE affiliate_research_runs
@@ -350,10 +523,97 @@ class SQLiteAffiliateResearchRepository:
             )
             if cursor.rowcount != 1:
                 raise LookupError(f"affiliate run not found: {run_id}")
+            for projection in projections:
+                if not projection.strip():
+                    raise ValueError("projection name is required")
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO affiliate_projection_outbox(
+                        run_id, projection, owner_user_id, status, attempts,
+                        detail, created_at, updated_at
+                    ) VALUES (?, ?, ?, 'pending', 0, '', ?, ?)
+                    """,
+                    (run_id, projection, run["owner_user_id"], now, now),
+                )
             row = connection.execute(
                 "SELECT * FROM affiliate_research_runs WHERE id = ?", (run_id,)
             ).fetchone()
         return self._run_from_row(row)
+
+    def pending_projections(self, run_id: str) -> list[dict]:
+        with self._database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM affiliate_projection_outbox
+                WHERE run_id = ? AND status = 'pending'
+                ORDER BY projection
+                """,
+                (run_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_projection_result(
+        self,
+        run_id: str,
+        projection: str,
+        result: ProjectionResult,
+    ) -> None:
+        now = utc_now()
+        status = (
+            "delivered"
+            if result.ok
+            else ("pending" if result.retryable else "permanent_failure")
+        )
+        with self._database.transaction(immediate=True) as connection:
+            run = connection.execute(
+                "SELECT counters_json FROM affiliate_research_runs WHERE id = ?",
+                (run_id,),
+            ).fetchone()
+            if run is None:
+                raise LookupError(f"affiliate run not found: {run_id}")
+            cursor = connection.execute(
+                """
+                UPDATE affiliate_projection_outbox
+                SET status = ?, attempts = attempts + 1, detail = ?,
+                    updated_at = ?, delivered_at = ?
+                WHERE run_id = ? AND projection = ?
+                """,
+                (
+                    status,
+                    str(result.detail)[:1000],
+                    now,
+                    now if result.ok else None,
+                    run_id,
+                    projection,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise LookupError(
+                    f"affiliate projection outbox entry not found: {run_id}/{projection}"
+                )
+            counters = json.loads(run["counters_json"])
+            failures = counters.get("projection_failures")
+            if result.ok:
+                if isinstance(failures, dict):
+                    failures.pop(projection, None)
+                    if not failures:
+                        counters.pop("projection_failures", None)
+            else:
+                if not isinstance(failures, dict):
+                    failures = {}
+                    counters["projection_failures"] = failures
+                failures[projection] = {
+                    "detail": str(result.detail)[:1000],
+                    "retryable": bool(result.retryable),
+                }
+            connection.execute(
+                """
+                UPDATE affiliate_research_runs
+                SET counters_json = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (json.dumps(counters, sort_keys=True), now, run_id),
+            )
 
     def record_projection_failure(
         self, run_id: str, projection: str, detail: str, *, retryable: bool
@@ -372,6 +632,20 @@ class SQLiteAffiliateResearchRepository:
                 failures = {}
                 counters["projection_failures"] = failures
             failures[projection] = {"detail": str(detail)[:1000], "retryable": bool(retryable)}
+            connection.execute(
+                """
+                UPDATE affiliate_projection_outbox
+                SET status = ?, attempts = attempts + 1, detail = ?, updated_at = ?
+                WHERE run_id = ? AND projection = ?
+                """,
+                (
+                    "pending" if retryable else "permanent_failure",
+                    str(detail)[:1000],
+                    utc_now(),
+                    run_id,
+                    projection,
+                ),
+            )
             connection.execute(
                 "UPDATE affiliate_research_runs SET counters_json = ?, updated_at = ? WHERE id = ?",
                 (json.dumps(counters, sort_keys=True), utc_now(), run_id),
@@ -395,6 +669,15 @@ class SQLiteAffiliateResearchRepository:
                 if not failures:
                     counters.pop("projection_failures", None)
             connection.execute(
+                """
+                UPDATE affiliate_projection_outbox
+                SET status = 'delivered', attempts = attempts + 1, detail = '',
+                    updated_at = ?, delivered_at = ?
+                WHERE run_id = ? AND projection = ?
+                """,
+                (utc_now(), utc_now(), run_id, projection),
+            )
+            connection.execute(
                 "UPDATE affiliate_research_runs SET counters_json = ?, updated_at = ? WHERE id = ?",
                 (json.dumps(counters, sort_keys=True), utc_now(), run_id),
             )
@@ -408,13 +691,14 @@ class SQLiteAffiliateResearchRepository:
             products = self._projection_query(
                 connection,
                 """
-                SELECT DISTINCT product.* FROM affiliate_products AS product
-                LEFT JOIN affiliate_content_ideas AS idea ON idea.product_id = product.id
-                LEFT JOIN affiliate_content_packages AS package ON package.product_id = product.id
-                WHERE product.owner_user_id = ? AND (idea.run_id = ? OR package.run_id = ?)
+                SELECT product.*, observation.warnings_json AS stale_warnings_json
+                FROM affiliate_products AS product
+                JOIN affiliate_run_products AS observation
+                  ON observation.product_id = product.id
+                WHERE product.owner_user_id = ? AND observation.run_id = ?
                 ORDER BY product.score DESC, product.id
                 """,
-                (owner_user_id, run_id, run_id),
+                (owner_user_id, run_id),
             )
             ideas = self._projection_query(
                 connection,
@@ -430,18 +714,12 @@ class SQLiteAffiliateResearchRepository:
                 connection,
                 """
                 SELECT DISTINCT reference.* FROM affiliate_references AS reference
-                WHERE reference.owner_user_id = ? AND (
-                    EXISTS (
-                        SELECT 1 FROM affiliate_content_ideas AS idea
-                        WHERE idea.product_id = reference.product_id AND idea.run_id = ?
-                    ) OR EXISTS (
-                        SELECT 1 FROM affiliate_content_packages AS package
-                        WHERE package.product_id = reference.product_id AND package.run_id = ?
-                    )
-                )
+                JOIN affiliate_run_products AS observation
+                  ON observation.product_id = reference.product_id
+                WHERE reference.owner_user_id = ? AND observation.run_id = ?
                 ORDER BY reference.collected_at, reference.id
                 """,
-                (owner_user_id, run_id, run_id),
+                (owner_user_id, run_id),
             )
             events = self._projection_query(
                 connection,
@@ -551,6 +829,8 @@ class SQLiteAffiliateResearchRepository:
             source_type=row["source_type"], source_url=row["source_url"],
             authorization_scope=row["authorization_scope"], rights_status=row["rights_status"],
             content_hash=row["content_hash"], created_at=row["created_at"], updated_at=row["updated_at"],
+            score=row["score"], score_reason=row["score_reason"],
+            score_confidence=row["score_confidence"],
         )
 
     @staticmethod
@@ -568,7 +848,25 @@ class SQLiteAffiliateResearchRepository:
 
     @staticmethod
     def _idea_from_row(row: sqlite3.Row) -> ContentIdea:
-        return ContentIdea(**dict(row))
+        value = dict(row)
+        value["selected"] = bool(value["selected"])
+        return ContentIdea(**value)
+
+    @staticmethod
+    def _brief_from_row(row: sqlite3.Row) -> ResearchBrief:
+        return ResearchBrief(
+            id=row["id"],
+            owner_user_id=row["owner_user_id"],
+            product_id=row["product_id"],
+            run_id=row["run_id"],
+            revision=row["revision"],
+            verified_specs=tuple(json.loads(row["verified_specs_json"])),
+            strengths=tuple(json.loads(row["strengths_json"])),
+            limitations=tuple(json.loads(row["limitations_json"])),
+            unverified_claims=tuple(json.loads(row["unverified_claims_json"])),
+            reference_patterns=tuple(json.loads(row["reference_patterns_json"])),
+            created_at=row["created_at"],
+        )
 
     @staticmethod
     def _package_from_row(row: sqlite3.Row) -> ContentPackage:

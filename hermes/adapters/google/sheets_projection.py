@@ -17,6 +17,8 @@ class SheetsClient(Protocol):
 class GoogleSheetsProjection:
     """Projects canonical affiliate research rows to a Google Sheets workbook."""
 
+    _EDITABLE_COLUMNS = frozenset({"review_notes", "operator_notes"})
+
     def __init__(
         self,
         repository: AffiliateResearchRepository,
@@ -100,8 +102,14 @@ class GoogleSheetsProjection:
             for current_row in current_rows[1:]:
                 stable_id = str(current_row[0]) if current_row else ""
                 if stable_id in desired_by_id and stable_id not in seen_ids:
+                    current_values = dict(zip(current_rows[0], current_row))
                     reconciled.append(
-                        cls._encode_row(stable_id, desired_by_id[stable_id], header)
+                        cls._encode_row(
+                            stable_id,
+                            desired_by_id[stable_id],
+                            header,
+                            editable_values=current_values,
+                        )
                     )
                     seen_ids.add(stable_id)
         for stable_id, row in desired_by_id.items():
@@ -113,12 +121,37 @@ class GoogleSheetsProjection:
     def _header(current_rows: list[list[object]], payload: list[dict]) -> list[str]:
         existing_header = [str(value) for value in current_rows[0]] if current_rows else []
         fields = {key for row in payload for key in row if key != "id"}
-        fields.update(column for column in existing_header if column != "stable_id")
+        fields.update(
+            column
+            for column in existing_header
+            if column != "stable_id" and GoogleSheetsProjection._is_editable(column)
+        )
         return ["stable_id", *sorted(fields)]
 
     @staticmethod
-    def _encode_row(stable_id: str, row: dict, header: list[str]) -> list[object]:
-        return [stable_id, *[GoogleSheetsProjection._cell_value(row.get(column)) for column in header[1:]]]
+    def _encode_row(
+        stable_id: str,
+        row: dict,
+        header: list[str],
+        *,
+        editable_values: dict[str, object] | None = None,
+    ) -> list[object]:
+        values = editable_values or {}
+        return [
+            stable_id,
+            *[
+                GoogleSheetsProjection._cell_value(
+                    values.get(column)
+                    if GoogleSheetsProjection._is_editable(column)
+                    else row.get(column)
+                )
+                for column in header[1:]
+            ],
+        ]
+
+    @classmethod
+    def _is_editable(cls, column: str) -> bool:
+        return column in cls._EDITABLE_COLUMNS or column.startswith("custom_")
 
     @staticmethod
     def _cell_value(value: Any) -> object:

@@ -56,3 +56,37 @@ def test_invalid_rows_are_reported_without_dropping_valid_rows(tmp_path):
     assert len(batch.candidates) == 1
     assert batch.errors[0].row_number == 3
     assert "name" in batch.errors[0].message
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("sold", "12 units", "integer"),
+        ("reviews", "-1", "integer"),
+        ("rating", "5.1", "rating"),
+        ("commission", "-2%", "commission"),
+    ],
+)
+def test_csv_source_strictly_validates_numeric_domains(tmp_path, field, value, message):
+    path = tmp_path / "products.csv"
+    row = {
+        "item_id": "101",
+        "product_name": "Mouse",
+        "category": "mouse",
+        "price": "300000",
+        "sold": "12",
+        "rating": "4.8",
+        "reviews": "3",
+        "commission": "10%",
+        "product_link": "https://example.test/101",
+    }
+    row[field] = value
+    path.write_text(
+        ",".join(row) + "\n" + ",".join(str(row[key]) for key in row) + "\n",
+        encoding="utf-8",
+    )
+
+    batch = ShopeeAffiliateCsvSource(path).load_batch("42")
+
+    assert batch.candidates == []
+    assert message in batch.errors[0].message

@@ -60,6 +60,16 @@ class AffiliateCatalogService:
                 product = self._product_from_candidate(candidate, owner_user_id)
                 saved = self._repository.upsert_product(product)
                 self._repository.record_snapshot(saved.id, snapshot_date, saved)
+                warnings = (
+                    ()
+                    if snapshot_date == datetime.now(timezone.utc).date().isoformat()
+                    else (f"metrics snapshot is stale: {snapshot_date}",)
+                )
+                record_observation = getattr(
+                    self._repository, "record_run_product", None
+                )
+                if record_observation is not None:
+                    record_observation(run_id, saved.id, warnings=warnings)
                 if (saved.platform, saved.external_product_id) in existing:
                     updated += 1
                 else:
@@ -79,7 +89,7 @@ class AffiliateCatalogService:
     ) -> list[RankedProduct]:
         if not 15 <= minimum <= maximum <= 25:
             raise ValueError("shortlist bounds must satisfy 15 <= minimum <= maximum <= 25")
-        products = self._repository.list_products(owner_user_id)
+        products = self._repository.list_products(owner_user_id, run_id=run_id)
         category_sales = self._category_sales(products)
         ranked: list[RankedProduct] = []
         for product in products:

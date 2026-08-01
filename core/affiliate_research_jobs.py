@@ -55,7 +55,16 @@ class AffiliateResearchJobHandler:
             package_limit=self._package_limit(payload.get("package_limit", self._default_package_limit)),
             reference_urls=self._reference_urls(payload.get("reference_urls", ())),
         )
-        result = self._run_service.run(request)
+        try:
+            result = self._run_service.run(request)
+        except Exception as error:
+            from hermes.application.affiliate_reference_service import (
+                PermanentReferenceError,
+            )
+
+            if isinstance(error, PermanentReferenceError):
+                raise AffiliateResearchJobError(str(error)) from error
+            raise
         return {
             "run_id": result.run_id,
             "package_ids": list(result.package_ids),
@@ -78,7 +87,12 @@ class AffiliateResearchJobHandler:
 
     @staticmethod
     def _validate_csv(path: Path, owner_user_id: str) -> None:
-        ShopeeAffiliateCsvSource(path).load_batch(owner_user_id)
+        batch = ShopeeAffiliateCsvSource(path).load_batch(owner_user_id)
+        candidate_count = len(batch.candidates) + len(batch.errors)
+        if not 100 <= candidate_count <= 200 or len(batch.candidates) < 100:
+            raise ValueError(
+                "production affiliate CSV must contain between 100 and 200 valid candidates"
+            )
 
     @staticmethod
     def _required_text(value: Any, name: str) -> str:
@@ -181,6 +195,12 @@ def build_affiliate_research_job_handler(
         from hermes.adapters.sqlite.affiliate_research_repository import SQLiteAffiliateResearchRepository
         from hermes.application.affiliate_catalog_service import AffiliateCatalogService
         from hermes.application.affiliate_content_service import AffiliateContentService
+        from hermes.application.affiliate_reference_service import (
+            TikTokReferenceCollector,
+        )
+        from hermes.adapters.tiktok.public_reference import (
+            TikTokPublicReferenceAdapter,
+        )
         from hermes.adapters.telegram.affiliate_review import review_delivery_from_environment
         from hermes.db import Database
         from hermes.llm import HermesLLMGateway
@@ -198,6 +218,9 @@ def build_affiliate_research_job_handler(
             AffiliateContentService(repository, AffiliateContentGateway(HermesLLMGateway())),
             sheets_projection=sheets_projection,
             review_delivery=delivery_factory(repository),
+            reference_collector=TikTokReferenceCollector(
+                repository, TikTokPublicReferenceAdapter()
+            ),
             shortlist_limit=configuration.shortlist_limit,
         )
     return AffiliateResearchJobHandler(

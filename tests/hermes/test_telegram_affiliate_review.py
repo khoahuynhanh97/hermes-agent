@@ -68,7 +68,15 @@ class FakeRepository:
         return [item for item in self.packages.values() if item.owner_user_id == owner_user_id]
 
     def list_products(self, _owner_user_id):
-        return []
+        return [
+            SimpleNamespace(
+                id="product-1",
+                name="Mouse Pro",
+                image_urls=("https://example.test/mouse.jpg",),
+                score=87.5,
+                score_reason="sales=40; visual=25",
+            )
+        ]
 
     def count_approval_events(self, package_id, action):
         return sum(event[:2] == (package_id, action) for event in self.events)
@@ -98,11 +106,16 @@ class FakeQuery:
 
 
 class FakeContentService:
-    def __init__(self):
+    def __init__(self, repository=None):
         self.calls = []
+        self.repository = repository
 
     def revise_package(self, package_id, owner_user_id, feedback):
         self.calls.append((package_id, owner_user_id, feedback))
+        if self.repository is not None:
+            self.repository.transition_package(
+                package_id, owner_user_id, "revise", feedback
+            )
         return package(package_id + ":r2")
 
 
@@ -112,6 +125,11 @@ class FakeBot:
         self.messages = []
 
     def send_message(self, **kwargs):
+        if self.error:
+            raise self.error
+        self.messages.append(kwargs)
+
+    def send_photo(self, **kwargs):
         if self.error:
             raise self.error
         self.messages.append(kwargs)
@@ -155,6 +173,16 @@ def test_renderer_escapes_html_and_callback_data_is_compact():
     assert all(len(callback_data.encode("utf-8")) < 64 for row in keyboard for _, callback_data in row)
 
 
+def test_callback_payload_accepts_exactly_64_bytes():
+    from hermes.adapters.telegram.affiliate_review import parse_review_callback
+
+    prefix = "affiliate_approve:"
+    payload = prefix + ("x" * (64 - len(prefix)))
+
+    assert len(payload.encode("utf-8")) == 64
+    assert parse_review_callback(payload) == ("approve", payload.split(":", 1)[1])
+
+
 def test_review_delivery_returns_retryable_failure_on_transport_error():
     from hermes.adapters.telegram.affiliate_review import TelegramReviewDelivery
 
@@ -163,6 +191,41 @@ def test_review_delivery_returns_retryable_failure_on_transport_error():
     assert result.ok is False
     assert result.retryable is True
     assert "offline" in result.detail
+
+
+def test_review_delivery_uses_product_image_score_and_bounded_caption():
+    from hermes.adapters.telegram.affiliate_review import TelegramReviewDelivery
+
+    repository = FakeRepository()
+    repository.packages["pkg-1"] = replace(package(), script="long script " * 2_000)
+    bot = FakeBot()
+
+    result = TelegramReviewDelivery(repository, bot, chat_id="42").send_pending(
+        "42", ["pkg-1"]
+    )
+
+    assert result.ok is True
+    assert bot.messages[0]["photo"] == "https://example.test/mouse.jpg"
+    assert len(bot.messages[0]["caption"]) <= 1024
+    assert "87.5" in bot.messages[0]["caption"]
+    assert "sales=40" in bot.messages[0]["caption"]
+
+
+def test_review_delivery_falls_back_when_async_photo_delivery_fails():
+    from hermes.adapters.telegram.affiliate_review import TelegramReviewDelivery
+
+    class AsyncPhotoBot(FakeBot):
+        async def send_photo(self, **_kwargs):
+            raise ValueError("photo rejected")
+
+    bot = AsyncPhotoBot()
+
+    result = TelegramReviewDelivery(
+        FakeRepository(), bot, chat_id="42"
+    ).send_pending("42", ["pkg-1"])
+
+    assert result.ok is True
+    assert bot.messages[0]["text"]
 
 
 def test_review_delivery_factory_is_disabled_without_telegram_configuration():
@@ -226,6 +289,10 @@ def test_job_handler_injects_environment_review_delivery(monkeypatch):
 
     assert isinstance(handler, jobs.AffiliateResearchJobHandler)
     assert captured["kwargs"]["review_delivery"] is delivery
+    assert (
+        captured["kwargs"]["reference_collector"].__class__.__name__
+        == "TikTokReferenceCollector"
+    )
 
 
 def test_callback_rejects_unauthorized_user(monkeypatch):
@@ -247,6 +314,26 @@ def test_callback_rejects_unauthorized_user(monkeypatch):
     assert query.answers[0][0] == ("Unauthorized",)
 
 
+def test_revision_callback_only_instructs_and_does_not_transition(monkeypatch):
+    import core.learning_review
+    import importlib
+
+    monkeypatch.setattr(core.learning_review, "LearningReviewStore", FakeLearningStore)
+    telegram_bot = importlib.import_module("telegram_bot")
+    telegram_bot = importlib.reload(telegram_bot)
+    repository = FakeRepository()
+    query = FakeQuery("affiliate_revise:pkg-1")
+    update = SimpleNamespace(callback_query=query)
+    with patch("telegram_bot.is_authorized_user_id", return_value=True), patch.object(
+        telegram_bot, "_affiliate_review_repository_factory", return_value=repository
+    ):
+        asyncio.run(telegram_bot.handle_callback(update, SimpleNamespace(bot=FakeBot())))
+
+    assert repository.get_package("pkg-1", "42").status is PackageStatus.PENDING_REVIEW
+    assert repository.events == []
+    assert "/affiliate_revise" in query.edits[-1]
+
+
 def test_revision_command_requires_feedback_and_invokes_content_service(monkeypatch):
     import core.learning_review
     import importlib
@@ -257,7 +344,7 @@ def test_revision_command_requires_feedback_and_invokes_content_service(monkeypa
     repository = FakeRepository()
     message = FakeMessage()
     update = SimpleNamespace(message=message, effective_user=SimpleNamespace(id=42))
-    content = FakeContentService()
+    content = FakeContentService(repository)
     with patch.object(telegram_bot, "_affiliate_review_repository_factory", return_value=repository), patch.object(
         telegram_bot, "_affiliate_content_service_factory", return_value=content
     ):
@@ -272,3 +359,35 @@ def test_revision_command_requires_feedback_and_invokes_content_service(monkeypa
 
     assert repository.get_package("pkg-1", "42").status is PackageStatus.REVISION_REQUESTED
     assert content.calls == [("pkg-1", "42", "Make the hook shorter")]
+
+
+def test_revision_command_failure_leaves_parent_unchanged(monkeypatch):
+    import core.learning_review
+    import importlib
+
+    monkeypatch.setattr(core.learning_review, "LearningReviewStore", FakeLearningStore)
+    telegram_bot = importlib.import_module("telegram_bot")
+    telegram_bot = importlib.reload(telegram_bot)
+    repository = FakeRepository()
+    message = FakeMessage()
+    update = SimpleNamespace(message=message, effective_user=SimpleNamespace(id=42))
+
+    class FailingContentService:
+        def revise_package(self, *_args):
+            raise ValueError("validation failed")
+
+    with patch.object(
+        telegram_bot, "_affiliate_review_repository_factory", return_value=repository
+    ), patch.object(
+        telegram_bot,
+        "_affiliate_content_service_factory",
+        return_value=FailingContentService(),
+    ):
+        asyncio.run(
+            telegram_bot.affiliate_revise_command(
+                update, SimpleNamespace(args=["pkg-1", "shorter"])
+            )
+        )
+
+    assert repository.get_package("pkg-1", "42").status is PackageStatus.PENDING_REVIEW
+    assert repository.events == []

@@ -136,7 +136,7 @@ class AffiliateRunService:
 
         if run.get("status") == "completed":
             result = self._result_from_completed_run(request.owner_user_id, run_id, run)
-            pending = self._pending_projections(run)
+            pending = self._pending_projections(run_id, run)
             retried = self._project(
                 request.owner_user_id,
                 result,
@@ -182,14 +182,19 @@ class AffiliateRunService:
             shortlisted=len(shortlisted),
             package_ids=tuple(package.id for package in packages),
         )
-        self._repository.finish_run(
-            run_id,
-            {
-                "imported": result.imported,
-                "shortlisted": result.shortlisted,
-                "packaged": len(result.package_ids),
-            },
-        )
+        counters = {
+            "imported": result.imported,
+            "updated": int(getattr(imported, "updated", 0)),
+            "rejected": int(getattr(imported, "rejected", 0)),
+            "errors": int(getattr(imported, "errors", 0)),
+            "shortlisted": result.shortlisted,
+            "packaged": len(result.package_ids),
+        }
+        complete_run = getattr(self._repository, "complete_run", None)
+        if complete_run is None:
+            self._repository.finish_run(run_id, counters)
+        else:
+            complete_run(run_id, counters, ("sheets", "telegram"))
         failures = self._project(request.owner_user_id, result)
         return RunResult(
             run_id=result.run_id,
@@ -242,27 +247,42 @@ class AffiliateRunService:
             outcome = invoke()
         except Exception as error:
             outcome = ProjectionResult(ok=False, retryable=True, detail=str(error)[:1000])
-        if not outcome.ok:
+        mark_result = getattr(self._repository, "mark_projection_result", None)
+        if mark_result is not None:
+            mark_result(run_id, name, outcome)
+        elif not outcome.ok:
             self._repository.record_projection_failure(
                 run_id, name, outcome.detail, retryable=outcome.retryable
             )
+        else:
+            self._repository.clear_projection_failure(run_id, name)
+        if not outcome.ok:
             self._projection_failures.record(name, owner_user_id, run_id, outcome)
             return outcome
-        self._repository.clear_projection_failure(run_id, name)
         return None
 
-    @staticmethod
-    def _pending_projections(run: dict) -> _ProjectionFailures:
+    def _pending_projections(
+        self, run_id: str, run: dict
+    ) -> _ProjectionFailures:
         failures = (run.get("counters") or {}).get("projection_failures")
-        if not isinstance(failures, dict):
-            return _ProjectionFailures()
-        retryable = []
+        retryable = [
+            str(item["projection"])
+            for item in (
+                self._repository.pending_projections(run_id)
+                if hasattr(self._repository, "pending_projections")
+                else ()
+            )
+        ]
         nonretryable = []
+        if not isinstance(failures, dict):
+            return _ProjectionFailures(tuple(dict.fromkeys(retryable)), ())
         for name in ("sheets", "telegram"):
             value = failures.get(name)
             if not isinstance(value, dict):
                 continue
-            (retryable if value.get("retryable") is True else nonretryable).append(name)
+            target = retryable if value.get("retryable") is True else nonretryable
+            if name not in target:
+                target.append(name)
         return _ProjectionFailures(tuple(retryable), tuple(nonretryable))
 
     @staticmethod

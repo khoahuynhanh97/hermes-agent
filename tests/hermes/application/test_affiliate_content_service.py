@@ -51,6 +51,21 @@ class MemoryRepository:
     def list_products(self, owner_user_id, run_id=None):
         return [product for product in self.products if product.owner_user_id == owner_user_id]
 
+    def save_brief(self, brief):
+        self.brief = brief
+        return brief
+
+    def save_revision(self, parent_id, owner_user_id, revision, feedback):
+        parent = self.get_package(parent_id, owner_user_id)
+        existing = self.get_package(revision.id, owner_user_id)
+        if existing:
+            return existing
+        self.packages.append(revision)
+        self.packages[self.packages.index(parent)] = replace(
+            parent, status=PackageStatus.REVISION_REQUESTED
+        )
+        return revision
+
 
 class FakeContentGateway:
     def __init__(self, payload):
@@ -253,7 +268,10 @@ def test_revise_package_preserves_old_revision_and_uses_feedback(repository, pro
 
     assert revised.id != original.id
     assert revised.revision == 2
-    assert repository.get_package(original.id, "42") == original
+    assert (
+        repository.get_package(original.id, "42").status
+        is PackageStatus.REVISION_REQUESTED
+    )
     assert gateway.calls[-1][2] == original
     assert gateway.calls[-1][3] == "Làm hook ngắn hơn"
 
@@ -290,13 +308,14 @@ def test_revisions_have_deterministic_lineage_and_idempotent_retries(repository,
     assert revised.revision == 2
     assert repeated == revised
     assert len(repository.packages) == 2
+    assert len(gateway.calls) == 2
 
     gateway.payload = valid_payload(
         hook="Huong dan moi cho goc ban nho.",
         script="Canh quay moi trinh bay bo cuc va vi tri dat chuot.",
     )
-    with pytest.raises(ValueError, match="conflicting package payload"):
-        service.revise_package(original.id, "42", "Lam hook ngan hon")
+    assert service.revise_package(original.id, "42", "Lam hook ngan hon") == revised
+    assert len(gateway.calls) == 2
 
     gateway.payload = valid_payload(
         hook="Mot thao tac de ban lam viec sach hon.",
@@ -306,6 +325,116 @@ def test_revisions_have_deterministic_lineage_and_idempotent_retries(repository,
 
     assert third.id == f"{original.id}:r3"
     assert third.revision == 3
+
+
+def test_initial_package_retry_reuses_deterministic_id_without_model_call(repository, product):
+    from hermes.application.affiliate_content_service import AffiliateContentService
+
+    gateway = FakeContentGateway(valid_payload())
+    service = AffiliateContentService(repository, gateway)
+
+    first = service.create_packages("42", "run-1", [product], per_run=5)
+    second = service.create_packages("42", "run-1", [product], per_run=5)
+
+    assert second == first
+    assert len(gateway.calls) == 1
+
+
+def test_partial_generation_retry_skips_already_persisted_product(repository, product):
+    from hermes.application.affiliate_content_service import AffiliateContentService
+
+    second = replace(
+        product,
+        id="product-2",
+        external_product_id="202",
+        name="Second mouse",
+        product_url="https://example.test/products/202",
+        content_hash="hash-202",
+    )
+
+    class FailSecondOnceGateway:
+        def __init__(self):
+            self.calls = []
+            self.failed = False
+
+        def generate(self, current, _references, **_kwargs):
+            self.calls.append(current.id)
+            if current.id == "product-2" and not self.failed:
+                self.failed = True
+                raise RuntimeError("injected generation failure")
+            return valid_payload(
+                hook=f"Distinct hook for {current.id}",
+                script=f"Distinct evidence-bound script for {current.id}",
+                claims=[
+                    {
+                        "text": "Canonical product information",
+                        "evidence_url": current.product_url,
+                    }
+                ],
+            )
+
+    gateway = FailSecondOnceGateway()
+    service = AffiliateContentService(repository, gateway)
+    with pytest.raises(RuntimeError, match="injected"):
+        service.create_packages("42", "run-1", [product, second], per_run=5)
+
+    packages = service.create_packages(
+        "42", "run-1", [product, second], per_run=5
+    )
+
+    assert len(packages) == 2
+    assert gateway.calls == ["product-1", "product-2", "product-2"]
+
+
+def test_claim_evidence_is_canonicalized_and_unknown_urls_are_rejected(
+    repository, product
+):
+    from hermes.application.affiliate_content_service import (
+        AffiliateContentService,
+        ContentValidationError,
+    )
+
+    package = AffiliateContentService(
+        repository, FakeContentGateway(valid_payload())
+    ).create_packages("42", "run-1", [product], per_run=5)[0]
+
+    assert package.claims[0]["source_type"] == product.source_type
+    assert package.claims[0]["content_hash"] == product.content_hash
+
+    with pytest.raises(ContentValidationError, match="canonical evidence"):
+        AffiliateContentService(
+            repository,
+            FakeContentGateway(
+                valid_payload(
+                    hook="A distinct unsupported claim hook.",
+                    script="A distinct script with unsupported source evidence.",
+                    claims=[
+                        {
+                            "text": "Unsupported",
+                            "evidence_url": "https://unknown.test/source",
+                        }
+                    ]
+                )
+            ),
+        ).create_packages("42", "run-2", [product], per_run=5)
+
+
+def test_revision_failure_does_not_transition_parent(repository, product):
+    from hermes.application.affiliate_content_service import (
+        AffiliateContentService,
+        ContentValidationError,
+    )
+
+    gateway = FakeContentGateway(valid_payload())
+    service = AffiliateContentService(repository, gateway)
+    repository.products.append(product)
+    original = service.create_packages("42", "run-1", [product], per_run=5)[0]
+    gateway.payload = valid_payload(duration_seconds=5)
+
+    with pytest.raises(ContentValidationError):
+        service.revise_package(original.id, "42", "shorter")
+
+    assert repository.get_package(original.id, "42").status is PackageStatus.PENDING_REVIEW
 
 
 def test_revision_checks_parent_for_high_overlap_content(repository, product):

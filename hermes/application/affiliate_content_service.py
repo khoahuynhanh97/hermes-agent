@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import re
-import uuid
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from typing import Any, Sequence
 from urllib.parse import urlparse
@@ -15,6 +15,7 @@ from hermes.domain.affiliate_research import (
     ContentPackage,
     PackageStatus,
     ReferenceMetadata,
+    ResearchBrief,
 )
 from hermes.ports.affiliate_research import AffiliateResearchRepository
 
@@ -68,18 +69,42 @@ class AffiliateContentService:
         existing = self._repository.list_packages(owner_user_id)
         packages: list[ContentPackage] = []
         for product in selected:
+            package_id = self._initial_package_id(owner_user_id, run_id, product.id)
+            saved_package = next(
+                (package for package in existing if package.id == package_id), None
+            )
+            if saved_package is not None:
+                packages.append(saved_package)
+                continue
             product_references = self._references_for_product(
                 owner_user_id, product.id, references
             )
-            self._repository.save_ideas(product.id, run_id, self._ideas_for(product, owner_user_id, run_id))
+            brief = self._repository.save_brief(
+                self._brief_for(
+                    product, owner_user_id, run_id, product_references
+                )
+            )
+            ideas = self._repository.save_ideas(
+                product.id,
+                run_id,
+                self._ideas_for(product, owner_user_id, run_id, brief),
+            )
+            selected_idea = next(idea for idea in ideas if idea.selected)
             package = self._package_from_payload(
-                self._gateway.generate(product, product_references),
+                self._generate(
+                    product,
+                    product_references,
+                    brief=brief,
+                    selected_idea=selected_idea,
+                ),
                 owner_user_id=owner_user_id,
                 run_id=run_id,
                 product=product,
                 references=product_references,
                 revision=1,
                 existing=existing + packages,
+                selected_idea=selected_idea,
+                package_id=package_id,
             )
             packages.append(self._repository.save_package(package))
         return packages
@@ -105,45 +130,51 @@ class AffiliateContentService:
         )
         if product is None:
             raise LookupError(f"affiliate product not found for package: {package_id}")
+        root_id = self._root_id(previous.id)
+        revision_id = f"{root_id}:r{previous.revision + 1}"
+        existing = self._repository.list_packages(owner_user_id)
+        saved_revision = next((package for package in existing if package.id == revision_id), None)
+        if saved_revision is not None:
+            return saved_revision
         payload = self._gateway.generate(
             product,
             (),
             previous_package=previous,
             feedback=feedback,
         )
-        root_id = self._root_id(previous.id)
-        revision_id = f"{root_id}:r{previous.revision + 1}"
-        existing = self._repository.list_packages(owner_user_id)
-        saved_revision = next((package for package in existing if package.id == revision_id), None)
-        return self._repository.save_package(
-            self._package_from_payload(
-                payload,
-                owner_user_id=owner_user_id,
-                run_id=previous.run_id,
-                product=product,
-                references=(),
-                revision=previous.revision + 1,
-                existing=[
-                    package
-                    for package in existing
-                    if package.id != revision_id
-                ],
-                asset_rights=previous.asset_rights,
-                package_id=revision_id,
-                created_at=saved_revision.created_at if saved_revision else None,
-                updated_at=saved_revision.updated_at if saved_revision else None,
-            )
+        revision = self._package_from_payload(
+            payload,
+            owner_user_id=owner_user_id,
+            run_id=previous.run_id,
+            product=product,
+            references=(),
+            revision=previous.revision + 1,
+            existing=[
+                package for package in existing if package.id != revision_id
+            ],
+            asset_rights=previous.asset_rights,
+            package_id=revision_id,
+            canonical_claims=previous.claims,
         )
+        save_revision = getattr(self._repository, "save_revision", None)
+        if save_revision is not None:
+            return save_revision(previous.id, owner_user_id, revision, feedback)
+        return self._repository.save_package(revision)
 
     @staticmethod
-    def _ideas_for(product: AffiliateProduct, owner_user_id: str, run_id: str) -> list[ContentIdea]:
+    def _ideas_for(
+        product: AffiliateProduct,
+        owner_user_id: str,
+        run_id: str,
+        brief: ResearchBrief,
+    ) -> list[ContentIdea]:
         now = datetime.now(timezone.utc).isoformat()
         angles = (
             ("office_worker", "Gon gàng góc làm việc", "Nhấn vào thay đổi bố cục có thể quan sát."),
             ("remote_worker", "Thao tác bàn làm việc", "Cho thấy một tình huống làm việc quen thuộc."),
             ("tech_shopper", "Chi tiết sản phẩm", "Dẫn từ hình ảnh sản phẩm sang thông tin có nguồn."),
         )
-        return [
+        ranked = [
             ContentIdea(
                 id=hashlib.sha256(f"{product.id}\0{run_id}\0{index}".encode("utf-8")).hexdigest(),
                 owner_user_id=owner_user_id,
@@ -151,11 +182,115 @@ class AffiliateContentService:
                 run_id=run_id,
                 audience=audience,
                 angle=angle,
-                rationale=rationale,
+                rationale=(
+                    f"{rationale} Evidence: {len(brief.verified_specs)} verified specs, "
+                    f"{len(brief.reference_patterns)} reference patterns."
+                ),
                 created_at=now,
+                score=round(
+                    80.0
+                    - index * 5
+                    + min(10.0, len(brief.verified_specs) * 2.0)
+                    + min(5.0, len(brief.reference_patterns)),
+                    2,
+                ),
+                rank=index,
+                selected=index == 1,
             )
             for index, (audience, angle, rationale) in enumerate(angles, start=1)
         ]
+        return ranked
+
+    @staticmethod
+    def _brief_for(
+        product: AffiliateProduct,
+        owner_user_id: str,
+        run_id: str,
+        references: Sequence[ReferenceMetadata],
+    ) -> ResearchBrief:
+        now = datetime.now(timezone.utc).isoformat()
+        verified_specs = (
+            {
+                "name": "price_vnd",
+                "value": product.price_vnd,
+                "evidence_url": product.product_url or product.source_url,
+                "source_type": product.source_type,
+                "content_hash": product.content_hash,
+            },
+            {
+                "name": "category",
+                "value": product.category,
+                "evidence_url": product.product_url or product.source_url,
+                "source_type": product.source_type,
+                "content_hash": product.content_hash,
+            },
+        )
+        strengths = tuple(
+            value
+            for condition, value in (
+                (bool(product.visual_signals), "Visible demonstration potential"),
+                (
+                    product.rating is not None and product.rating >= 4.5,
+                    "Strong current rating evidence",
+                ),
+                (
+                    product.sold_count is not None and product.sold_count > 0,
+                    "Current sales evidence is available",
+                ),
+            )
+            if condition
+        )
+        limitations = tuple(
+            value
+            for condition, value in (
+                (product.rating is None, "Rating is not verified"),
+                (product.review_count is None, "Review count is not verified"),
+                (not product.visual_signals, "Visual demonstration needs review"),
+            )
+            if condition
+        )
+        patterns = tuple(
+            value
+            for reference in references
+            for value in (reference.title.strip(), reference.caption.strip())
+            if value
+        )
+        brief_id = hashlib.sha256(
+            f"{owner_user_id}\0{run_id}\0{product.id}\0brief\0r1".encode("utf-8")
+        ).hexdigest()
+        return ResearchBrief(
+            id=brief_id,
+            owner_user_id=owner_user_id,
+            product_id=product.id,
+            run_id=run_id,
+            revision=1,
+            verified_specs=verified_specs,
+            strengths=strengths,
+            limitations=limitations,
+            unverified_claims=(
+                ("First-hand use has not been verified",)
+                if product.rights_status != "owned"
+                else ()
+            ),
+            reference_patterns=patterns,
+            created_at=now,
+        )
+
+    def _generate(
+        self,
+        product: AffiliateProduct,
+        references: Sequence[ReferenceMetadata],
+        *,
+        brief: ResearchBrief,
+        selected_idea: ContentIdea,
+    ) -> Mapping[str, Any]:
+        parameters = inspect.signature(self._gateway.generate).parameters
+        kwargs = {}
+        if "brief" in parameters:
+            kwargs["brief"] = brief
+        if "selected_idea" in parameters:
+            kwargs["selected_idea"] = selected_idea
+        return self._gateway.generate(product, references, **kwargs)
 
     @staticmethod
     def _references_for_product(
@@ -180,37 +315,163 @@ class AffiliateContentService:
         package_id: str | None = None,
         created_at: str | None = None,
         updated_at: str | None = None,
+        selected_idea: ContentIdea | None = None,
+        canonical_claims: Sequence[Mapping[str, Any]] = (),
     ) -> ContentPackage:
         self._validate_payload(payload)
         self._reject_first_hand_claims(payload)
         self._reject_duplicate_content(payload, existing)
+        self._reject_reference_wording(payload, references)
+        claims = self._canonicalize_claims(
+            payload["claims"],
+            product,
+            references,
+            canonical_claims,
+        )
         rights = asset_rights if asset_rights is not None else {
             product.id: product.rights_status,
             **{reference.id: "reference_only" for reference in references},
         }
         now = datetime.now(timezone.utc).isoformat()
         return ContentPackage(
-            id=package_id or uuid.uuid4().hex,
+            id=package_id
+            or self._initial_package_id(owner_user_id, run_id, product.id),
             owner_user_id=owner_user_id,
             product_id=product.id,
             run_id=run_id,
             revision=revision,
             status=PackageStatus.PENDING_REVIEW,
             audience=payload["audience"].strip(),
-            angle=payload["angle"].strip(),
-            angle_reason=payload["angle_reason"].strip(),
+            angle=(
+                selected_idea.angle
+                if selected_idea is not None
+                else payload["angle"].strip()
+            ),
+            angle_reason=(
+                selected_idea.rationale
+                if selected_idea is not None
+                else payload["angle_reason"].strip()
+            ),
             hook=payload["hook"].strip(),
             script=payload["script"].strip(),
             duration_seconds=payload["duration_seconds"],
             storyboard=tuple(dict(item) for item in payload["storyboard"]),
-            ai_prompts=tuple(item.strip() for item in payload["ai_prompts"]),
+            ai_prompts=tuple(
+                self._preserve_product_design(item, product)
+                for item in payload["ai_prompts"]
+            ),
             voiceover_plan=payload["voiceover_plan"].strip(),
             text_overlays=tuple(item.strip() for item in payload["text_overlays"]),
-            claims=tuple(dict(item) for item in payload["claims"]),
+            claims=claims,
             warnings=tuple(item.strip() for item in payload["warnings"]),
             asset_rights=dict(rights),
             created_at=created_at or now,
             updated_at=updated_at or now,
+        )
+
+    @staticmethod
+    def _initial_package_id(
+        owner_user_id: str, run_id: str, product_id: str
+    ) -> str:
+        return hashlib.sha256(
+            f"{owner_user_id}\0{run_id}\0{product_id}\0package\0r1".encode(
+                "utf-8"
+            )
+        ).hexdigest()
+
+    @staticmethod
+    def _canonicalize_claims(
+        claims: Sequence[Mapping[str, Any]],
+        product: AffiliateProduct,
+        references: Sequence[ReferenceMetadata],
+        prior_claims: Sequence[Mapping[str, Any]],
+    ) -> tuple[dict[str, object], ...]:
+        evidence: dict[str, dict[str, object]] = {}
+        for url in (product.product_url, product.source_url):
+            if isinstance(url, str) and url.startswith("https://"):
+                evidence[url] = {
+                    "source_type": product.source_type,
+                    "content_hash": product.content_hash,
+                    "collected_at": product.updated_at,
+                }
+        for reference in references:
+            evidence[reference.source_url] = {
+                "source_type": reference.source_type,
+                "content_hash": reference.content_hash
+                or hashlib.sha256(reference.source_url.encode("utf-8")).hexdigest(),
+                "collected_at": reference.collected_at,
+            }
+        for claim in prior_claims:
+            url = claim.get("evidence_url")
+            if (
+                isinstance(url, str)
+                and isinstance(claim.get("source_type"), str)
+                and isinstance(claim.get("content_hash"), str)
+                and isinstance(claim.get("collected_at"), str)
+            ):
+                evidence.setdefault(
+                    url,
+                    {
+                        "source_type": claim["source_type"],
+                        "content_hash": claim["content_hash"],
+                        "collected_at": claim["collected_at"],
+                    },
+                )
+
+        canonical = []
+        stale_before = datetime.now(timezone.utc) - timedelta(days=30)
+        for claim in claims:
+            url = str(claim.get("evidence_url", ""))
+            provenance = evidence.get(url)
+            if provenance is None:
+                raise ContentValidationError(
+                    "every factual claim must match canonical evidence"
+                )
+            try:
+                collected_at = datetime.fromisoformat(
+                    str(provenance["collected_at"]).replace("Z", "+00:00")
+                )
+            except (TypeError, ValueError) as error:
+                raise ContentValidationError(
+                    "claim evidence has invalid provenance time"
+                ) from error
+            if collected_at.tzinfo is None:
+                collected_at = collected_at.replace(tzinfo=timezone.utc)
+            if collected_at < stale_before:
+                raise ContentValidationError("claim evidence is stale")
+            canonical.append(
+                {
+                    **dict(claim),
+                    "evidence_url": url,
+                    "source_type": provenance["source_type"],
+                    "content_hash": provenance["content_hash"],
+                    "collected_at": provenance["collected_at"],
+                }
+            )
+        return tuple(canonical)
+
+    @staticmethod
+    def _reject_reference_wording(
+        payload: Mapping[str, Any],
+        references: Sequence[ReferenceMetadata],
+    ) -> None:
+        for output in (payload["hook"], payload["script"]):
+            for reference in references:
+                for wording in (reference.title, reference.caption):
+                    if wording and AffiliateContentService._is_high_overlap(
+                        output, wording
+                    ):
+                        raise ContentValidationError(
+                            "content substantially overlaps reference wording"
+                        )
+
+    @staticmethod
+    def _preserve_product_design(
+        prompt: str, product: AffiliateProduct
+    ) -> str:
+        return (
+            f"{prompt.strip()}. Use the supplied image of {product.name}; "
+            "preserve its exact physical design, controls, proportions, and colors."
         )
 
     @staticmethod

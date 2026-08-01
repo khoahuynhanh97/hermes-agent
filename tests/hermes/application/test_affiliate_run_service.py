@@ -378,3 +378,35 @@ def test_completed_run_keeps_nonretryable_projection_failure_without_reattemptin
     assert second.reused is True
     assert second.retryable_projection_failures == ()
     assert second.nonretryable_projection_failures == ("sheets",)
+
+
+def test_completed_outbox_replays_after_crash_before_any_projection(tmp_path):
+    from hermes.adapters.sqlite.affiliate_research_repository import (
+        SQLiteAffiliateResearchRepository,
+    )
+    from hermes.application.affiliate_run_service import AffiliateRunRequest, AffiliateRunService
+
+    repository = SQLiteAffiliateResearchRepository(Database(tmp_path / "hermes.db"))
+    request = AffiliateRunRequest("42", "crash-before-projection", "products.csv", package_limit=5)
+    run_id = AffiliateRunService._run_id(request.owner_user_id, request.idempotency_key)
+    repository.create_run(run_id, "42", request.idempotency_key)
+    repository.complete_run(
+        run_id,
+        {"imported": 0, "updated": 0, "rejected": 0, "errors": 0, "shortlisted": 0, "packaged": 0},
+        ("sheets", "telegram"),
+    )
+    sheets = _SuccessfulSheets()
+    delivery = _Delivery()
+
+    result = AffiliateRunService(
+        SQLiteAffiliateResearchRepository(Database(tmp_path / "hermes.db")),
+        _NeverCalledCatalog(),
+        _NeverCalledContent(),
+        sheets_projection=sheets,
+        review_delivery=delivery,
+    ).run(request)
+
+    assert result.reused is True
+    assert result.failed_projections == ()
+    assert sheets.calls == [("42", run_id)]
+    assert delivery.calls == [("42", ())]

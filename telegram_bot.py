@@ -1724,12 +1724,6 @@ async def affiliate_revise_command(update: Update, context: ContextTypes.DEFAULT
 
     repository = _affiliate_review_repository_factory()
     try:
-        AffiliateReviewService(repository).apply(
-            package_id,
-            str(user.id),
-            "revise",
-            reason=feedback,
-        )
         revised = _affiliate_content_service_factory(repository).revise_package(
             package_id, str(user.id), feedback
         )
@@ -2354,18 +2348,21 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         action, package_id = affiliate_callback
         repository = _affiliate_review_repository_factory()
         try:
-            package = AffiliateReviewService(repository).apply(
-                package_id,
-                str(user_id),
-                action,
-                reason="Telegram callback",
-            )
             if action == "revise":
+                package = repository.get_package(package_id, str(user_id))
+                if package is None:
+                    raise PackageNotFound(package_id)
                 result_text = (
-                    f"Revision requested for <code>{html_escape(package.id)}</code>. "
+                    f"Provide feedback for <code>{html_escape(package.id)}</code>. "
                     f"Use /affiliate_revise {html_escape(package.id)} &lt;feedback&gt;."
                 )
             else:
+                package = AffiliateReviewService(repository).apply(
+                    package_id,
+                    str(user_id),
+                    action,
+                    reason="Telegram callback",
+                )
                 result_text = (
                     f"Affiliate package <code>{html_escape(package.id)}</code>: "
                     f"{html_escape(package.status.value)}."
