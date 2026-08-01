@@ -113,6 +113,20 @@ class _SuccessfulSheets:
         return ProjectionResult(ok=True, retryable=False, detail="synced")
 
 
+class _NonRetryableSheets:
+    def __init__(self):
+        self.calls = []
+
+    def sync(self, owner_user_id, run_id):
+        self.calls.append((owner_user_id, run_id))
+        return ProjectionResult(ok=False, retryable=False, detail="credentials rejected")
+
+
+class _NeverCalledSheets:
+    def sync(self, *args, **kwargs):
+        raise AssertionError("non-retryable projection must not be called again")
+
+
 class _FailOnceContent(_Content):
     def __init__(self, repository):
         super().__init__(repository)
@@ -313,3 +327,36 @@ def test_completed_run_retries_durable_projection_with_fresh_service_instance(tm
     assert second.failed_projections == ()
     assert succeeding.calls == [("42", run_id)]
     assert "projection_failures" not in repository.create_run(run_id, "42", "run-key-3")["counters"]
+
+
+def test_completed_run_keeps_nonretryable_projection_failure_without_reattempting(tmp_path):
+    from hermes.adapters.sqlite.affiliate_research_repository import SQLiteAffiliateResearchRepository
+    from hermes.application.affiliate_run_service import AffiliateRunRequest, AffiliateRunService
+
+    repository = SQLiteAffiliateResearchRepository(Database(tmp_path / "hermes.db"))
+    request = AffiliateRunRequest("42", "run-key-4", "products.csv", package_limit=5)
+    first_service = AffiliateRunService(
+        repository,
+        _Catalog(),
+        _EmptyContent(),
+        source_factory=lambda path: {"csv": path},
+        sheets_projection=_NonRetryableSheets(),
+    )
+
+    first = first_service.run(request)
+    run_id = AffiliateRunService._run_id(request.owner_user_id, request.idempotency_key)
+    second = AffiliateRunService(
+        repository,
+        _NeverCalledCatalog(),
+        _NeverCalledContent(),
+        sheets_projection=_NeverCalledSheets(),
+    ).run(request)
+
+    assert first.retryable_projection_failures == ()
+    assert first.nonretryable_projection_failures == ("sheets",)
+    assert repository.create_run(run_id, "42", "run-key-4")["counters"]["projection_failures"] == {
+        "sheets": {"detail": "credentials rejected", "retryable": False}
+    }
+    assert second.reused is True
+    assert second.retryable_projection_failures == ()
+    assert second.nonretryable_projection_failures == ("sheets",)

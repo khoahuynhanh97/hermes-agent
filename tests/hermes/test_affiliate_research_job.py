@@ -74,6 +74,26 @@ def test_affiliate_worker_requeues_when_projections_are_pending(tmp_path):
     assert jobs.get("affiliate")["attempts"] == 1
 
 
+def test_affiliate_worker_fails_without_requeue_for_nonretryable_projections(tmp_path):
+    from core.affiliate_research_jobs import AffiliateResearchJobWorker
+
+    jobs = JobRepository(Database(tmp_path / "hermes.db"))
+    jobs.enqueue("affiliate", "42", "affiliate_product_research", {}, max_attempts=2)
+    worker = AffiliateResearchJobWorker(
+        jobs,
+        handler=lambda _job: {
+            "run_id": "run-1",
+            "package_ids": ["pkg-1"],
+            "retryable_projection_failures": [],
+            "nonretryable_projection_failures": ["sheets"],
+        },
+    )
+
+    assert worker.process_next_job() is True
+    assert jobs.get("affiliate")["state"] == "failed"
+    assert jobs.get("affiliate")["attempts"] == 1
+
+
 def test_affiliate_worker_acknowledges_cancellation_before_handler(tmp_path):
     from core.affiliate_research_jobs import AffiliateResearchJobWorker
 

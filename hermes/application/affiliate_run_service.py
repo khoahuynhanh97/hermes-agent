@@ -26,7 +26,19 @@ class RunResult:
     shortlisted: int
     package_ids: tuple[str, ...]
     reused: bool = False
-    failed_projections: tuple[str, ...] = ()
+    retryable_projection_failures: tuple[str, ...] = ()
+    nonretryable_projection_failures: tuple[str, ...] = ()
+
+    @property
+    def failed_projections(self) -> tuple[str, ...]:
+        """Backward-compatible aggregate of all unresolved projections."""
+        return self.retryable_projection_failures + self.nonretryable_projection_failures
+
+
+@dataclass(frozen=True)
+class _ProjectionFailures:
+    retryable: tuple[str, ...] = ()
+    nonretryable: tuple[str, ...] = ()
 
 
 class ProjectionFailureStore(Protocol):
@@ -116,10 +128,11 @@ class AffiliateRunService:
 
         if run.get("status") == "completed":
             result = self._result_from_completed_run(request.owner_user_id, run_id, run)
-            failed_projections = self._project(
+            pending = self._pending_projections(run)
+            retried = self._project(
                 request.owner_user_id,
                 result,
-                projections=self._pending_projections(run),
+                projections=pending.retryable,
             )
             return RunResult(
                 run_id=result.run_id,
@@ -127,7 +140,10 @@ class AffiliateRunService:
                 shortlisted=result.shortlisted,
                 package_ids=result.package_ids,
                 reused=True,
-                failed_projections=failed_projections,
+                retryable_projection_failures=retried.retryable,
+                nonretryable_projection_failures=(
+                    pending.nonretryable + retried.nonretryable
+                ),
             )
 
         imported = self._catalog.import_candidates(
@@ -166,13 +182,14 @@ class AffiliateRunService:
                 "packaged": len(result.package_ids),
             },
         )
-        failed_projections = self._project(request.owner_user_id, result)
+        failures = self._project(request.owner_user_id, result)
         return RunResult(
             run_id=result.run_id,
             imported=result.imported,
             shortlisted=result.shortlisted,
             package_ids=result.package_ids,
-            failed_projections=failed_projections,
+            retryable_projection_failures=failures.retryable,
+            nonretryable_projection_failures=failures.nonretryable,
         )
 
     def _result_from_completed_run(self, owner_user_id: str, run_id: str, run: dict) -> RunResult:
@@ -191,8 +208,9 @@ class AffiliateRunService:
         result: RunResult,
         *,
         projections: Sequence[str] = ("sheets", "telegram"),
-    ) -> tuple[str, ...]:
-        failed: list[str] = []
+    ) -> _ProjectionFailures:
+        retryable: list[str] = []
+        nonretryable: list[str] = []
         for name in projections:
             if name == "sheets":
                 invoke = lambda: self._sheets.sync(owner_user_id, result.run_id)
@@ -200,9 +218,10 @@ class AffiliateRunService:
                 invoke = lambda: self._delivery.send_pending(owner_user_id, result.package_ids)
             else:
                 continue
-            if not self._attempt_projection(name, owner_user_id, result.run_id, invoke):
-                failed.append(name)
-        return tuple(failed)
+            outcome = self._attempt_projection(name, owner_user_id, result.run_id, invoke)
+            if outcome is not None:
+                (retryable if outcome.retryable else nonretryable).append(name)
+        return _ProjectionFailures(tuple(retryable), tuple(nonretryable))
 
     def _attempt_projection(
         self,
@@ -210,7 +229,7 @@ class AffiliateRunService:
         owner_user_id: str,
         run_id: str,
         invoke: Callable[[], ProjectionResult],
-    ) -> bool:
+    ) -> ProjectionResult | None:
         try:
             outcome = invoke()
         except Exception as error:
@@ -220,16 +239,23 @@ class AffiliateRunService:
                 run_id, name, outcome.detail, retryable=outcome.retryable
             )
             self._projection_failures.record(name, owner_user_id, run_id, outcome)
-            return False
+            return outcome
         self._repository.clear_projection_failure(run_id, name)
-        return True
+        return None
 
     @staticmethod
-    def _pending_projections(run: dict) -> tuple[str, ...]:
+    def _pending_projections(run: dict) -> _ProjectionFailures:
         failures = (run.get("counters") or {}).get("projection_failures")
         if not isinstance(failures, dict):
-            return ()
-        return tuple(name for name in ("sheets", "telegram") if name in failures)
+            return _ProjectionFailures()
+        retryable = []
+        nonretryable = []
+        for name in ("sheets", "telegram"):
+            value = failures.get(name)
+            if not isinstance(value, dict):
+                continue
+            (retryable if value.get("retryable") is True else nonretryable).append(name)
+        return _ProjectionFailures(tuple(retryable), tuple(nonretryable))
 
     @staticmethod
     def _run_id(owner_user_id: str, idempotency_key: str) -> str:

@@ -56,7 +56,8 @@ class AffiliateResearchJobHandler:
         return {
             "run_id": result.run_id,
             "package_ids": list(result.package_ids),
-            "failed_projections": list(result.failed_projections),
+            "retryable_projection_failures": list(result.retryable_projection_failures),
+            "nonretryable_projection_failures": list(result.nonretryable_projection_failures),
         }
 
     def _csv_path(self, value: Any) -> Path:
@@ -118,12 +119,22 @@ class AffiliateResearchJobWorker:
                 return True
             run_id = str(result["run_id"])
             package_ids = tuple(result["package_ids"])
-            failed_projections = tuple(result.get("failed_projections", ()))
-            if failed_projections:
+            retryable_failures = tuple(
+                result.get("retryable_projection_failures", result.get("failed_projections", ()))
+            )
+            nonretryable_failures = tuple(result.get("nonretryable_projection_failures", ()))
+            if retryable_failures:
                 self._jobs.fail(
                     job["id"],
-                    f"Affiliate research projections pending: {', '.join(failed_projections)}",
+                    f"Affiliate research retryable projections pending: {', '.join(retryable_failures)}",
                     retryable=True,
+                )
+                return True
+            if nonretryable_failures:
+                self._jobs.fail(
+                    job["id"],
+                    f"Affiliate research projections require intervention: {', '.join(nonretryable_failures)}",
+                    retryable=False,
                 )
                 return True
             self._jobs.complete(
