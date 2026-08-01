@@ -40,6 +40,8 @@ from hermes.application.knowledge_lifecycle import (
     LifecycleActor,
     LifecycleCommand,
 )
+from hermes.application.affiliate_review_service import AffiliateReviewService, PackageNotFound
+from hermes.adapters.telegram.affiliate_review import parse_review_callback
 from hermes.assistant import extract_learning_request, extract_memory_request
 from hermes.memory import MemoryRepository
 from core.repository_search import (
@@ -75,6 +77,23 @@ REPORT_PRIORITY = [
 LEARNING_STORE = LearningReviewStore()
 VIDEO_SOURCE_DIR = LEARNING_STORE.root / "video_sources"
 VIDEO_SOURCE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _affiliate_review_repository_factory():
+    """Construct persistence only when an affiliate Telegram action is requested."""
+    from hermes.adapters.sqlite.affiliate_research_repository import SQLiteAffiliateResearchRepository
+    from hermes.db import Database
+
+    return SQLiteAffiliateResearchRepository(Database())
+
+
+def _affiliate_content_service_factory(repository):
+    """Keep model construction lazy so importing this bot never needs credentials."""
+    from hermes.adapters.model.affiliate_content_gateway import AffiliateContentGateway
+    from hermes.application.affiliate_content_service import AffiliateContentService
+    from hermes.llm import HermesLLMGateway
+
+    return AffiliateContentService(repository, AffiliateContentGateway(HermesLLMGateway()))
 
 
 def save_text_learning_source(text: str, owner_user_id: str | int) -> tuple[Path, dict]:
@@ -1691,6 +1710,42 @@ async def re_analysis_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
 
 
+async def affiliate_revise_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Request a package revision with explicit human feedback."""
+    user = getattr(update, "effective_user", None)
+    package_id = (context.args[0] if getattr(context, "args", None) else "").strip()
+    feedback = " ".join(context.args[1:]).strip() if getattr(context, "args", None) else ""
+    if not user or not package_id:
+        await reply_html(update.message, "Usage: /affiliate_revise <package_id> <feedback>")
+        return None
+    if not feedback:
+        await reply_html(update.message, "Revision feedback is required.")
+        return None
+
+    repository = _affiliate_review_repository_factory()
+    try:
+        AffiliateReviewService(repository).apply(
+            package_id,
+            str(user.id),
+            "revise",
+            reason=feedback,
+        )
+        revised = _affiliate_content_service_factory(repository).revise_package(
+            package_id, str(user.id), feedback
+        )
+    except PackageNotFound:
+        await reply_html(update.message, "Affiliate package not found.")
+        return None
+    except (LookupError, ValueError) as exc:
+        await reply_html(update.message, f"Affiliate revision failed: {exc}")
+        return None
+    await reply_html(
+        update.message,
+        f"Affiliate revision created: {revised.id} (revision {revised.revision}).",
+    )
+    return revised
+
+
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     backend = os.environ.get("HERMES_STORAGE_BACKEND", config.HERMES_STORAGE_BACKEND).strip().lower()
     database = Path(os.environ.get("HERMES_DB_PATH", config.HERMES_DB_PATH)).name
@@ -2294,6 +2349,34 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # failure; continue so the message edit can still complete.
         logger.warning("Could not acknowledge callback %s: %s", data, exc)
 
+    affiliate_callback = parse_review_callback(data)
+    if affiliate_callback is not None:
+        action, package_id = affiliate_callback
+        repository = _affiliate_review_repository_factory()
+        try:
+            package = AffiliateReviewService(repository).apply(
+                package_id,
+                str(user_id),
+                action,
+                reason="Telegram callback",
+            )
+            if action == "revise":
+                result_text = (
+                    f"Revision requested for <code>{html_escape(package.id)}</code>. "
+                    f"Use /affiliate_revise {html_escape(package.id)} &lt;feedback&gt;."
+                )
+            else:
+                result_text = (
+                    f"Affiliate package <code>{html_escape(package.id)}</code>: "
+                    f"{html_escape(package.status.value)}."
+                )
+        except PackageNotFound:
+            result_text = "Affiliate package not found."
+        except ValueError as exc:
+            result_text = f"Affiliate package update failed: {html_escape(str(exc))}"
+        await edit_html_message(query, result_text, already_html=True)
+        return
+
     if data.startswith("knowledge_approve:") or data.startswith("knowledge_reject:"):
         from core.knowledge_store import get_store
 
@@ -2492,6 +2575,7 @@ def main():
     app.add_handler(CommandHandler("cancel", cancel_command))
     app.add_handler(CommandHandler("assistant", assistant_command))
     app.add_handler(CommandHandler("code_plan", code_plan_command))
+    app.add_handler(CommandHandler("affiliate_revise", affiliate_revise_command))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.REPLY, handle_force_reply))
     
