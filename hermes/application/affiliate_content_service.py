@@ -5,6 +5,7 @@ import re
 import uuid
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from typing import Any, Sequence
 from urllib.parse import urlparse
 
@@ -31,10 +32,10 @@ _REQUIRED_TEXT_FIELDS = (
     "voiceover_plan",
 )
 _FIRST_HAND_PATTERNS = (
-    r"\btôi (đã |dùng|thử|sở hữu)",
-    r"\bmình (đã |dùng|thử|sở hữu)",
-    r"\bI (used|tested|own)",
-    r"\bmy (experience|review|desk)\b",
+    "\\b(?:t\u00f4i|m\u00ecnh)\\s+(?:(?:\u0111\u00e3)\\s+)?(?:d\u00f9ng|th\u1eed|tr\u1ea3i\\s+nghi\u1ec7m|s\u1edf\\s+h\u1eefu)\\b",
+    "\\bsau\\s+khi\\s+d\u00f9ng\\b",
+    r"\bI\s+(?:used|tested|own)\b",
+    r"\bmy\s+(?:experience|review|desk)\b",
 )
 _TOKEN_PATTERN = re.compile(r"[\w]+", re.UNICODE)
 
@@ -53,8 +54,8 @@ class AffiliateContentService:
         *,
         per_run: int = 10,
     ) -> list[ContentPackage]:
-        if not 1 <= per_run <= 10:
-            raise ValueError("per_run must be between 1 and 10")
+        if not 5 <= per_run <= 10:
+            raise ValueError("per_run must be between 5 and 10")
         selected = [product for product in products if product.owner_user_id == owner_user_id][:per_run]
         if len(selected) != min(len(products), per_run):
             raise ContentValidationError("products must belong to the package owner")
@@ -110,6 +111,10 @@ class AffiliateContentService:
             previous_package=previous,
             feedback=feedback,
         )
+        root_id = self._root_id(previous.id)
+        revision_id = f"{root_id}:r{previous.revision + 1}"
+        existing = self._repository.list_packages(owner_user_id)
+        saved_revision = next((package for package in existing if package.id == revision_id), None)
         return self._repository.save_package(
             self._package_from_payload(
                 payload,
@@ -120,10 +125,13 @@ class AffiliateContentService:
                 revision=previous.revision + 1,
                 existing=[
                     package
-                    for package in self._repository.list_packages(owner_user_id)
-                    if package.id != previous.id
+                    for package in existing
+                    if package.id != revision_id
                 ],
                 asset_rights=previous.asset_rights,
+                package_id=revision_id,
+                created_at=saved_revision.created_at if saved_revision else None,
+                updated_at=saved_revision.updated_at if saved_revision else None,
             )
         )
 
@@ -169,6 +177,9 @@ class AffiliateContentService:
         revision: int,
         existing: Sequence[ContentPackage],
         asset_rights: dict[str, str] | None = None,
+        package_id: str | None = None,
+        created_at: str | None = None,
+        updated_at: str | None = None,
     ) -> ContentPackage:
         self._validate_payload(payload)
         self._reject_first_hand_claims(payload)
@@ -179,7 +190,7 @@ class AffiliateContentService:
         }
         now = datetime.now(timezone.utc).isoformat()
         return ContentPackage(
-            id=uuid.uuid4().hex,
+            id=package_id or uuid.uuid4().hex,
             owner_user_id=owner_user_id,
             product_id=product.id,
             run_id=run_id,
@@ -198,8 +209,8 @@ class AffiliateContentService:
             claims=tuple(dict(item) for item in payload["claims"]),
             warnings=tuple(item.strip() for item in payload["warnings"]),
             asset_rights=dict(rights),
-            created_at=now,
-            updated_at=now,
+            created_at=created_at or now,
+            updated_at=updated_at or now,
         )
 
     @staticmethod
@@ -246,10 +257,9 @@ class AffiliateContentService:
 
     @staticmethod
     def _reject_first_hand_claims(payload: Mapping[str, Any]) -> None:
-        text = "\n".join(
-            [payload["hook"], payload["script"]]
-            + [claim["text"] for claim in payload["claims"]]
-        ).lower()
+        text = AffiliateContentService._normalize_text(
+            " ".join(AffiliateContentService._text_values(payload))
+        )
         if any(re.search(pattern, text, re.IGNORECASE) for pattern in _FIRST_HAND_PATTERNS):
             raise ContentValidationError("first-hand product claims are not allowed")
 
@@ -260,13 +270,41 @@ class AffiliateContentService:
         for candidate in (payload["hook"], payload["script"]):
             for package in existing:
                 for stored in (package.hook, package.script):
-                    if AffiliateContentService._overlap(candidate, stored) >= 0.8:
+                    if AffiliateContentService._is_high_overlap(candidate, stored):
                         raise ContentValidationError("duplicate or high-overlap content")
 
     @staticmethod
-    def _overlap(left: str, right: str) -> float:
-        left_tokens = set(_TOKEN_PATTERN.findall(left.lower()))
-        right_tokens = set(_TOKEN_PATTERN.findall(right.lower()))
-        if not left_tokens or not right_tokens:
-            return 0.0
-        return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+    def _is_high_overlap(left: str, right: str) -> bool:
+        left_normalized = AffiliateContentService._normalize_text(left)
+        right_normalized = AffiliateContentService._normalize_text(right)
+        left_tokens = _TOKEN_PATTERN.findall(left_normalized)
+        right_tokens = _TOKEN_PATTERN.findall(right_normalized)
+        if min(len(left_tokens), len(right_tokens)) < 5:
+            return False
+        if left_normalized in right_normalized or right_normalized in left_normalized:
+            return True
+        left_set, right_set = set(left_tokens), set(right_tokens)
+        shared = len(left_set & right_set)
+        containment = shared / min(len(left_set), len(right_set))
+        jaccard = shared / len(left_set | right_set)
+        sequence = SequenceMatcher(None, left_tokens, right_tokens).ratio()
+        return containment >= 0.9 or (jaccard >= 0.8 and sequence >= 0.8)
+
+    @staticmethod
+    def _root_id(package_id: str) -> str:
+        match = re.fullmatch(r"(.+):r[1-9][0-9]*", package_id)
+        return match.group(1) if match else package_id
+
+    @staticmethod
+    def _normalize_text(value: str) -> str:
+        return re.sub(r"\s+", " ", value).strip().lower()
+
+    @staticmethod
+    def _text_values(value: Any) -> list[str]:
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, Mapping):
+            return [text for item in value.values() for text in AffiliateContentService._text_values(item)]
+        if isinstance(value, (list, tuple)):
+            return [text for item in value for text in AffiliateContentService._text_values(item)]
+        return []

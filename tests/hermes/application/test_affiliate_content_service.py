@@ -24,6 +24,11 @@ class MemoryRepository:
         return list(ideas)
 
     def save_package(self, package):
+        existing = next((item for item in self.packages if item.id == package.id), None)
+        if existing is not None:
+            if existing != package:
+                raise ValueError(f"conflicting package payload for id: {package.id}")
+            return existing
         self.packages.append(package)
         return package
 
@@ -144,14 +149,14 @@ def test_content_service_rejects_unsourced_claims(repository, product):
     )
 
     with pytest.raises(ContentValidationError, match="evidence"):
-        AffiliateContentService(repository, gateway).create_packages("42", "run-1", [product], per_run=1)
+        AffiliateContentService(repository, gateway).create_packages("42", "run-1", [product], per_run=5)
 
 
 def test_package_is_valid_keeps_reference_rights_and_persists_ideas(repository, product, reference):
     from hermes.application.affiliate_content_service import AffiliateContentService
 
     packages = AffiliateContentService(repository, FakeContentGateway(valid_payload())).create_packages(
-        "42", "run-1", [product], [reference], per_run=1
+        "42", "run-1", [product], [reference], per_run=5
     )
 
     assert 30 <= packages[0].duration_seconds <= 90
@@ -169,7 +174,7 @@ def test_content_service_rejects_references_without_reference_only_rights(reposi
 
     with pytest.raises(ContentValidationError, match="reference_only"):
         AffiliateContentService(repository, FakeContentGateway(valid_payload())).create_packages(
-            "42", "run-1", [product], [replace(reference, rights_status="licensed")], per_run=1
+            "42", "run-1", [product], [replace(reference, rights_status="licensed")], per_run=5
         )
 
 
@@ -188,7 +193,7 @@ def test_content_service_rejects_invalid_duration_or_storyboard(repository, prod
 
     with pytest.raises(ContentValidationError):
         AffiliateContentService(repository, FakeContentGateway(payload)).create_packages(
-            "42", "run-1", [product], per_run=1
+            "42", "run-1", [product], per_run=5
         )
 
 
@@ -229,7 +234,7 @@ def test_content_service_rejects_duplicate_or_high_overlap_content(repository, p
 
     with pytest.raises(ContentValidationError, match="duplicate"):
         AffiliateContentService(repository, FakeContentGateway(payload)).create_packages(
-            "42", "run-1", [product], per_run=1
+            "42", "run-1", [product], per_run=5
         )
 
 
@@ -239,7 +244,11 @@ def test_revise_package_preserves_old_revision_and_uses_feedback(repository, pro
     gateway = FakeContentGateway(valid_payload(hook="Phiên bản mới cho góc bàn gọn gàng."))
     service = AffiliateContentService(repository, gateway)
     repository.products.append(product)
-    original = service.create_packages("42", "run-1", [product], per_run=1)[0]
+    original = service.create_packages("42", "run-1", [product], per_run=5)[0]
+    gateway.payload = valid_payload(
+        hook="Thu gon goc lam viec trong mot buoc.",
+        script="Su dung goc quay tren cao de thay doi bo cuc ban lam viec.",
+    )
     revised = service.revise_package(original.id, "42", "Làm hook ngắn hơn")
 
     assert revised.id != original.id
@@ -247,3 +256,111 @@ def test_revise_package_preserves_old_revision_and_uses_feedback(repository, pro
     assert repository.get_package(original.id, "42") == original
     assert gateway.calls[-1][2] == original
     assert gateway.calls[-1][3] == "Làm hook ngắn hơn"
+
+
+def test_production_per_run_must_be_between_five_and_ten(repository, product):
+    from hermes.application.affiliate_content_service import AffiliateContentService
+
+    with pytest.raises(ValueError, match="between 5 and 10"):
+        AffiliateContentService(repository, FakeContentGateway(valid_payload())).create_packages(
+            "42", "run-1", [product], per_run=4
+        )
+
+
+def test_revisions_have_deterministic_lineage_and_idempotent_retries(repository, product):
+    from hermes.application.affiliate_content_service import AffiliateContentService
+
+    gateway = FakeContentGateway(
+        valid_payload(
+            hook="Goc lam viec gon gang hon.",
+            script="Dat chuot dung vi tri de thao tac de dang.",
+        )
+    )
+    service = AffiliateContentService(repository, gateway)
+    repository.products.append(product)
+    original = service.create_packages("42", "run-1", [product], per_run=5)[0]
+    gateway.payload = valid_payload(
+        hook="Thu gon goc lam viec trong mot buoc.",
+        script="Su dung goc quay tren cao de thay doi bo cuc ban lam viec.",
+    )
+    revised = service.revise_package(original.id, "42", "Lam hook ngan hon")
+    repeated = service.revise_package(original.id, "42", "Lam hook ngan hon")
+
+    assert revised.id == f"{original.id}:r2"
+    assert revised.revision == 2
+    assert repeated == revised
+    assert len(repository.packages) == 2
+
+    gateway.payload = valid_payload(
+        hook="Huong dan moi cho goc ban nho.",
+        script="Canh quay moi trinh bay bo cuc va vi tri dat chuot.",
+    )
+    with pytest.raises(ValueError, match="conflicting package payload"):
+        service.revise_package(original.id, "42", "Lam hook ngan hon")
+
+    gateway.payload = valid_payload(
+        hook="Mot thao tac de ban lam viec sach hon.",
+        script="Quay can canh vi tri chuot va khoang trong tren mat ban.",
+    )
+    third = service.revise_package(revised.id, "42", "Them goc quay can canh")
+
+    assert third.id == f"{original.id}:r3"
+    assert third.revision == 3
+
+
+def test_revision_checks_parent_for_high_overlap_content(repository, product):
+    from hermes.application.affiliate_content_service import (
+        AffiliateContentService,
+        ContentValidationError,
+    )
+
+    gateway = FakeContentGateway(
+        valid_payload(
+            hook="Goc lam viec gon gang hon.",
+            script="Dat chuot dung vi tri de thao tac de dang.",
+        )
+    )
+    service = AffiliateContentService(repository, gateway)
+    repository.products.append(product)
+    original = service.create_packages("42", "run-1", [product], per_run=5)[0]
+    gateway.payload = valid_payload(
+        hook="Goc quay moi cho ban lam viec.",
+        script="Mo dau moi. Dat chuot dung vi tri de thao tac de dang. Ket thuc moi.",
+    )
+
+    with pytest.raises(ContentValidationError, match="duplicate"):
+        service.revise_package(original.id, "42", "Doi cach dien dat")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("hook", "T\u00d4I   tr\u1ea3i   nghi\u1ec7m con chuot nay."),
+        ("script", "T\u00f4i \u0111\u00e3 d\u00f9ng san pham nay."),
+        ("claims", [{"text": "M\u00ecnh d\u00f9ng chuot nay", "evidence_url": "https://example.test/products/101"}]),
+        ("text_overlays", ["Sau khi d\u00f9ng"]),
+        ("voiceover_plan", "T\u00f4i tr\u1ea3i nghi\u1ec7m goc ban nay"),
+        ("storyboard", [{"start": 0, "end": 5, "visual": "Sau khi d\u00f9ng chuot"}]),
+        ("ai_prompts", ["T\u00f4i \u0111\u00e3 d\u00f9ng chuot tren ban lam viec"]),
+    ],
+)
+def test_first_hand_detection_scans_all_package_text_fields(repository, product, field, value):
+    from hermes.application.affiliate_content_service import (
+        AffiliateContentService,
+        ContentValidationError,
+    )
+
+    with pytest.raises(ContentValidationError, match="first-hand"):
+        AffiliateContentService(repository, FakeContentGateway(valid_payload(**{field: value}))).create_packages(
+            "42", "run-1", [product], per_run=5
+        )
+
+
+def test_overlap_detects_padded_copied_passages_but_ignores_short_generic_hooks():
+    from hermes.application.affiliate_content_service import AffiliateContentService
+
+    assert not AffiliateContentService._is_high_overlap("Gon hon", "Gon hon")
+    assert AffiliateContentService._is_high_overlap(
+        "Mo dau moi. Dat chuot dung vi tri de thao tac de dang. Ket thuc moi.",
+        "Dat chuot dung vi tri de thao tac de dang.",
+    )
