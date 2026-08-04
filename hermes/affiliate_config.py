@@ -18,6 +18,10 @@ class AffiliateResearchSettings:
     google_sheets_spreadsheet_id: str = field(repr=False)
     shortlist_limit: int = 25
     package_limit: int = 10
+    marketplace_crawler_enabled: bool = False
+    playwright_crawler_enabled: bool = False
+    local_sheet_output_dir: Path = Path("exports/product_research")
+    auto_generate_scripts: bool = False
 
     @classmethod
     def from_environment(
@@ -51,6 +55,10 @@ class AffiliateResearchSettings:
                 minimum=5,
                 maximum=10,
             ),
+            marketplace_crawler_enabled=_boolean(values.get("HERMES_ENABLE_MARKETPLACE_CRAWLER", "0")),
+            playwright_crawler_enabled=_boolean(values.get("HERMES_ENABLE_PLAYWRIGHT_CRAWLER", "0")),
+            local_sheet_output_dir=_product_research_output_dir(values),
+            auto_generate_scripts=_boolean(values.get("PRODUCT_RESEARCH_AUTO_GENERATE_SCRIPTS", "0")),
         )
 
 
@@ -65,6 +73,13 @@ def _import_directory(values: Mapping[str, str]) -> Path:
     if configured:
         return Path(configured).expanduser().resolve()
     return (load_settings().data_dir / "affiliate_imports").resolve()
+
+
+def _product_research_output_dir(values: Mapping[str, str]) -> Path:
+    configured = str(values.get("PRODUCT_RESEARCH_OUTPUT_DIR", "")).strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (load_settings().data_dir / "product_research_exports").resolve()
 
 
 def _boolean(value: object) -> bool:

@@ -15,6 +15,15 @@ from typing import Iterable
 
 
 ASSISTANT_MODULES = {
+    "product_research_script": {
+        "description": "Research marketplace products, export review sheets, and generate short affiliate scripts.",
+        "owner_paths": [
+            "hermes/application/product_research_script_workflow.py",
+            "hermes/application/product_source_selector.py",
+            "hermes/adapters/local/sheet_projection.py",
+        ],
+        "risk": "medium",
+    },
     "video_factory": {
         "description": "Create, crawl, analyze, and package short-form video work.",
         "owner_paths": ["telegram_bot.py", "core/job_watcher.py", "tools/video_downloader.py"],
@@ -44,6 +53,21 @@ ASSISTANT_MODULES = {
 
 
 INTENT_RULES = [
+    (
+        "product_research_script",
+        [
+            "crawl ngành",
+            "crawl nganh",
+            "xuất sheet",
+            "xuat sheet",
+            "tạo kịch bản",
+            "tao kich ban",
+            "affiliate",
+            "giá",
+            "gia",
+            "shortlist",
+        ],
+    ),
     (
         "video_factory",
         [
@@ -214,6 +238,10 @@ class HermesAssistantRuntime:
             if task.module == "coding_agent":
                 permissions.add("write_patch_after_approval")
                 permissions.add("run_verification_commands")
+            elif task.module == "product_research_script":
+                permissions.add("marketplace_crawler_when_enabled")
+                permissions.add("write_local_sheet_exports")
+                permissions.add("optional_model_script_generation")
             elif task.module == "video_factory":
                 permissions.add("network_video_fetch_when_enabled")
                 permissions.add("write_project_artifacts")
@@ -253,6 +281,8 @@ def summarize_task_title(text: str, module: str) -> str:
 
 
 def action_for_module(module: str, text: str) -> str:
+    if module == "product_research_script":
+        return "Run a gated product research workflow: collect products, export sheets, and generate short affiliate scripts."
     if module == "video_factory":
         return "Create or route a video-factory job with source capture, analysis, and artifacts."
     if module == "knowledge_learner":
