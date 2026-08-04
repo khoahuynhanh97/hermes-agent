@@ -5,6 +5,8 @@ __pycache__/
 # Pytest temporary test directories
 .pytest-*
 .pytest_cache/
+.tmp-*/
+workhermes-agent.tmp-pytest-*/
 
 # Scratch & temporary files
 a.txt
@@ -61,3 +63,6 @@ bgm_library/
 # Custom directories
 scratch_test_downloads/
 reports/
+workspace/
+.bytecode-fingerprint
+graphify-out/cache/last_query_stamp
