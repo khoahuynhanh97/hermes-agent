@@ -13,6 +13,13 @@ from dotenv import load_dotenv
 # Thêm thư mục hiện tại vào Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+
+def is_product_research_script_request(text: str) -> bool:
+    lowered = (text or "").casefold()
+    has_research = any(token in lowered for token in ("crawl", "tìm sản phẩm", "tim san pham", "ngành", "nganh"))
+    has_output = any(token in lowered for token in ("sheet", "kịch bản", "kich ban", "script"))
+    return has_research and has_output
+
 # Force stdout/stderr to use UTF-8 encoding on Windows to prevent UnicodeEncodeError
 if sys.platform.startswith('win'):
     try:
