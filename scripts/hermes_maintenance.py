@@ -23,6 +23,7 @@ from hermes.backup import SQLiteBackupManager  # noqa: E402
 from hermes.data_health import AuditReport, DataHealth  # noqa: E402
 from hermes.db import Database  # noqa: E402
 from hermes.maintenance import MaintenanceRunner  # noqa: E402
+from hermes.config import get_data_root  # noqa: E402
 
 
 EXIT_CONFIRMATION_REQUIRED = 2
@@ -51,10 +52,8 @@ def _resolve_paths(environ: Mapping[str, str]) -> _ProductionPaths:
     configured_data = environ.get("HERMES_DATA_DIR", "").strip()
     if configured_data:
         data_dir = Path(configured_data).expanduser().resolve()
-    elif os.name == "nt":
-        data_dir = Path(r"D:\HermesData")
     else:
-        data_dir = (Path.home() / ".hermes").resolve()
+        data_dir = get_data_root()
     database_value = environ.get("HERMES_DB_PATH", "").strip()
     backup_value = environ.get("HERMES_BACKUP_DIR", "").strip()
     report_value = environ.get(
@@ -66,7 +65,7 @@ def _resolve_paths(environ: Mapping[str, str]) -> _ProductionPaths:
         database=(
             Path(database_value).expanduser().resolve()
             if database_value
-            else data_dir / "hermes.db"
+            else data_dir / "db" / "hermes.db"
         ),
         backups=(
             Path(backup_value).expanduser().resolve()

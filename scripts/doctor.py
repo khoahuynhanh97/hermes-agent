@@ -14,6 +14,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from hermes.config import get_data_root
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 def check_status(condition, label, details=""):
@@ -69,7 +71,7 @@ def main():
                 if line.startswith("HERMES_DATA_DIR="):
                     data_dir = line.split("=", 1)[1].strip().strip("\"'")
     if not data_dir:
-        data_dir = r"D:\work\hermes-agent-data"
+        data_dir = str(get_data_root())
     data_dir_path = Path(data_dir)
     check_status(data_dir_path.exists(), "SQLite / Data Root", str(data_dir_path))
 

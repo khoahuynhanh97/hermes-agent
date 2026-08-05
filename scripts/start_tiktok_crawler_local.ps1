@@ -4,7 +4,12 @@ param(
 
 $ErrorActionPreference = "Stop"
 $python = Join-Path $RepositoryPath ".venv\Scripts\python.exe"
-$dataRoot = if ($env:HERMES_DATA_DIR) { $env:HERMES_DATA_DIR } else { "D:\HermesData" }
+$repoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
+$dataRoot = if ($env:HERMES_DATA_DIR) {
+    $env:HERMES_DATA_DIR
+} else {
+    Join-Path (Split-Path -Parent $repoRoot) "hermes-agent-data"
+}
 $logDir = Join-Path $dataRoot "logs"
 $port = 5556
 $baseUrl = "http://127.0.0.1:$port"

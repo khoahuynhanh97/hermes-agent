@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 from dotenv import load_dotenv, set_key
+from hermes.config import get_data_path, get_data_root
 
 # Load environment variables from .env
 env_path = os.path.join(os.path.dirname(__file__), '.env')
@@ -19,16 +20,16 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "router")
 LLM_ROUTER_BASE_URL = os.environ.get("LLM_ROUTER_BASE_URL", "http://127.0.0.1:20128/v1")
 LLM_ROUTER_API_KEY = os.environ.get("LLM_ROUTER_API_KEY", "")
-LLM_DEFAULT_MODEL = os.environ.get("LLM_DEFAULT_MODEL", "fast")
+LLM_DEFAULT_MODEL = os.environ.get("LLM_DEFAULT_MODEL", "reason_combo")
 LLM_MODEL_CHAT = os.environ.get("LLM_MODEL_CHAT", "")
 LLM_MODEL_LEARNING = os.environ.get("LLM_MODEL_LEARNING", "")
 LLM_MODEL_CODE = os.environ.get("LLM_MODEL_CODE", "")
 LLM_TIMEOUT_SECONDS = os.environ.get("LLM_TIMEOUT_SECONDS", "60")
 LLM_RETRY_COUNT = os.environ.get("LLM_RETRY_COUNT", "1")
-LLM_ENABLE_LEGACY_PROVIDER_FALLBACK = os.environ.get("LLM_ENABLE_LEGACY_PROVIDER_FALLBACK", "1")
+LLM_ENABLE_LEGACY_PROVIDER_FALLBACK = os.environ.get("LLM_ENABLE_LEGACY_PROVIDER_FALLBACK", "0")
 HERMES_STORAGE_BACKEND = os.environ.get("HERMES_STORAGE_BACKEND", "sqlite")
-HERMES_DATA_DIR = os.environ.get("HERMES_DATA_DIR", r"D:\HermesData")
-HERMES_DB_PATH = os.environ.get("HERMES_DB_PATH", str(Path(HERMES_DATA_DIR) / "hermes.db"))
+HERMES_DATA_DIR = os.environ.get("HERMES_DATA_DIR", str(get_data_root()))
+HERMES_DB_PATH = os.environ.get("HERMES_DB_PATH", str(get_data_path("db", "hermes.db")))
 HERMES_BACKUP_DIR = os.environ.get("HERMES_BACKUP_DIR", "")
 TELEGRAM_MAX_FILE_MB = os.environ.get("TELEGRAM_MAX_FILE_MB", "200")
 

@@ -218,11 +218,14 @@ git pull
 - creates/reuses `<repo>\.venv` and installs THIS repo editable
 - installs web/ dependencies
 - copies `.env.example` → `.env` only if missing (never overwrites)
-- ensures `HERMES_DATA_DIR` exists
+- creates the sibling `<checkout-parent>\hermes-agent-data` data root
+- normalizes repo-local MCP commands and data paths with config backups
 
 `start.ps1`:
-- starts worker + aiohttp backend from THIS repo/.venv
+- verifies imports resolve from THIS repo and checks local 9Router
+- starts the durable worker + aiohttp backend from THIS repo/.venv
 - `-UI` also starts the React dev server
+- invokes THIS repo's `.venv\Scripts\hermes.exe`
 
 Verify (no paid calls):
 

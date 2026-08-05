@@ -16,12 +16,13 @@ from core.keyword_generator import extract_keywords_from_product_page
 
 # Hermes Modernization Imports
 from hermes.db import Database
+from hermes.config import get_data_path
 from hermes.adapters.sqlite.project_repository import SQLiteProjectRepository
 from hermes.ports.project_repository import ProjectRepository
 from hermes.domain.results import Result
 
 # Initialize project repository
-hermes_db_path = os.environ.get("HERMES_DB_PATH", "D:\\HermesData\\hermes.db")
+hermes_db_path = os.environ.get("HERMES_DB_PATH", str(get_data_path("db", "hermes.db")))
 hermes_database = Database(hermes_db_path)
 hermes_database.initialize() # Ensure schema is applied
 PROJECT_REPO: ProjectRepository = SQLiteProjectRepository(hermes_db_path)

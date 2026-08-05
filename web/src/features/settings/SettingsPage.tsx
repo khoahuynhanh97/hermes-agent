@@ -2,7 +2,7 @@ import { useState } from 'react'
 
 export function SettingsPage() {
   const [settings, setSettings] = useState({
-    dbPath: 'D:\\HermesData\\hermes.db',
+    dbPath: '',
     routerUrl: 'http://localhost:9000',
     routerApiKey: '••••••••••••••••',
     telegramToken: '••••••••••••••••••••••••',

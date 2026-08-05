@@ -8,13 +8,12 @@ import requests
 
 
 class LLMGatewayTests(unittest.TestCase):
-    def test_task_routing_uses_environment_model_aliases(self) -> None:
+    def test_all_generic_tasks_use_reason_combo(self) -> None:
         import core.llm_gateway as gateway
 
         with patch.dict(os.environ, {"LLM_MODEL_CHAT": "fast-model", "LLM_MODEL_LEARNING": "reason-model"}):
-            self.assertEqual(gateway._model_for_task("chat"), "fast-model")
-            self.assertEqual(gateway._model_for_task("learning"), "reason-model")
-            self.assertEqual(gateway._model_for_task("structured_extraction"), "reason-model")
+            for task_type in ("chat", "learning", "structured_extraction", "code", "analysis"):
+                self.assertEqual(gateway._model_for_task(task_type), "reason_combo")
 
     def test_base_url_supports_shared_gateway_name(self) -> None:
         import core.llm_gateway as gateway
@@ -32,9 +31,10 @@ class LLMGatewayTests(unittest.TestCase):
         }
         with patch.dict(os.environ, env, clear=False), patch(
             "core.llm_gateway.requests.post", side_effect=requests.Timeout("slow")
-        ), patch("core.llm_gateway.logger"):
+        ) as request, patch("core.llm_gateway.logger"):
             with self.assertRaisesRegex(gateway.LLMGatewayError, "9Router request failed"):
                 gateway.complete("hello")
+            self.assertEqual(request.call_count, 1)
 
     def test_structured_output_is_validated(self) -> None:
         from hermes.llm import HermesLLMGateway, StructuredOutputError

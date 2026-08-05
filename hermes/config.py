@@ -9,9 +9,8 @@ def _default_data_dir() -> Path:
     configured = os.environ.get("HERMES_DATA_DIR", "").strip()
     if configured:
         return Path(configured).expanduser().resolve()
-    if os.name == "nt":
-        return Path(r"D:\HermesData")
-    return (Path.home() / ".hermes").resolve()
+    repo_root = Path(__file__).resolve().parents[1]
+    return (repo_root.parent / "hermes-agent-data").resolve()
 
 
 def get_data_root() -> Path:
@@ -41,7 +40,7 @@ class HermesPaths:
     def from_env(cls) -> "HermesPaths":
         data_dir = _default_data_dir()
         database_value = os.environ.get("HERMES_DB_PATH", "").strip()
-        database = Path(database_value).expanduser().resolve() if database_value else data_dir / "hermes.db"
+        database = Path(database_value).expanduser().resolve() if database_value else data_dir / "db" / "hermes.db"
         return cls(
             data_dir=data_dir,
             database=database,

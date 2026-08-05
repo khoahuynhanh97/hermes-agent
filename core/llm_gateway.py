@@ -35,8 +35,7 @@ def complete(prompt: str, system: str = "", task_type: str = "chat", max_tokens:
 
     started = time.monotonic()
     primary_model = _model_for_task(task_type)
-    fallback_models = ["fast_combo", "gc/gemini-2.5-flash", "kr/auto"]
-    candidate_models = [primary_model] + [m for m in fallback_models if m != primary_model]
+    candidate_models = [primary_model]
 
     last_error = None
     for model in candidate_models:
@@ -158,29 +157,7 @@ def _legacy_task_type(task_type: str) -> str:
 
 
 def _model_for_task(task_type: str) -> str:
-    if task_type == "analysis":
-        task_type = "learning"
-    env_name = {
-        "chat": "LLM_MODEL_CHAT",
-        "summarize": "LLM_MODEL_CHAT",
-        "ideas": "LLM_MODEL_CHAT",
-        "script": "LLM_MODEL_CHAT",
-        "learning": "LLM_MODEL_LEARNING",
-        "deep_analysis": "LLM_MODEL_LEARNING",
-        "structured_extraction": "LLM_MODEL_LEARNING",
-        "code": "LLM_MODEL_CODE",
-    }.get(task_type, "LLM_DEFAULT_MODEL")
-    task_default = {
-        "chat": "fast",
-        "summarize": "fast",
-        "ideas": "fast",
-        "script": "fast",
-        "learning": "reason",
-        "deep_analysis": "reason",
-        "structured_extraction": "reason",
-        "code": "code",
-    }.get(task_type, "fast")
-    return os.environ.get(env_name, "").strip() or os.environ.get("LLM_DEFAULT_MODEL", task_default).strip() or task_default
+    return "reason_combo"
 
 
 def _router_url(path: str) -> str:
