@@ -21,6 +21,7 @@ def build_workflow():
     from hermes.application.product_research_script_workflow import ProductResearchScriptWorkflow
     from hermes.application.product_source_selector import ProductSourceSelector
     from hermes.db import Database
+    from hermes.llm import HermesLLMGateway
 
     settings = load_affiliate_research_settings()
     repository = SQLiteAffiliateResearchRepository(Database())
@@ -32,7 +33,7 @@ def build_workflow():
     return ProductResearchScriptWorkflow(
         repository=repository,
         catalog_service=AffiliateCatalogService(repository),
-        content_service=AffiliateContentService(repository, AffiliateContentGateway()),
+        content_service=AffiliateContentService(repository, AffiliateContentGateway(HermesLLMGateway())),
         source_selector=ProductSourceSelector(settings),
         local_projection=LocalSheetProjection(repository, settings.local_sheet_output_dir),
         google_projection=google_projection,
