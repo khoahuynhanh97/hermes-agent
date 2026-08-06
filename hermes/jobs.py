@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 import json
 from typing import Any
 
@@ -69,9 +70,16 @@ class JobRepository:
             row = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
         return self._row(row) if row else None
 
-    def claim_next(self, job_type: str | None = None) -> dict | None:
+    def claim_next(
+        self,
+        job_type: str | None = None,
+        worker_id: str = "canonical-worker",
+        lease_duration_seconds: int = 300,
+    ) -> dict | None:
         """Atomically claim the next available job, optionally for one job type."""
         now = utc_now()
+        dt_now = datetime.fromisoformat(now.replace("Z", "+00:00")) if "Z" in now else datetime.fromisoformat(now)
+        lease_expires_at = (dt_now + timedelta(seconds=lease_duration_seconds)).isoformat()
         with self.database.transaction(immediate=True) as connection:
             if job_type is None:
                 placeholders = ", ".join("?" for _ in _DEDICATED_JOB_TYPES)
@@ -102,14 +110,34 @@ class JobRepository:
                 """
                 UPDATE jobs
                 SET state = 'running', stage = 'running', attempts = attempts + 1,
-                    started_at = ?, updated_at = ?
+                    worker_id = ?, lease_expires_at = ?, started_at = ?, updated_at = ?
                 WHERE id = ? AND state = 'queued'
                 """,
-                (now, now, row["id"]),
+                (worker_id, lease_expires_at, now, now, row["id"]),
             )
             if cursor.rowcount != 1:
                 return None
             return self._row(connection.execute("SELECT * FROM jobs WHERE id = ?", (row["id"],)).fetchone())
+
+    def recover_expired(self) -> list[str]:
+        """Requeue running jobs whose lease has expired."""
+        now = utc_now()
+        recovered: list[str] = []
+        with self.database.transaction(immediate=True) as connection:
+            rows = connection.execute(
+                """
+                SELECT id FROM jobs
+                WHERE state = 'running' AND lease_expires_at != '' AND lease_expires_at < ?
+                """,
+                (now,),
+            ).fetchall()
+            for row in rows:
+                connection.execute(
+                    "UPDATE jobs SET state = 'queued', stage = 'queued', updated_at = ? WHERE id = ?",
+                    (now, row["id"]),
+                )
+                recovered.append(row["id"])
+        return recovered
 
     def update_payload(self, job_id: str, payload: dict, stage: str | None = None) -> dict | None:
         with self.database.transaction(immediate=True) as connection:

@@ -162,7 +162,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     started_at TEXT,
-    completed_at TEXT
+    completed_at TEXT,
+    worker_id TEXT NOT NULL DEFAULT '',
+    lease_expires_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_sources_owner_type ON sources(owner_user_id, source_type);
@@ -413,6 +415,13 @@ class Database:
             if current_version < 13:
                 apply_schema_v13(connection)
                 connection.execute("PRAGMA user_version = 13")
+
+            cursor.execute("PRAGMA table_info(jobs)")
+            cols = {row["name"] for row in cursor.fetchall()}
+            if "worker_id" not in cols:
+                connection.execute("ALTER TABLE jobs ADD COLUMN worker_id TEXT NOT NULL DEFAULT ''")
+            if "lease_expires_at" not in cols:
+                connection.execute("ALTER TABLE jobs ADD COLUMN lease_expires_at TEXT NOT NULL DEFAULT ''")
 
         finally:
             connection.close()

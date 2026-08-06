@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -32,6 +33,7 @@ class CanonicalJobWorker:
             "video.render": self._execute_video,
             "image_generate": self._execute_image,
             "video_generate": self._execute_video_generate,
+            "tts_generate": self._execute_tts,
         }
 
     def run_once(self) -> dict | None:
@@ -206,6 +208,41 @@ class CanonicalJobWorker:
             "provider": (result.metadata or {}).get("provider"),
         }
 
+    def _execute_tts(self, payload: dict, job_id: str) -> dict:
+        """Execute a TTS generation job via the configured TTS provider."""
+        from hermes.ports.text_to_speech import TTSRequest
+        from providers.tts_provider_factory import get_tts_provider
+
+        request_id = payload.get("request_id")
+        text = payload.get("text")
+        voice = payload.get("voice") or "Zephyr"
+        if not isinstance(request_id, str) or not request_id.strip():
+            raise ValueError("malformed payload: request_id is required")
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("malformed payload: text is required")
+
+        audio_dir = self.workspace / "audio"
+        audio_dir.mkdir(parents=True, exist_ok=True)
+
+        provider = get_tts_provider(output_dir=str(audio_dir))
+        result = provider.synthesize(TTSRequest(
+            request_id=request_id,
+            text=text,
+            voice=voice,
+            language=payload.get("language") or "vi-VN",
+            style_prompt=payload.get("style_prompt") or "",
+        ))
+        if not result.success:
+            raise ValueError(result.error_message or "tts generation failed")
+
+        return {
+            "task_type": "tts_generate",
+            "request_id": request_id,
+            "wav_path": result.wav_path,
+            "provider": result.provider,
+            "voice": result.voice,
+        }
+
     def _contained_file(self, value: str | None, field: str) -> Path:
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"malformed payload: {field} is required")
@@ -231,24 +268,37 @@ class CanonicalJobWorker:
             raise ValueError("payload path outside video workspace") from error
 
 
-def build_worker() -> CanonicalJobWorker:
-    db_path = os.environ.get("HERMES_VIDEO_DB_PATH", "").strip()
-    if not db_path:
-        db_path = str(get_data_path("db", "video.sqlite"))
-    workspace = os.environ.get("HERMES_VIDEO_WORKSPACE", "").strip()
-    if not workspace:
-        workspace = str(get_data_path("workspaces", "video"))
-    return CanonicalJobWorker(db_path, workspace, os.environ.get("HERMES_WORKER_ID", "canonical-worker"))
+def build_worker(
+    db_path: str | None = None,
+    workspace: str | None = None,
+    worker_id: str | None = None,
+) -> CanonicalJobWorker:
+    resolved_db_path = (db_path or "").strip() or os.environ.get("HERMES_VIDEO_DB_PATH", "").strip()
+    if not resolved_db_path:
+        resolved_db_path = str(get_data_path("db", "video.sqlite"))
+    resolved_workspace = (workspace or "").strip() or os.environ.get("HERMES_VIDEO_WORKSPACE", "").strip()
+    if not resolved_workspace:
+        resolved_workspace = str(get_data_path("workspaces", "video"))
+    resolved_worker_id = (worker_id or "").strip() or os.environ.get("HERMES_WORKER_ID", "canonical-worker")
+    return CanonicalJobWorker(resolved_db_path, resolved_workspace, resolved_worker_id)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run one canonical Hermes durable job")
     parser.add_argument("--once", action="store_true", help="claim and execute at most one job")
+    parser.add_argument("--daemon", action="store_true", help="poll continuously for durable jobs")
+    parser.add_argument("--poll-seconds", type=float, default=2.0)
+    parser.add_argument("--db-path", type=str, default="", help="path to sqlite database")
+    parser.add_argument("--workspace", type=str, default="", help="path to worker workspace")
     args = parser.parse_args()
-    worker = build_worker()
+    worker = build_worker(db_path=args.db_path, workspace=args.workspace)
     if args.once:
         worker.run_once()
         return 0
+    if args.daemon:
+        while True:
+            if worker.run_once() is None:
+                time.sleep(max(0.1, args.poll_seconds))
     while worker.run_once() is not None:
         pass
     return 0
