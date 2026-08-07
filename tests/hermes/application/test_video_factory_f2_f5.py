@@ -296,3 +296,90 @@ def test_storyboard_frame_rejection():
     assert frame.generation_status == FrameGenerationStatus.REJECTED
     assert "identity not matching" in frame.review_notes
     assert frame.version >= 2
+
+
+def _make_service_at_storyboard_ready(db_path: Path) -> tuple["VideoFactoryService", str, str]:
+    """Helper: returns (service, owner_user_id, project_id) at STORYBOARD_READY with one frame."""
+    service = VideoFactoryService(SQLiteVideoFactoryRepository(Database(db_path)))
+    project = service.create_project("owner-g", "gate-test")
+    pack = ResourcePack(
+        id="pack1", owner_user_id="owner-g",
+        product_references=(AssetReference("a1", "asset://p.jpg"),),
+        primary_product_asset_id="a1",
+        product_identity_description="Product",
+    )
+    project = service.save_resource_pack("owner-g", project.id, pack)
+    project = service.lock_resource_pack("owner-g", project.id, ResourceIdentity(description="P"))
+    brief = CreativeBrief(
+        objective="O", target_audience="U", core_message="M",
+        tone="neutral", pace="normal", cta="C", content_blocks=("x",)
+    )
+    project = service.save_creative_brief("owner-g", project.id, brief)
+    project = service.approve_creative_brief("owner-g", project.id)
+    scene_plan = ScenePlan(scenes=(
+        Scene(scene_id="s1", order=1, title="T", objective="O", content="C",
+              main_action="A", duration_seconds=4, start_state="start", end_state="end"),
+    ))
+    project = service.save_scene_plan("owner-g", project.id, scene_plan)
+    project = service.approve_scene_plan("owner-g", project.id)
+    storyboard = Storyboard(
+        storyboard_id="sb1", project_id=project.id,
+        frames=(StoryboardFrame(
+            frame_id="f1", scene_id="s1", order=1, label="l",
+            purpose="p", visual_state="v", subject_action="a",
+            product_state="p", character_state="", context="c",
+            camera_intention="i",
+            prompt=FramePrompt(positive_prompt="frame"),
+        ),),
+        created_at="2026-08-06T10:00:00+00:00",
+        updated_at="2026-08-06T10:00:00+00:00",
+    )
+    project = service.save_storyboard("owner-g", project.id, storyboard)
+    return service, "owner-g", project.id
+
+
+def test_image_jobs_allowed_before_storyboard_approval():
+    """Image frame generation is permitted before storyboard approval."""
+    db_path = Path(tempfile.mkdtemp()) / "gate_image.db"
+    service, owner, pid = _make_service_at_storyboard_ready(db_path)
+    # Updating frame generation status is the pre-approval image path
+    project = service.update_frame_generation_status(
+        owner, pid, "f1", FrameGenerationStatus.COMPLETED, asset_id="img_f1"
+    )
+    assert project.storyboard.frames[0].generated_asset_id == "img_f1"
+
+
+def test_video_job_rejected_before_storyboard_approval():
+    """save_generated_scene must raise STORYBOARD_APPROVAL_REQUIRED when not yet approved."""
+    import pytest
+    db_path = Path(tempfile.mkdtemp()) / "gate_video.db"
+    service, owner, pid = _make_service_at_storyboard_ready(db_path)
+    video_prompt = VideoPrompt(
+        scene_id="s1", duration_seconds=4,
+        start_visual_state="start", end_visual_state="end",
+        subject_action="A", product_action="visible",
+        camera_movement="static", camera_framing="medium", environment_motion="none",
+    )
+    generated_scene = GeneratedScene(scene_id="s1", video_prompt=video_prompt)
+    with pytest.raises(ValueError, match="STORYBOARD_APPROVAL_REQUIRED"):
+        service.save_generated_scene(owner, pid, generated_scene)
+
+
+def test_tts_guard_rejected_before_storyboard_approval():
+    """require_storyboard_approved must raise STORYBOARD_APPROVAL_REQUIRED when pending."""
+    import pytest
+    db_path = Path(tempfile.mkdtemp()) / "gate_tts.db"
+    service, owner, pid = _make_service_at_storyboard_ready(db_path)
+    with pytest.raises(ValueError, match="STORYBOARD_APPROVAL_REQUIRED"):
+        service.require_storyboard_approved(owner, pid)
+
+
+def test_tts_guard_passes_after_storyboard_approval():
+    """require_storyboard_approved returns project after storyboard is approved."""
+    db_path = Path(tempfile.mkdtemp()) / "gate_tts_ok.db"
+    service, owner, pid = _make_service_at_storyboard_ready(db_path)
+    # Complete the frame so approve_storyboard passes
+    service.update_frame_generation_status(owner, pid, "f1", FrameGenerationStatus.COMPLETED, asset_id="img_f1")
+    service.approve_storyboard(owner, pid, "ok")
+    project = service.require_storyboard_approved(owner, pid)
+    assert project.storyboard.approval_status == StoryboardApprovalStatus.APPROVED

@@ -192,10 +192,22 @@ export function VideoFactoryPage() {
           {imgFile && <img src={`data:image/png;base64,${imgFile.b64}`} alt="preview" style={{ width: 48, border: '1px solid #ddd' }} />}
           {imgFile && <button onClick={() => setImgFile(null)}>remove</button>}
         </div>
-        <Btn warn disabled={!imgFile && !p.resource_pack?.locked_at} onClick={async () => {
-          await post('/resources', { product_identity_description: 'blue water bottle', product_image_b64: imgFile?.b64 || '' })
-          setImgFile(null)
-        }}>Save + Lock Resource Pack</Btn>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <Btn onClick={async () => {
+            await post('/resources', { product_identity_description: 'blue water bottle', product_image_b64: imgFile?.b64 || '' })
+            setImgFile(null)
+          }}>Save Resource Pack</Btn>
+          <Btn warn disabled={!p.resource_pack || !!p.resource_pack?.locked_at} onClick={async () => {
+            const identityDesc = (p.resource_pack as any)?.product_identity_description || 'blue water bottle'
+            if (window.confirm(`Confirm locking product identity: "${identityDesc}"?`)) {
+              await post('/resources/lock', {
+                description: identityDesc,
+                color: 'blue',
+              })
+            }
+          }}>Lock Resource Identity</Btn>
+        </div>
+        {p.resource_pack?.locked_at && <p style={{ fontSize: 12, color: '#0a7d2c', marginTop: 4 }}>Locked at: {p.resource_pack.locked_at}</p>}
       </Card>
 
       {/* B2 Idea */}

@@ -75,6 +75,44 @@ def test_create_and_get_project(app_factory):
     _run(app, flow)
 
 
+def test_resource_save_does_not_lock_automatically_and_requires_lock_endpoint(app_factory):
+    app = app_factory()
+
+    async def flow(c):
+        owner = "web_owner"
+        pid = "resource_test"
+        async with c.post(f"/api/vf/projects?owner_user_id={owner}", json={"project_id": pid}) as r:
+            assert r.status == 201
+
+        async with c.post(f"/api/vf/projects/{pid}/resources?owner_user_id={owner}", json={
+            "product_identity_description": "blue water bottle",
+        }) as r:
+            assert r.status == 200
+            data = (await r.json())["data"]
+            assert data["resource_pack"]["locked_at"] is None
+
+        async with c.post(f"/api/vf/projects/{pid}/resources/lock?owner_user_id={owner}", json={
+            "description": "blue water bottle",
+            "shape": "cylindrical",
+            "color": "blue",
+            "materials": ["plastic"],
+            "logo_placement": "center",
+            "distinctive_features": ["leak-proof lid"],
+        }) as r:
+            assert r.status == 200
+            data = (await r.json())["data"]
+            assert data["resource_pack"]["locked_at"] is not None
+            identity = data["resource_pack"]["locked_product_identity"]
+            assert identity["description"] == "blue water bottle"
+            assert identity["shape"] == "cylindrical"
+            assert identity["color"] == "blue"
+            assert identity["materials"] == ["plastic"]
+            assert identity["logo_placement"] == "center"
+            assert identity["distinctive_features"] == ["leak-proof lid"]
+
+    _run(app, flow)
+
+
 def test_full_flow_wiring(app_factory):
     app = app_factory()
 
@@ -86,6 +124,14 @@ def test_full_flow_wiring(app_factory):
 
         async with c.post(f"/api/vf/projects/{pid}/resources?owner_user_id={owner}", json={
             "product_identity_description": "blue water bottle",
+        }) as r:
+            assert r.status == 200
+            data = (await r.json())["data"]
+            assert data["resource_pack"]["locked_at"] is None
+
+        async with c.post(f"/api/vf/projects/{pid}/resources/lock?owner_user_id={owner}", json={
+            "description": "blue water bottle",
+            "color": "blue",
         }) as r:
             assert r.status == 200
             data = (await r.json())["data"]
@@ -209,9 +255,13 @@ def test_fresh_project_full_flow_via_api(app_factory, monkeypatch):
         async with c.post(f"/api/vf/projects?owner_user_id={owner}", json={"project_id": pid}) as r:
             assert r.status == 201
 
-        # resources + idea + brief + approve
         async with c.post(f"/api/vf/projects/{pid}/resources?owner_user_id={owner}", json={
             "product_identity_description": "blue bottle",
+        }) as r:
+            assert (await r.json())["data"]["resource_pack"]["locked_at"] is None
+        async with c.post(f"/api/vf/projects/{pid}/resources/lock?owner_user_id={owner}", json={
+            "description": "blue bottle",
+            "color": "blue",
         }) as r:
             assert (await r.json())["data"]["resource_pack"]["locked_at"] is not None
         async with c.post(f"/api/vf/projects/{pid}/idea?owner_user_id={owner}", json={

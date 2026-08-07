@@ -213,6 +213,20 @@ class VideoFactoryService:
             updated_at=_now()
         ))
 
+    def require_storyboard_approved(self, owner_user_id: str, project_id: str) -> VideoFactoryProject:
+        """Return the project when storyboard is approved; raise otherwise.
+
+        Call this before TTS submission and any other gated F4 operations to
+        enforce that the storyboard gate has been passed by the user.
+        """
+        project = self.get_project(owner_user_id, project_id)
+        if (
+            not project.storyboard
+            or project.storyboard.approval_status != StoryboardApprovalStatus.APPROVED
+        ):
+            raise ValueError("STORYBOARD_APPROVAL_REQUIRED")
+        return project
+
     # F3: Video generation operations
     
     def save_generated_scene(self, owner_user_id: str, project_id: str, scene: GeneratedScene) -> VideoFactoryProject:

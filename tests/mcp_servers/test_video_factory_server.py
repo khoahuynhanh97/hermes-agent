@@ -1,6 +1,69 @@
+import asyncio
+
 import pytest
 
 from mcp_servers.video_factory import server
+
+
+def test_resource_pack_tool_publishes_canonical_nested_schema():
+    tools = asyncio.run(server.mcp.list_tools())
+    tool = next(item for item in tools if item.name == "resource_pack_save")
+    pack_schema = tool.inputSchema["properties"]["resource_pack"]
+    resolved = tool.inputSchema.get("$defs", {}).get("ResourcePackInput", pack_schema)
+
+    assert set(resolved["required"]) >= {
+        "product_references",
+        "primary_product_asset_id",
+        "product_identity_description",
+    }
+    assert "files" not in resolved["properties"]
+    assert "images" not in resolved["properties"]
+    assert "product_name" not in resolved["properties"]
+
+
+def test_creative_brief_tool_publishes_canonical_nested_schema():
+    tools = asyncio.run(server.mcp.list_tools())
+    tool = next(item for item in tools if item.name == "creative_brief_save")
+    brief_schema = tool.inputSchema["properties"]["creative_brief"]
+    resolved = tool.inputSchema.get("$defs", {}).get("CreativeBriefInput", brief_schema)
+
+    assert set(resolved["required"]) >= {
+        "objective", "target_audience", "core_message", "tone", "pace", "cta", "content_blocks"
+    }
+    assert "audience" not in resolved["properties"]
+    assert "summary" not in resolved["properties"]
+    assert "product_name" not in resolved["properties"]
+    assert "objective" in tool.description
+    assert "target_audience" in tool.description
+
+
+def test_creative_brief_rejects_missing_canonical_fields():
+    with pytest.raises(ValueError, match="missing required fields"):
+        server._brief({
+            "objective": "demo",
+            "target_audience": "buyers",
+            "core_message": "easy",
+            "content_blocks": ["hook", "demo"],
+        })
+
+
+@pytest.mark.parametrize("claim", [
+    {"claim": "25-hour battery"},
+    {"claim": "Bluetooth 5.3", "status": "confirmed"},
+    "lightweight",
+])
+def test_creative_brief_rejects_claims_without_canonical_status(claim):
+    with pytest.raises(ValueError, match="verified_selling_points"):
+        server._brief({
+            "objective": "demo",
+            "target_audience": "buyers",
+            "core_message": "easy",
+            "tone": "direct",
+            "pace": "fast",
+            "cta": "buy",
+            "content_blocks": ["hook", "demo"],
+            "verified_selling_points": [claim],
+        })
 
 
 def test_mcp_f1_workflow_and_owner_isolation(tmp_path, monkeypatch):
@@ -31,3 +94,19 @@ def test_mcp_f1_workflow_and_owner_isolation(tmp_path, monkeypatch):
     assert server.video_project_get("owner-a", "p-1")["project"]["scene_plan"]["scenes"][0]["scene_id"] == "s1"
     with pytest.raises(ValueError, match="PROJECT_NOT_FOUND"):
         server.video_project_get("owner-b", "p-1")
+
+
+def test_video_factory_runtime_info_tool_registered_and_resolves_paths(tmp_path, monkeypatch):
+    db_file = tmp_path / "custom_factory.sqlite"
+    ws_dir = tmp_path / "custom_workspace"
+    monkeypatch.setenv("HERMES_VIDEO_FACTORY_DB_PATH", str(db_file))
+    monkeypatch.setenv("HERMES_VIDEO_FACTORY_WORKSPACE", str(ws_dir))
+
+    tools = asyncio.run(server.mcp.list_tools())
+    assert any(tool.name == "video_factory_runtime_info" for tool in tools)
+
+    info = server.video_factory_runtime_info()
+    assert info["database_path"] == str(db_file.resolve())
+    assert info["workspace_path"] == str(ws_dir.resolve())
+    assert "python_executable" in info
+    assert "module_file" in info

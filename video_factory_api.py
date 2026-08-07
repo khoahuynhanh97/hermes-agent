@@ -125,12 +125,23 @@ async def save_resources(request):
     )
     service = _service()
     project = service.save_resource_pack(owner, pid, pack)
+    return web.json_response({"status": "ok", "data": _project_json(project)})
+
+
+async def lock_resources(request):
+    body = await _body(request)
+    owner = _owner(request)
+    pid = request.match_info["project_id"]
+
     identity = ResourceIdentity(
-        description=body.get("identity_description") or body.get("product_identity_description") or "product",
-        color=body.get("identity_color") or "",
+        description=body.get("description") or body.get("identity_description") or body.get("product_identity_description") or "product",
+        shape=body.get("shape") or "",
+        color=body.get("color") or body.get("identity_color") or "",
+        materials=tuple(body.get("materials") or []),
+        logo_placement=body.get("logo_placement") or "",
         distinctive_features=tuple(body.get("distinctive_features") or []),
     )
-    project = service.lock_resource_pack(owner, pid, identity)
+    project = _service().lock_resource_pack(owner, pid, identity)
     return web.json_response({"status": "ok", "data": _project_json(project)})
 
 
@@ -327,6 +338,64 @@ def _resolve_resource_image_paths(project, ws: Path) -> list[str]:
     return paths
 
 
+async def generate_video_jobs(request):
+    """Enqueue durable video_generate jobs for approved storyboard scenes."""
+    body = await _body(request)
+    owner = _owner(request)
+    pid = request.match_info["project_id"]
+    service = _service()
+    project = service.get_project(owner, pid)
+
+    if project.storyboard and project.storyboard.approval_status.value != "approved":
+        return web.json_response({"status": "error", "message": "STORYBOARD_APPROVAL_REQUIRED"}, status=400)
+
+    ref_paths = []
+    frame_img = _frame_image_path(_workspace(), project)
+    if frame_img:
+        ref_paths.append(str(frame_img))
+
+    jobs_enqueued = []
+    scenes = project.scene_plan.scenes if (project.scene_plan and project.scene_plan.scenes) else []
+    if not scenes:
+        scenes = [Scene(scene_id="scene_1", order=1, title="Scene 1")]
+
+    for sc in scenes:
+        scene_id = getattr(sc, "scene_id", "scene_1")
+        prompt = body.get("prompt") or f"video for scene {scene_id}"
+        vp = VideoPrompt(
+            scene_id=scene_id,
+            duration_seconds=4,
+            start_visual_state=body.get("start_visual_state") or "",
+            end_visual_state=body.get("end_visual_state") or "",
+            subject_action=body.get("subject_action") or "",
+            product_action=body.get("product_action") or "",
+            camera_movement=body.get("camera_movement") or "",
+            camera_framing=body.get("camera_framing") or "",
+            environment_motion=body.get("environment_motion") or "",
+            motion_constraints=body.get("motion_constraints") or "",
+            identity_constraints=body.get("identity_constraints") or "",
+            reference_frame_ids=tuple(body.get("reference_frame_ids") or []),
+            provider_options=body.get("provider_options") or {},
+        )
+        service.save_generated_scene(owner, pid, GeneratedScene(scene_id=scene_id, video_prompt=vp))
+
+        job = Job.new("video_generate", {
+            "owner_user_id": owner,
+            "request_id": f"{pid}_{scene_id}",
+            "scene_id": scene_id,
+            "prompt": prompt,
+            "duration_seconds": 4,
+            "aspect_ratio": body.get("aspect_ratio") or "9:16",
+            "reference_image_paths": ref_paths,
+            "provider_options": body.get("provider_options") or {"resolution": "720p", "sampleCount": 1},
+            "max_attempts": 200,
+        })
+        _jobs().submit(job)
+        jobs_enqueued.append({"job_id": job.id, "scene_id": scene_id})
+
+    return web.json_response({"status": "ok", "data": {"jobs": jobs_enqueued}})
+
+
 async def save_video(request):
     """Save video prompt and enqueue one video_generate job."""
     body = await _body(request)
@@ -335,11 +404,14 @@ async def save_video(request):
     service = _service()
     project = service.get_project(owner, pid)
 
+    if project.storyboard and project.storyboard.approval_status.value != "approved":
+        return web.json_response({"status": "error", "message": "STORYBOARD_APPROVAL_REQUIRED"}, status=400)
+
     scene_id = body.get("scene_id") or "scene_1"
     prompt = body.get("prompt") or ""
     vp = VideoPrompt(
         scene_id=scene_id,
-        duration_seconds=int(body.get("duration_seconds") or 4),
+        duration_seconds=4,
         start_visual_state=body.get("start_visual_state") or "",
         end_visual_state=body.get("end_visual_state") or "",
         subject_action=body.get("subject_action") or "",
@@ -365,7 +437,7 @@ async def save_video(request):
         "request_id": f"{pid}_{scene_id}",
         "scene_id": scene_id,
         "prompt": prompt,
-        "duration_seconds": int(body.get("duration_seconds") or 4),
+        "duration_seconds": 4,
         "aspect_ratio": body.get("aspect_ratio") or "9:16",
         "reference_image_paths": ref_paths,
         "provider_options": body.get("provider_options") or {"resolution": "720p", "sampleCount": 1},
@@ -393,7 +465,12 @@ async def save_timeline(request):
 
 
 async def generate_voiceover(request):
-    """Generate one Vietnamese voiceover via Vertex Gemini TTS (explicit user action)."""
+    """Enqueue a durable tts_generate job (explicit user action).
+
+    The actual synthesis runs in the canonical worker via the configured
+    TTS provider. The caller must POST /jobs/{id}/apply to persist the
+    resulting WAV asset identity into the project timeline.
+    """
     body = await _body(request)
     owner = _owner(request)
     pid = request.match_info["project_id"]
@@ -407,30 +484,18 @@ async def generate_voiceover(request):
     )
     voice = body.get("voice") or "Zephyr"
 
-    from hermes.ports.text_to_speech import TTSRequest
-    from providers.vertex_tts_provider import GoogleVertexTTSProvider
+    job = Job.new("tts_generate", {
+        "owner_user_id": owner,
+        "request_id": f"{pid}_voiceover",
+        "text": text,
+        "voice": voice,
+        "language": body.get("language") or "vi-VN",
+        "style_prompt": style_prompt,
+        "max_attempts": 3,
+    })
+    _jobs().submit(job)
 
-    audio_dir = _workspace() / "audio"
-    audio_dir.mkdir(parents=True, exist_ok=True)
-    provider = GoogleVertexTTSProvider(output_dir=str(audio_dir))
-    result = provider.synthesize(TTSRequest(
-        request_id=f"{pid}_voiceover", text=text, voice=voice,
-        language=body.get("language") or "vi-VN", style_prompt=style_prompt,
-    ))
-    if not result.success:
-        return web.json_response({"status": "error", "message": result.error_message}, status=502)
-
-    # link audio track to timeline
-    from hermes.domain.video_factory import Timeline, TimelineClip
-    project = _service().get_project(owner, pid)
-    clips = project.timeline.clips if project.timeline else (TimelineClip(clip_id="clip_1", order=1, source_asset_id="scene_asset_scene_1", duration_seconds=4.0),)
-    timeline = Timeline(timeline_id="timeline_web", project_id=pid, clips=tuple(clips), audio_track_asset_id=f"voiceover_{voice}")
-    _service().save_timeline(owner, pid, timeline)
-
-    return web.json_response({"status": "ok", "data": {
-        "wav_path": result.wav_path, "provider": result.provider,
-        "model": result.model, "voice": result.voice,
-    }})
+    return web.json_response({"status": "accepted", "data": {"job_id": job.id, "voice": voice}}, status=202)
 
 
 async def mix_voiceover(request):
@@ -524,9 +589,10 @@ async def tiktok_authorize(request):
 async def apply_job(request):
     """Apply a completed durable job result into the Video Factory domain state.
 
-    image_generate → updates storyboard frame status/asset
-    video_generate → updates scene status/asset/operation id
-    video.render   → draft/final asset (rendered file already in workspace)
+    image_generate   → updates storyboard frame status/asset
+    video_generate   → updates scene status/asset/operation id
+    tts_generate     → updates timeline.audio_track_asset_id
+    video.render     → draft/final asset (rendered file already in workspace)
 
     Idempotent: re-applying a completed job is safe.
     """
@@ -559,6 +625,26 @@ async def apply_job(request):
             asset_id=f"scene_asset_{scene_id}", job_id=job_id,
             provider_operation_id=(result or {}).get("provider_operation_id"),
         )
+    elif job.task_name == "tts_generate":
+        # Store the final wav_path in project.draft_video_asset_id and set audio track
+        if result and result.get("wav_path"):
+            # Update timeline audio_track_asset_id with the WAV asset
+            project = service.update_timeline_status(owner, pid, "completed")
+            # Persist the audio track identity - using real domain model pattern
+            from hermes.domain.video_factory import Timeline, TimelineClip
+            # Find or create audio track clip entry
+            audio_clip = project.timeline.clips[-1] if project.timeline and project.timeline.clips else TimelineClip(clip_id="audio_track", order=1, source_asset_id="audio_track", duration_seconds=4.0)
+            if not project.timeline:
+                timeline = Timeline(timeline_id="timeline_web", project_id=pid, clips=[],
+                                  audio_track_asset_id=f"audio_track_{job_id}")
+            else:
+                timeline = project.timeline
+                timeline.audio_track_asset_id = f"audio_track_{job_id}"
+                timeline.status = TimelineStatus.COMPLETED
+                timeline.status = TimelineStatus.COMPLETED
+                timeline.updated_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            # Save the updated timeline
+            updated_timeline = service.save_timeline(owner, pid, timeline)
     else:
         # video.render / other: no domain mapping needed, file is in workspace
         pass
@@ -655,6 +741,7 @@ def build_routes() -> list:
         web.post("/api/vf/projects", create_project),
         web.get("/api/vf/projects/{project_id}", get_project),
         web.post("/api/vf/projects/{project_id}/resources", save_resources),
+        web.post("/api/vf/projects/{project_id}/resources/lock", lock_resources),
         web.post("/api/vf/projects/{project_id}/idea", save_idea),
         web.post("/api/vf/projects/{project_id}/brief", save_brief),
         web.post("/api/vf/projects/{project_id}/brief/approve", approve_brief),
@@ -664,6 +751,7 @@ def build_routes() -> list:
         web.post("/api/vf/projects/{project_id}/storyboard/generate", generate_image),
         web.post("/api/vf/projects/{project_id}/storyboard/approve", approve_storyboard),
         web.post("/api/vf/projects/{project_id}/video", save_video),
+        web.post("/api/vf/projects/{project_id}/video/generate", generate_video_jobs),
         web.post("/api/vf/projects/{project_id}/timeline", save_timeline),
         web.post("/api/vf/projects/{project_id}/timeline/render", render_draft),
         web.post("/api/vf/projects/{project_id}/final/approve", approve_final),
