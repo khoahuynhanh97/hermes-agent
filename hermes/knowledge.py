@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import sqlite3
 import urllib.parse
@@ -14,6 +13,7 @@ from .application.knowledge_lifecycle import (
     LifecycleCommand,
     LifecycleResult,
 )
+from .utils.json_helpers import dump_json, load_json # Import shared helpers
 from .db import Database, utc_now
 from .knowledge_similarity import (
     build_duplicate_warning,
@@ -37,20 +37,8 @@ class _LifecycleBatchRejected(Exception):
         self.result = result
 
 
-def _json_dump(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-
-
-def _json_load(value: str | None, fallback: Any) -> Any:
-    try:
-        parsed = json.loads(value or "")
-    except (TypeError, json.JSONDecodeError):
-        return fallback
-    return parsed
-
-
 def _fts_items(value: str | None) -> list[str]:
-    parsed = _json_load(value, [])
+    parsed = load_json(value, [])
     if isinstance(parsed, dict):
         items = [parsed[key] for key in sorted(parsed)]
     elif isinstance(parsed, list):
@@ -61,7 +49,7 @@ def _fts_items(value: str | None) -> list[str]:
         items = [parsed]
     return [
         (
-            json.dumps(item, ensure_ascii=False, sort_keys=True)
+            dump_json(item)
             if isinstance(item, (dict, list))
             else str(item)
         )
@@ -131,6 +119,15 @@ class SQLiteKnowledgeStore:
         self.default_owner_user_id = (
             str(default_owner_user_id) if default_owner_user_id not in (None, "") else "default"
         )
+
+    def list_sources(self, owner_user_id: str) -> list[dict]:
+        owner = self._owner(owner_user_id)
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                "SELECT id, source_type, source_key, source_url, title, confidence, created_at FROM sources WHERE owner_user_id = ?",
+                (owner,)
+            ).fetchall()
+            return [dict(row) for row in rows]
 
     @staticmethod
     def normalize_source_url(url: str) -> str:
@@ -203,7 +200,7 @@ class SQLiteKnowledgeStore:
                     source_url,
                     source_url,
                     confidence_label,
-                    _json_dump(metadata or {}),
+                    dump_json(metadata or {}),
                     utc_now(),
                     existing["id"],
                 ),
@@ -228,7 +225,7 @@ class SQLiteKnowledgeStore:
                 source_url or None,
                 title,
                 confidence_label,
-                _json_dump(metadata or {}),
+                dump_json(metadata or {}),
                 now,
                 now,
             ),
@@ -303,8 +300,8 @@ class SQLiteKnowledgeStore:
                                 category,
                                 str(details.get("summary") or ""),
                                 str(details.get("deep_analysis") or details.get("summary") or ""),
-                                _json_dump(key_lessons or []),
-                                _json_dump(details),
+                                dump_json(key_lessons or []),
+                                dump_json(details),
                                 score,
                                 confidence_label,
                                 now,
@@ -322,8 +319,8 @@ class SQLiteKnowledgeStore:
                     id, source_id, owner_user_id, slug, lesson_type, category,
                     title, summary, content, tags_json, key_lessons_json,
                     detail_json, confidence, confidence_label, status,
-                    needs_reanalysis, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+                    needs_reanalysis, created_at, updated_at, is_current
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
                 """,
                 (
                     entry_id,
@@ -335,14 +332,15 @@ class SQLiteKnowledgeStore:
                     title,
                     str(details.get("summary") or ""),
                     str(details.get("deep_analysis") or details.get("summary") or ""),
-                    _json_dump(tags),
-                    _json_dump(key_lessons or []),
-                    _json_dump(details),
+                    dump_json(tags),
+                    dump_json(key_lessons or []),
+                    dump_json(details),
                     score,
                     confidence_label,
                     1 if details.get("needs_reanalysis") else 0,
                     now,
                     now,
+                    1, # is_current default to 1 for new lessons
                 ),
             )
             self._add_event(connection, entry_id, "created", owner, "", {"source": source})
@@ -423,8 +421,22 @@ class SQLiteKnowledgeStore:
                 lesson_id, action, actor_user_id, note, metadata_json, created_at
             ) VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (lesson_id, action, actor or "", note or "", _json_dump(metadata or {}), created_at or utc_now()),
+            (lesson_id, action, actor or "", note or "", dump_json(metadata or {}), created_at or utc_now()),
         )
+
+    def get_entry_evidence(self, lesson_id: str, owner_user_id: str) -> list[dict]:
+        owner = self._owner(owner_user_id)
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT e.id, e.source_id, e.kind, e.locator, e.excerpt, e.description, e.created_at
+                FROM evidence e JOIN lesson_evidence le ON le.evidence_id = e.id
+                JOIN lessons l ON l.id = le.lesson_id
+                WHERE le.lesson_id = ? AND l.owner_user_id = ? ORDER BY e.created_at
+                """,
+                (lesson_id, owner),
+            ).fetchall()
+            return [dict(row) for row in rows]
 
     def _get_entry(self, connection: sqlite3.Connection, identifier: str) -> dict | None:
         row = connection.execute(
@@ -439,8 +451,8 @@ class SQLiteKnowledgeStore:
         return self._row_to_entry(connection, row) if row else None
 
     def _row_to_entry(self, connection: sqlite3.Connection, row: sqlite3.Row) -> dict:
-        detail = _json_load(row["detail_json"], {})
-        key_lessons = _json_load(row["key_lessons_json"], [])
+        detail = load_json(row["detail_json"], {})
+        key_lessons = load_json(row["key_lessons_json"], [])
         events = connection.execute(
             "SELECT * FROM lesson_events WHERE lesson_id = ? ORDER BY id", (row["id"],)
         ).fetchall()
@@ -448,7 +460,7 @@ class SQLiteKnowledgeStore:
         for event in events:
             if event["action"] not in {"approved", "rejected"}:
                 continue
-            metadata = _json_load(event["metadata_json"], {})
+            metadata = load_json(event["metadata_json"], {})
             history = {
                 "status": event["action"],
                 "at": event["created_at"],
@@ -490,6 +502,10 @@ class SQLiteKnowledgeStore:
             "owner_user_id": row["owner_user_id"],
             "needs_reanalysis": bool(row["needs_reanalysis"]),
             "confidence": row["confidence_label"],
+            "superseded_by": row["superseded_by"] if "superseded_by" in row.keys() else None,
+            "superseded_at": row["superseded_at"] if "superseded_at" in row.keys() else None,
+            "is_current": bool(row["is_current"]) if "is_current" in row.keys() else True,
+            "revision_of": row["revision_of"] if "revision_of" in row.keys() else None,
         }
 
     def get_entry(self, slug_or_id: str) -> dict | None:
@@ -502,7 +518,7 @@ class SQLiteKnowledgeStore:
                 "SELECT detail_json FROM lessons WHERE id = ? OR slug = ? LIMIT 1",
                 (identifier, identifier),
             ).fetchone()
-        return _json_load(row["detail_json"], {}) if row else {}
+        return load_json(row["detail_json"], {}) if row else {}
 
     def find_existing_entry(self, source_url: str, owner_user_id: str | int | None = None) -> dict | None:
         normalized = self.normalize_source_url(source_url)
@@ -580,7 +596,7 @@ class SQLiteKnowledgeStore:
                     """
                     SELECT lesson_id, bm25(lesson_fts) AS rank
                     FROM lesson_fts
-                    WHERE lesson_fts MATCH ? AND owner_user_id = ?
+                    WHERE lesson_fts MATCH ? AND owner_user_id = ? AND is_current = 1
                     ORDER BY rank LIMIT ?
                     """,
                     (match, owner, max(1, max_entries)),
@@ -588,7 +604,7 @@ class SQLiteKnowledgeStore:
             except sqlite3.OperationalError:
                 rows = []
             entries = [self._get_entry(connection, row["lesson_id"]) for row in rows]
-            entries = [entry for entry in entries if entry and entry["status"] == "approved"]
+            entries = [entry for entry in entries if entry and entry["status"] == "approved" and entry["is_current"]]
             if not entries:
                 return ""
             lines = [
@@ -624,7 +640,7 @@ class SQLiteKnowledgeStore:
     def _sync_fts(self, connection: sqlite3.Connection, lesson_id: str) -> None:
         connection.execute("DELETE FROM lesson_fts WHERE lesson_id = ?", (lesson_id,))
         row = connection.execute("SELECT * FROM lessons WHERE id = ?", (lesson_id,)).fetchone()
-        if not row or row["status"] != "approved":
+        if not row or row["status"] != "approved" or not row["is_current"]: # Only index approved and current
             return
         connection.execute(
             """
@@ -642,7 +658,7 @@ class SQLiteKnowledgeStore:
         row = connection.execute(
             """
             SELECT id, owner_user_id, status, needs_reanalysis, detail_json,
-                   title, key_lessons_json
+                   title, key_lessons_json, is_current
             FROM lessons
             WHERE id = ? OR slug = ?
             ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END
@@ -679,6 +695,9 @@ class SQLiteKnowledgeStore:
                 self._get_entry(connection, row["id"]),
             )
 
+        if not row["is_current"] and command.action == "approve":
+            return LifecycleResult(False, "superseded_cannot_approve", False, self._get_entry(connection, row["id"]))
+
         action = command.action
         if action == "approve":
             if row["needs_reanalysis"]:
@@ -700,7 +719,7 @@ class SQLiteKnowledgeStore:
                     """
                     SELECT id, title, key_lessons_json, status
                     FROM lessons
-                    WHERE owner_user_id = ? AND status = 'approved' AND id <> ?
+                    WHERE owner_user_id = ? AND status = 'approved' AND is_current = 1 AND id <> ?
                     """,
                     (row["owner_user_id"], row["id"]),
                 ).fetchall()
@@ -708,13 +727,13 @@ class SQLiteKnowledgeStore:
                     row["title"],
                     " ".join(
                         str(item)
-                        for item in _json_load(row["key_lessons_json"], [])
+                        for item in load_json(row["key_lessons_json"], [])
                     ),
                     [
                         {
                             "id": candidate["id"],
                             "title": candidate["title"],
-                            "key_lessons": _json_load(
+                            "key_lessons": load_json(
                                 candidate["key_lessons_json"], []
                             ),
                             "status": candidate["status"],
@@ -795,7 +814,7 @@ class SQLiteKnowledgeStore:
                     self._get_entry(connection, row["id"]),
                 )
             now = utc_now()
-            detail = _json_load(row["detail_json"], {})
+            detail = load_json(row["detail_json"], {})
             detail.update(command.metadata)
             detail["needs_reanalysis"] = True
             if command.reason:
@@ -807,7 +826,7 @@ class SQLiteKnowledgeStore:
                 SET needs_reanalysis = 1, detail_json = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (_json_dump(detail), now, row["id"]),
+                (dump_json(detail), now, row["id"]),
             )
             self._add_event(
                 connection,
@@ -982,7 +1001,7 @@ class SQLiteKnowledgeStore:
             ).fetchone()
             if not row:
                 return None
-            detail = _json_load(row["detail_json"], {})
+            detail = load_json(row["detail_json"], {})
             detail.update(detail_data or {})
             detail["needs_reanalysis"] = False
             detail.pop("validation_error", None)
@@ -996,10 +1015,10 @@ class SQLiteKnowledgeStore:
                 (
                     lesson.get("title", row["title"]),
                     lesson.get("category", row["category"]),
-                    _json_dump(lesson.get("key_lessons", _json_load(row["key_lessons_json"], []))),
+                    dump_json(lesson.get("key_lessons", load_json(row["key_lessons_json"], []))),
                     detail.get("summary", row["summary"]),
                     detail.get("deep_analysis", row["content"]),
-                    _json_dump(detail),
+                    dump_json(detail),
                     utc_now(),
                     row["id"],
                 ),
@@ -1021,7 +1040,7 @@ class SQLiteKnowledgeStore:
                 "action": row["action"],
                 "actor_user_id": row["actor_user_id"],
                 "note": row["note"],
-                "metadata": _json_load(row["metadata_json"], {}),
+                "metadata": load_json(row["metadata_json"], {}),
                 "created_at": row["created_at"],
             }
             for row in rows
@@ -1039,11 +1058,15 @@ class SQLiteKnowledgeStore:
             return True
 
     def get_style_context_for_script(self, category: str | None = None, max_lessons: int = 3) -> str:
-        approved = self.get_approved_entries(category=category)
+        approved = self.list_entries(status="approved", category=category) # Use list_entries to include is_current
         if not approved:
             return ""
         lines = ["[APPROVED HERMES KNOWLEDGE]"]
-        for entry in approved[-max(1, max_lessons):]:
+
+        # Filter for is_current = 1 if it exists, otherwise assume all are current
+        current_approved = [e for e in approved if e.get("is_current", True)]
+
+        for entry in current_approved[-max(1, max_lessons):]:
             lines.append(f"Lesson: {entry['title']}")
             lines.extend(f"- {lesson}" for lesson in entry.get("key_lessons", [])[:3])
         return "\n".join(lines)
@@ -1088,8 +1111,8 @@ class SQLiteKnowledgeStore:
                     id, source_id, owner_user_id, slug, lesson_type, category,
                     title, summary, content, tags_json, key_lessons_json,
                     detail_json, confidence, confidence_label, status,
-                    needs_reanalysis, created_at, updated_at, approved_at, rejected_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    needs_reanalysis, created_at, updated_at, approved_at, rejected_at, is_current
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     entry_id,
@@ -1097,13 +1120,13 @@ class SQLiteKnowledgeStore:
                     owner,
                     str(entry.get("slug") or self._unique_slug(connection, _slug(str(entry.get("title") or entry_id)), owner)),
                     str(full_detail.get("lesson_type") or "general"),
-                    str(entry.get("category") or "General"),
-                    str(entry.get("title") or entry_id),
+                    entry.get("category", "General"), # Use entry.get("category", "General")
+                    entry.get("title", entry_id), # Use entry.get("title", entry_id)
                     str(entry.get("summary") or full_detail.get("summary") or ""),
                     str(full_detail.get("deep_analysis") or full_detail.get("summary") or ""),
-                    _json_dump(full_detail.get("tags") or full_detail.get("search_keywords") or []),
-                    _json_dump(entry.get("key_lessons") or []),
-                    _json_dump(full_detail),
+                    dump_json(full_detail.get("tags") or full_detail.get("search_keywords") or []),
+                    dump_json(entry.get("key_lessons") or []),
+                    dump_json(full_detail),
                     score,
                     confidence_label,
                     status,
@@ -1112,6 +1135,7 @@ class SQLiteKnowledgeStore:
                     updated_at,
                     entry.get("approved_at"),
                     entry.get("rejected_at"),
+                    1, # is_current default to 1 for new lessons
                 ),
             )
             self._replace_evidence(connection, entry_id, source_id, full_detail.get("evidence") or [])

@@ -879,6 +879,8 @@ def main():
         web.get('/api/projects', handle_api_list_projects),
         web.post('/api/projects', handle_api_create_project)
     ])
+    from video_factory_api import build_routes
+    app.add_routes(build_routes())
 
 
     print("\n" + "="*70)

@@ -14,6 +14,16 @@ def _default_data_dir() -> Path:
     return (Path.home() / ".hermes").resolve()
 
 
+def get_data_root() -> Path:
+    """Canonical runtime data root: HERMES_DATA_DIR if set, else existing default."""
+    return _default_data_dir()
+
+
+def get_data_path(*parts: str) -> Path:
+    """Resolve a path under the canonical data root (e.g. get_data_path("db", "hermes.db"))."""
+    return _default_data_dir().joinpath(*parts)
+
+
 def load_settings() -> "HermesPaths":
     """Load application settings from environment variables."""
     return HermesPaths.from_env()

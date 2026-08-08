@@ -53,3 +53,28 @@ class FFmpegCapability:
             return Result.failure("ffmpeg_error", result.stderr)
         except Exception as e:
             return Result.failure("unavailable", str(e))
+
+    def render_with_audio(self, video_path: str, audio_path: str, output_path: str) -> Result[dict[str, Any]]:
+        """Mux one video + one WAV into an MP4 (video length wins)."""
+        cmd = [
+            self.ffmpeg_path,
+            "-i", video_path,
+            "-i", audio_path,
+            "-c:v", "libx264",
+            "-preset", "medium",
+            "-crf", "23",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-shortest",
+            output_path,
+            "-y"
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+            if result.returncode == 0:
+                return Result.success({"output_path": output_path, "format": "mp4"})
+            return Result.failure("ffmpeg_error", result.stderr)
+        except Exception as e:
+            return Result.failure("unavailable", str(e))

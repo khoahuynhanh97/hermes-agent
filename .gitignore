@@ -15,6 +15,13 @@ projects/
 downloads/
 jobs/
 .agent_jobs/
+data/
+logs/
+runtime_logs/
+knowledge_base/
+obsidian_vault/
+prompt_output/
+bgm_library/
 
 # IDE / Editor configs
 .vscode/

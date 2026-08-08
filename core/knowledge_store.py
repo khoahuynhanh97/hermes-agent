@@ -96,9 +96,13 @@ class UnifiedKnowledgeStore:
                 "status": "pending|approved|rejected",
     """
 
-    def __init__(self):
+    def __init__(self, use_sqlite: bool = True):
         _ensure_dirs()
         self._is_migrating = False
+        self.use_sqlite = use_sqlite
+        if self.use_sqlite:
+            from hermes.knowledge import SQLiteKnowledgeStore
+            self._sqlite_store = SQLiteKnowledgeStore(default_owner_user_id="default", initialize_database=True)
         self._index = self._load_index()
 
     # ------------------------------------------------------------------
@@ -129,6 +133,9 @@ class UnifiedKnowledgeStore:
         return {"version": _CURRENT_SCHEMA_VERSION, "entries": []}
 
     def _save_index(self):
+        if self.use_sqlite:
+            # Delegate to SQLite store as canonical
+            return
         self._save_index_atomic()
 
     def _save_index_atomic(self):
@@ -239,10 +246,27 @@ class UnifiedKnowledgeStore:
         owner_user_id: int | str | None = None,
     ) -> dict:
         """
-        Thêm entry mới vào unified index với status='pending'.
-        Nếu trùng URL và status=approved, trả về entry cũ.
-        Nếu trùng URL và status=pending, cập nhật metadata và trả về.
+        Add new entry to the canonical store (SQLite).
+        Delegates to SQLiteKnowledgeStore.add_entry.
         """
+        if self.use_sqlite:
+            entry = self._sqlite_store.add_entry(
+                title=title,
+                source_url=source_url,
+                platform=platform,
+                category=category,
+                hook_type=hook_type,
+                cta_style=cta_style,
+                voice_tone=voice_tone,
+                key_lessons=key_lessons,
+                detail_data=detail_data,
+                job_output_dir=job_output_dir,
+                source=source,
+                owner_user_id=owner_user_id,
+            )
+            self._reload() # Ensure internal _index reflects SQLite state
+            return entry
+
         self._reload()
 
         # Duplicate check
@@ -543,13 +567,23 @@ class UnifiedKnowledgeStore:
 
     def mark_approved(self, identifier: str, approved_by: str = None, approval_mode: str = None, force: bool = False) -> Optional[dict]:
         """
-        Duyet mot entry: status -> approved.
-        Tu dong trigger rebuild style profile.
-        
-        Kiem tra trung lap dua tren title/summary truoc khi duyet.
-        Neu tim thay entry tuong tu da approved, tra ve entry voi warning.
-        Dung force=True de bo qua kiem tra trung lap.
+        Approve an entry in the canonical store (SQLite).
         """
+        if self.use_sqlite:
+            entry = self._sqlite_store.mark_approved(
+                identifier=identifier,
+                approved_by=approved_by,
+                approval_mode=approval_mode,
+                force=force
+            )
+            if entry:
+                self._reload()
+                try:
+                    self._rebuild_style_profile()
+                except Exception as e:
+                    logger.warning(f"[KnowledgeStore] Could not rebuild style profile: {e}")
+            return entry
+
         self._reload()
         # Uu tien ID truoc, sau do slug
         matched_entry = None
@@ -603,7 +637,17 @@ class UnifiedKnowledgeStore:
         return None
 
     def mark_rejected(self, identifier: str, rejected_by: str = None, rejection_reason: str = None) -> Optional[dict]:
-        """Từ chối một entry: status → rejected."""
+        """Reject entry in canonical store (SQLite)."""
+        if self.use_sqlite:
+            entry = self._sqlite_store.mark_rejected(
+                identifier=identifier,
+                rejected_by=rejected_by,
+                rejection_reason=rejection_reason
+            )
+            if entry:
+                self._reload()
+            return entry
+
         self._reload()
         matched_entry = None
         for entry in self._index["entries"]:

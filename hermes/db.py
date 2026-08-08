@@ -10,10 +10,17 @@ from hermes.adapters.sqlite.schema_v2 import apply_schema_v2
 from hermes.adapters.sqlite.schema_v4 import apply_schema_v4
 from hermes.adapters.sqlite.schema_v5 import apply_schema_v5
 from hermes.adapters.sqlite.schema_v6 import apply_schema_v6
+from hermes.adapters.sqlite.schema_v7 import apply_schema_v7
+from hermes.adapters.sqlite.schema_v8 import apply_schema_v8
+from hermes.adapters.sqlite.schema_v9 import apply_schema_v9
+from hermes.adapters.sqlite.schema_v10 import apply_schema_v10
+from hermes.adapters.sqlite.schema_v11 import apply_schema_v11
+from hermes.adapters.sqlite.schema_v12 import apply_schema_v12
+from hermes.adapters.sqlite.schema_v13 import apply_schema_v13
 from .config import HermesPaths
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 13
 
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -378,7 +385,35 @@ class Database:
             if current_version < 6:
                 apply_schema_v6(connection)
                 connection.execute("PRAGMA user_version = 6")
-            
+
+            if current_version < 7:
+                apply_schema_v7(connection)
+                connection.execute("PRAGMA user_version = 7")
+
+            if current_version < 8:
+                apply_schema_v8(connection)
+                connection.execute("PRAGMA user_version = 8")
+
+            if current_version < 9:
+                apply_schema_v9(connection)
+                connection.execute("PRAGMA user_version = 9")
+
+            if current_version < 10:
+                apply_schema_v10(connection)
+                connection.execute("PRAGMA user_version = 10")
+
+            if current_version < 11:
+                apply_schema_v11(connection)
+                connection.execute("PRAGMA user_version = 11")
+
+            if current_version < 12:
+                apply_schema_v12(connection)
+                connection.execute("PRAGMA user_version = 12")
+
+            if current_version < 13:
+                apply_schema_v13(connection)
+                connection.execute("PRAGMA user_version = 13")
+
         finally:
             connection.close()
 
