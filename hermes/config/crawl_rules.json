@@ -1,0 +1,87 @@
+{
+  "schema_version": "1.0",
+  "description": "Crawl rules for affiliate product research pipeline. Reads from JSON, can be edited.",
+  "defaults": {
+    "topic": "thiet bi cong nghe thong minh",
+    "topic_category": "smart_home",
+    "no_products": 150,
+    "no_videos": 8,
+    "platforms": [
+      "shopee",
+      "lazada",
+      "tiktok"
+    ],
+    "price_range_vnd": {
+      "min": 200000,
+      "max": 1500000,
+      "default_max": 500000
+    },
+    "commission_min_pct": 3.0,
+    "rating_min": 4.0,
+    "shortlist_limit": 25,
+    "package_limit": 10,
+    "auto_run": true,
+    "auto_run_interval_minutes": 60
+  },
+  "scheduled_runs": [
+    {
+      "name": "daily_morning",
+      "topic": "tai nghe bluetooth 2026",
+      "no_products": 150,
+      "no_videos": 5,
+      "platforms": [
+        "shopee"
+      ],
+      "category": "audio",
+      "time": "09:00",
+      "enabled": true
+    },
+    {
+      "name": "daily_evening",
+      "topic": "gia dung thong minh",
+      "no_products": 200,
+      "no_videos": 8,
+      "platforms": [
+        "shopee",
+        "lazada"
+      ],
+      "category": "smart_home",
+      "time": "20:00",
+      "enabled": false
+    }
+  ],
+  "filters": {
+    "exclude_categories": [
+      "adult",
+      "gambling",
+      "weapons"
+    ],
+    "exclude_keywords": [
+      "replica",
+      "fake",
+      "luxury brand"
+    ],
+    "min_sold_count": 10,
+    "min_review_count": 5
+  },
+  "video_profiles": {
+    "default_style": "review",
+    "default_duration_seconds": 30,
+    "languages": [
+      "vi"
+    ],
+    "require_voiceover": true,
+    "generate_subtitles": true
+  },
+  "auto_approval": {
+    "enabled": false,
+    "min_rating": 4.5,
+    "min_commission_pct": 5.0,
+    "auto_publish_to_sheets": false
+  },
+  "delivery": {
+    "telegram_chat_id": null,
+    "google_sheets_enabled": false,
+    "send_summary_to_telegram": true
+  }
+}
