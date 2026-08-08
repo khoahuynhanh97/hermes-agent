@@ -188,3 +188,46 @@ Bạn cũng có thể gửi trực tiếp:
 ```
 
 Bot sẽ tạo job trong `.agent_jobs/inbox` và sinh worker prompt tại `projects/{project_slug}/agent_outputs/{job_id}/antigravity_codex_prompt.md` để Codex/Antigravity xử lý tiếp.
+
+
+---
+
+## New machine (Hermes Personal)
+
+This repository contains the Hermes runtime source used by Hermes Personal.
+A separate installation/clone of NousResearch Hermes is NOT required.
+
+```
+git clone <this repo>
+cd hermes-agent
+.\setup.ps1
+# edit .env / configure external credentials if doctor requests them
+.\start.ps1
+```
+
+Update:
+
+```
+git pull
+.\setup.ps1
+.\start.ps1
+```
+
+`setup.ps1`:
+- checks Python / uv / Node / FFmpeg
+- creates/reuses `<repo>\.venv` and installs THIS repo editable
+- installs web/ dependencies
+- copies `.env.example` → `.env` only if missing (never overwrites)
+- ensures `HERMES_DATA_DIR` exists
+
+`start.ps1`:
+- starts worker + aiohttp backend from THIS repo/.venv
+- `-UI` also starts the React dev server
+
+Verify (no paid calls):
+
+```
+.\.venv\Scripts\python.exe scripts\doctor.py
+```
+
+External dependencies (not bundled): Google Cloud / Vertex credentials, local 9Router endpoint, FFmpeg. Fake providers are test-only and require `HERMES_ALLOW_FAKE_PROVIDERS=1`.

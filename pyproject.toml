@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermes-agent"
+version = "1.0.0"
+description = "Hermes Personal — Video Factory, Knowledge, and media runtime"
+requires-python = ">=3.10"
+dependencies = [
+    "aiohttp>=3.9",
+    "requests>=2.31",
+    "google-auth>=2.30",
+    "google-auth-transport-requests>=0.1",
+    "python-dotenv>=1.0",
+    "uvicorn>=0.30",
+]
+
+[tool.setuptools]
+packages = [
+    "hermes",
+    "hermes.adapters",
+    "hermes.adapters.local",
+    "hermes.adapters.sqlite",
+    "hermes.application",
+    "hermes.domain",
+    "hermes.migration",
+    "hermes.ports",
+    "hermes.tools",
+    "providers",
+    "mcp_servers",
+    "mcp_servers.video_factory",
+    "mcp_servers.video",
+    "mcp_servers.knowledge",
+    "mcp_servers.product",
+    "mcp_servers.research",
+    "tools",
+    "workers",
+]

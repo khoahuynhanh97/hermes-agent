@@ -22,7 +22,6 @@ knowledge_base/
 obsidian_vault/
 prompt_output/
 bgm_library/
-
 # IDE / Editor configs
 .vscode/
 .idea/
