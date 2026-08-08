@@ -35,8 +35,9 @@ def get_access_token() -> str:
 def vertex_model_endpoint(project: str, location: str, model: str, action: str) -> str:
     """Vertex publisher model endpoint for an action (generateContent, predictLongRunning, ...)."""
     location = location or "us-central1"
+    hostname = "aiplatform.googleapis.com" if location == "global" else f"{location}-aiplatform.googleapis.com"
     return (
-        f"https://{location}-aiplatform.googleapis.com/v1/projects/{project}"
+        f"https://{hostname}/v1/projects/{project}"
         f"/locations/{location}/publishers/google/models/{model}:{action}"
     )
 

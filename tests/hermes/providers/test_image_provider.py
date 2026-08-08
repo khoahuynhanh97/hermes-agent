@@ -97,6 +97,10 @@ def test_gemini_generate_success(workspace: Path, ref_image: Path, monkeypatch):
     assert "Avoid:" not in parts[1]["text"]
     # Aspect ratio passed via imageConfig
     assert captured["json"]["generationConfig"]["imageConfig"]["aspectRatio"] == "9:16"
+    assert captured["json"]["generationConfig"]["responseModalities"] == [
+        "TEXT",
+        "IMAGE",
+    ]
     # Key sent as query param, not in body
     assert captured["params"]["key"] == "test-key"
 
@@ -174,10 +178,10 @@ def test_gemini_output_within_workspace(workspace: Path, monkeypatch):
 
 
 def test_vertex_endpoint_url():
-    url = vertex_endpoint("gen-lang-client-0816609628", "global", "gemini-3.1-flash-lite-image")
+    url = vertex_endpoint("gen-lang-client-0816609628", "global", "gemini-3.1-flash-image")
     assert url == (
-        "https://global-aiplatform.googleapis.com/v1/projects/gen-lang-client-0816609628"
-        "/locations/global/publishers/google/models/gemini-3.1-flash-lite-image:generateContent"
+        "https://aiplatform.googleapis.com/v1/projects/gen-lang-client-0816609628"
+        "/locations/global/publishers/google/models/gemini-3.1-flash-image:generateContent"
     )
 
 
@@ -264,7 +268,13 @@ def test_vertex_generate_error_normalization(workspace: Path, monkeypatch):
 
 
 def test_vertex_generate_requires_project(workspace: Path, monkeypatch):
-    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    for key in (
+        "GOOGLE_CLOUD_PROJECT",
+        "VERTEX_PROJECT_ID",
+        "GCP_PROJECT_ID",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+    ):
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("HERMES_VIDEO_FACTORY_WORKSPACE", str(workspace))
     with pytest.raises(ValueError, match="GOOGLE_CLOUD_PROJECT"):
         GoogleVertexImageProvider()
@@ -297,6 +307,7 @@ def test_vertex_generate_sends_reference_image_bytes(workspace: Path, tmp_path: 
     encoded = b64.b64encode(png).decode("ascii")
 
     monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "proj")
+    monkeypatch.setenv("IMAGE_MODEL", "gemini-3.1-flash-image")
     monkeypatch.setenv("HERMES_VIDEO_FACTORY_WORKSPACE", str(workspace))
     monkeypatch.setattr("providers.vertex_image_provider.get_access_token", lambda: "tok")
 

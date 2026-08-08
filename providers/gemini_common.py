@@ -56,7 +56,7 @@ def build_contents(request: ImageGenerationRequest) -> list[dict[str, Any]]:
 
 
 def generation_config(request: ImageGenerationRequest) -> dict[str, Any]:
-    config: dict[str, Any] = {}
+    config: dict[str, Any] = {"responseModalities": ["TEXT", "IMAGE"]}
     if request.aspect_ratio in SUPPORTED_ASPECT_RATIOS:
         config["imageConfig"] = {"aspectRatio": request.aspect_ratio}
     provider_options = request.provider_options or {}

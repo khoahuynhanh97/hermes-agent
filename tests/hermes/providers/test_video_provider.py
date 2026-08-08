@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+from PIL import Image
 
 from hermes.ports.video_generation import VideoGenerationRequest
 from providers.vertex_video_provider import GoogleVertexVideoProvider
@@ -114,6 +115,66 @@ def test_vertex_video_submit_with_reference_image(workspace: Path, tmp_path: Pat
     instance = captured["json"]["instances"][0]
     assert instance["image"]["bytesBase64Encoded"]
     assert base64.b64decode(instance["image"]["bytesBase64Encoded"]) == ref.read_bytes()
+
+
+def test_vertex_video_normalizes_webp_by_magic_bytes(workspace: Path, tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "proj")
+    monkeypatch.setenv("HERMES_VIDEO_FACTORY_WORKSPACE", str(workspace))
+    monkeypatch.setattr("providers.vertex_video_provider.get_access_token", lambda: "tok")
+
+    reference = tmp_path / "mislabelled.png"
+    Image.new("RGB", (2, 2), "red").save(reference, format="WEBP")
+    assert reference.read_bytes()[8:12] == b"WEBP"
+    captured = {}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured["json"] = json
+        return _response({"name": OP_NAME})
+
+    provider = GoogleVertexVideoProvider()
+    with mock.patch("providers.vertex_video_provider.requests.post", side_effect=fake_post):
+        result = provider.generate(
+            VideoGenerationRequest(
+                request_id="webp-ref", owner_user_id="owner", scene_id="scene",
+                prompt="motion", duration_seconds=5,
+                reference_image_paths=(str(reference),),
+            )
+        )
+
+    image = captured["json"]["instances"][0]["image"]
+    normalized = base64.b64decode(image["bytesBase64Encoded"])
+    assert result.success is True
+    assert image["mimeType"] == "image/png"
+    assert normalized.startswith(b"\x89PNG\r\n\x1a\n")
+    assert captured["json"]["parameters"]["durationSeconds"] == 6
+
+
+def test_vertex_video_detects_png_independent_of_extension(workspace: Path, tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "proj")
+    monkeypatch.setenv("HERMES_VIDEO_FACTORY_WORKSPACE", str(workspace))
+    monkeypatch.setattr("providers.vertex_video_provider.get_access_token", lambda: "tok")
+
+    reference = tmp_path / "mislabelled.webp"
+    Image.new("RGB", (2, 2), "blue").save(reference, format="PNG")
+    captured = {}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured["json"] = json
+        return _response({"name": OP_NAME})
+
+    provider = GoogleVertexVideoProvider()
+    with mock.patch("providers.vertex_video_provider.requests.post", side_effect=fake_post):
+        provider.generate(
+            VideoGenerationRequest(
+                request_id="png-ref", owner_user_id="owner", scene_id="scene",
+                prompt="motion", duration_seconds=8,
+                reference_image_paths=(str(reference),),
+            )
+        )
+
+    image = captured["json"]["instances"][0]["image"]
+    assert image["mimeType"] == "image/png"
+    assert base64.b64decode(image["bytesBase64Encoded"]) == reference.read_bytes()
 
 
 def test_vertex_video_submit_error_normalized(workspace: Path, monkeypatch):
