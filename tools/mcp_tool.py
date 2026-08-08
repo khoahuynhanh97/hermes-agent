@@ -5049,7 +5049,9 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
             try:
                 parsed = json.loads(result)
                 if "error" in parsed:
-                    _bump_server_error(server_name)
+                    # The RPC completed, so this is a tool-level error rather
+                    # than evidence that the MCP server transport is down.
+                    _reset_server_error(server_name)
                 else:
                     _reset_server_error(server_name)  # success — reset
             except (json.JSONDecodeError, TypeError):
