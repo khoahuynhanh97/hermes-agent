@@ -1,4 +1,4 @@
-customtkinter>=5.2.0
+﻿customtkinter>=5.2.0
 google-generativeai>=0.5.0
 yt-dlp>=2024.3.10
 moviepy>=1.0.3
@@ -14,3 +14,11 @@ ollama
 # v2 additions
 edge-tts>=7.0.0
 numpy>=1.24.0
+
+# Canonical runtime deps (Video Factory / Vertex providers / UI backend)
+aiohttp>=3.9
+google-auth>=2.30
+
+mcp>=1.0,<2
+
+
