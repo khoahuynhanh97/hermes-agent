@@ -1,0 +1,1 @@
+"""Knowledge MCP capability boundary."""

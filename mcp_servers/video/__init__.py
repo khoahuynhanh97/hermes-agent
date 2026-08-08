@@ -1,0 +1,1 @@
+"""Video MCP capability boundary."""

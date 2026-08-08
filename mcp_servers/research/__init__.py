@@ -1,0 +1,1 @@
+"""Research MCP capability boundary."""
