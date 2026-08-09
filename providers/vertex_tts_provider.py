@@ -20,7 +20,7 @@ from pathlib import Path
 import requests
 
 from hermes.ports.text_to_speech import TextToSpeechPort, TTSRequest, TTSResult
-from providers.vertex_auth import get_access_token
+from providers.vertex_auth import get_access_token, vertex_model_endpoint, vertex_required_project
 
 
 def _tts_endpoint(project: str, location: str, model: str) -> str:
@@ -33,9 +33,8 @@ def _tts_endpoint(project: str, location: str, model: str) -> str:
 class GoogleVertexTTSProvider(TextToSpeechPort):
     def __init__(self, project: str | None = None, location: str | None = None,
                  model: str | None = None, output_dir: str | None = None, timeout: int = 90):
-        self.project = (project or os.environ.get("GOOGLE_CLOUD_PROJECT", "")).strip()
-        if not self.project:
-            raise ValueError("GOOGLE_CLOUD_PROJECT is required")
+        self.project = project or vertex_required_project()
+
         if os.environ.get("TTS_PROVIDER", "").strip().lower() == "fake" and \
            os.environ.get("HERMES_ALLOW_FAKE_PROVIDERS", "").strip() != "1":
             raise ValueError(

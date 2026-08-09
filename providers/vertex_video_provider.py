@@ -31,14 +31,15 @@ from hermes.ports.video_generation import (
     VideoGenerationResult,
 )
 from providers.gemini_common import mime_for
-from providers.vertex_auth import get_access_token, vertex_model_endpoint
+from providers.vertex_auth import get_access_token, vertex_model_endpoint, vertex_required_project
 
-SUPPORTED_ASPECT_RATIOS = {"9:16", "16:9"}
-SUPPORTED_RESOLUTIONS = {"720p", "1080p"}
+
+def vertex_video_predict_endpoint(project: str, location: str, model: str) -> str:
+    return vertex_model_endpoint(project, location, model, "predictLongRunning")
 
 
 class GoogleVertexVideoProvider(VideoGenerationPort):
-    """Vertex AI Veo video generation adapter (async via predictLongRunning)."""
+    """Vertex AI Veo video generation adapter."""
 
     def __init__(
         self,
@@ -48,9 +49,8 @@ class GoogleVertexVideoProvider(VideoGenerationPort):
         output_dir: str | None = None,
         timeout: int = 60,
     ):
-        self.project = (project or os.environ.get("GOOGLE_CLOUD_PROJECT", "")).strip()
-        if not self.project:
-            raise ValueError("GOOGLE_CLOUD_PROJECT is required for GoogleVertexVideoProvider")
+        self.project = project or vertex_required_project()
+
         self.location = (location or os.environ.get("GOOGLE_CLOUD_LOCATION", "")).strip() or "us-central1"
         self.model = (model or os.environ.get("VIDEO_MODEL", "")).strip() or "veo-3.1-generate-001"
         self.timeout = int(timeout)

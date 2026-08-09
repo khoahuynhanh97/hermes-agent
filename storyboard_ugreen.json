@@ -1,0 +1,65 @@
+{
+  "project_name": "UGREEN Nexode Robot Uno Review",
+  "video_duration": 30,
+  "scenes": [
+    {
+      "scene_number": 1,
+      "duration_seconds": 5,
+      "image_files": [
+        "assets/ugreen-nexode-robot-uno/sg-11134201-7rbm5-m62nvl361r4n2c.png"
+      ],
+      "text_overlay": "UGREEN Nexode Robot Uno",
+      "caption": "Gặp gỡ người bạn sạc đáng yêu nhất!",
+      "animation": "fade_in",
+      "music_cue": "intro_beep"
+    },
+    {
+      "scene_number": 2,
+      "duration_seconds": 5,
+      "image_files": [
+        "assets/ugreen-nexode-robot-uno/vn-11134201-81ztc-mrffmjlnrabp6b.png",
+        "assets/ugreen-nexode-robot-uno/sg-11134201-7rbm9-m62nviffzac796.png"
+      ],
+      "text_overlay": "🤖 Thiết kế Robot Đáng Yêu",
+      "caption": "LED face thông minh | Nhỏ gọn 30% nhờ GaN",
+      "animation": "pan_zoom",
+      "music_cue": "mid_flow"
+    },
+    {
+      "scene_number": 3,
+      "duration_seconds": 8,
+      "image_files": [
+        "assets/ugreen-nexode-robot-uno/sg-11134201-7rbm9-m62nviffzac796.png",
+        "assets/ugreen-nexode-robot-uno/vn-11134207-7ra0g-m8k4a4sfw6ysdc@resize_w450_nl.png"
+      ],
+      "text_overlay": "⚡ 30W Sạc Siêu Nhanh",
+      "caption": "iPhone 16 Pro Max: 0-50% chỉ 30 phút | PD 3.0",
+      "animation": "count_up_animation",
+      "music_cue": "power_up"
+    },
+    {
+      "scene_number": 4,
+      "duration_seconds": 7,
+      "image_files": [
+        "assets/ugreen-nexode-robot-uno/vn-11134103-81ztc-mlftjsv7bklkcc.png",
+        "assets/ugreen-nexode-robot-uno/vn-11134103-81ztc-mlftjsv9wa2o51.png"
+      ],
+      "text_overlay": "🛡️ 100% An Toàn",
+      "caption": "Chống quá nhiệt | Quá áp | Ngắn mạch",
+      "animation": "icon_flash",
+      "music_cue": "safety"
+    },
+    {
+      "scene_number": 5,
+      "duration_seconds": 5,
+      "image_files": [
+        "assets/ugreen-nexode-robot-uno/sg-11134201-7rbnf-m62nvjqm29j4f6.png",
+        "assets/ugreen-nexode-robot-uno/vn-11134258-81ztc-mr05p0axubr996.png"
+      ],
+      "text_overlay": "UGREEN - Sạc Thông Minh Mỗi Ngày",
+      "caption": "Mua ngay tại Shopee và Thế Giới Di Động!",
+      "animation": "fade_out",
+      "music_cue": "call_to_action"
+    }
+  ]
+}

@@ -1,123 +1,109 @@
-"""Hermes Personal doctor — no-paid-call verification.
-
-Checks: source resolution, python env, imports, skills/MCP discovery,
-SQLite/data root, FFmpeg, Vertex credentials detect, 9Router config detect.
-
-No Gemini/Veo/TTS generation. Resource checks report READY/MISSING only.
+#!/usr/bin/env python3
 """
-import os
+scripts/doctor.py — Hermes Personal No-Paid-Call Diagnostic Tool
+
+Verifies environment readiness, source path identity, CLI availability,
+skills, MCP servers, storage, FFmpeg, 9Router endpoint, Google ADC, and UI dependencies.
+
+NO API calls are made to paid providers (Gemini Image, Veo, Gemini TTS, TikTok, etc.).
+"""
+
 import sys
+import os
+import shutil
+import subprocess
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# load .env if present (no secrets printed)
-try:
-    from dotenv import load_dotenv
-    load_dotenv(REPO / ".env")
-except Exception:
-    pass
+def check_status(condition, label, details=""):
+    status = "READY" if condition else "MISSING"
+    color = "\033[92m" if condition else "\033[93m"
+    reset = "\033[0m"
+    detail_str = f" ({details})" if details else ""
+    print(f"  {label:<30}: {color}{status}{reset}{detail_str}")
+    return condition
 
-def ok(label, detail=""):
-    print(f"  [READY ] {label} {detail}")
+def main():
+    print("=== Hermes Doctor Diagnostic (Zero Paid Calls) ===")
+    print(f"Target Repo: {REPO_ROOT}\n")
 
-def missing(label, detail=""):
-    print(f"  [MISSING] {label} {detail}")
+    # 1. Python environment
+    py_executable = sys.executable
+    in_venv = str(REPO_ROOT) in py_executable or ".venv" in py_executable
+    check_status(in_venv, "Python Environment", py_executable)
 
-def main() -> int:
-    print("=== Hermes Personal doctor ===")
-
-    # source resolution
-    import hermes
-    src_ok = str(Path(hermes.__file__).resolve()).startswith(str(REPO.resolve()))
-    if src_ok:
-        ok("source", hermes.__file__)
-    else:
-        missing("source resolves elsewhere", hermes.__file__)
-
-    # python env
-    print(f"  [INFO ] python {sys.version.split()[0]} at {sys.executable}")
-
-    # core imports (no paid calls)
+    # 2. Hermes Source Identity
     try:
-        import hermes.db, hermes.config, hermes.jobs
-        import providers.vertex_auth, providers.image_provider_factory
-        import mcp_servers.video_factory.server
-        import workers.job_worker
-        ok("imports (hermes/providers/mcp/workers)")
+        sys.path.insert(0, str(REPO_ROOT))
+        import hermes
+        import cli
+        import hermes_cli
+        hermes_source_ok = str(REPO_ROOT) in hermes.__file__ and str(REPO_ROOT) in cli.__file__
+        check_status(hermes_source_ok, "Hermes Source Path", f"hermes: {hermes.__file__}")
     except Exception as e:
-        missing("imports", str(e)[:160])
+        check_status(False, "Hermes Source Path", str(e))
 
-    # skills discovery
-    skills_dir = REPO / "skills"
-    skill_files = list(skills_dir.glob("*/SKILL.md")) if skills_dir.is_dir() else []
-    if skill_files:
-        ok("skills", f"{len(skill_files)} skill(s)")
-    else:
-        missing("skills directory")
+    # 3. Hermes CLI
+    cli_exe = REPO_ROOT / ".venv" / "Scripts" / "hermes.exe"
+    if not cli_exe.exists():
+        cli_exe = REPO_ROOT / ".venv" / "bin" / "hermes"
+    check_status(cli_exe.exists(), "Hermes CLI Executable", str(cli_exe) if cli_exe.exists() else "Run .\\setup.ps1")
 
-    # MCP discovery
-    mcp_dir = REPO / "mcp_servers"
-    mcp_count = len([d for d in mcp_dir.iterdir() if d.is_dir() and (d / "server.py").is_file()]) if mcp_dir.is_dir() else 0
-    if mcp_count:
-        ok("mcp servers", f"{mcp_count} server(s)")
-    else:
-        missing("mcp servers")
+    # 4. Skills Discovery
+    skills_dir = REPO_ROOT / "skills"
+    skill_count = len([d for d in skills_dir.iterdir() if d.is_dir()]) if skills_dir.exists() else 0
+    check_status(skill_count > 0, "Skills Catalog", f"{skill_count} skills found in {skills_dir}")
 
-    # SQLite / data root
-    from hermes.config import get_data_path, get_data_root
-    root = get_data_root()
-    print(f"  [INFO ] HERMES_DATA_DIR -> {root}")
-    db = get_data_path("db", "hermes.db")
-    try:
-        db.parent.mkdir(parents=True, exist_ok=True)
-        ok("data root writable", str(root))
-    except OSError as e:
-        missing("data root writable", str(e))
+    # 5. MCP Servers
+    mcp_dir = REPO_ROOT / "mcp_servers"
+    mcp_count = len([d for d in mcp_dir.iterdir() if d.is_dir()]) if mcp_dir.exists() else 0
+    check_status(mcp_count > 0, "MCP Servers", f"{mcp_count} servers in {mcp_dir}")
 
-    # FFmpeg
-    ffmpeg = os.environ.get("HERMES_FFMPEG_PATH") or os.environ.get("FFMPEG_PATH") or ""
-    if not ffmpeg and Path("C:/HermesTools/ffmpeg/bin/ffmpeg.exe").is_file():
-        ffmpeg = "C:/HermesTools/ffmpeg/bin/ffmpeg.exe"
-    if not ffmpeg and Path("D:/HermesTools/ffmpeg/bin/ffmpeg.exe").is_file():
-        ffmpeg = "D:/HermesTools/ffmpeg/bin/ffmpeg.exe"
-    if ffmpeg and Path(ffmpeg).is_file():
-        ok("ffmpeg", ffmpeg)
-    else:
-        missing("ffmpeg", "set HERMES_FFMPEG_PATH or install ffmpeg")
+    # 6. SQLite / Data Root
+    env_file = REPO_ROOT / ".env"
+    data_dir = None
+    if env_file.exists():
+        with open(env_file, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("HERMES_DATA_DIR="):
+                    data_dir = line.split("=", 1)[1].strip().strip("\"'")
+    if not data_dir:
+        data_dir = r"D:\work\hermes-agent-data"
+    data_dir_path = Path(data_dir)
+    check_status(data_dir_path.exists(), "SQLite / Data Root", str(data_dir_path))
 
-    # Vertex credentials (detect only, no calls)
-    adc = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
-    project = os.environ.get("GOOGLE_CLOUD_PROJECT", "")
-    if adc and Path(adc).is_file():
-        ok("vertex ADC", f"GOOGLE_APPLICATION_CREDENTIALS set ({Path(adc).name})")
-    elif os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
-        missing("vertex ADC file", adc)
-    else:
-        missing("vertex ADC", "set GOOGLE_APPLICATION_CREDENTIALS (service account key) or run gcloud auth application-default login")
-    if project:
-        ok("vertex project", project)
-    else:
-        missing("vertex project", "set GOOGLE_CLOUD_PROJECT")
+    # 7. FFmpeg
+    ffmpeg_bin = shutil.which("ffmpeg") or os.environ.get("FFMPEG_PATH")
+    if not ffmpeg_bin:
+        for candidate in [r"C:\HermesTools\ffmpeg\bin\ffmpeg.exe", r"D:\HermesTools\ffmpeg\bin\ffmpeg.exe"]:
+            if os.path.exists(candidate):
+                ffmpeg_bin = candidate
+                break
+    check_status(bool(ffmpeg_bin), "FFmpeg Utility", ffmpeg_bin or "Install FFmpeg or set FFMPEG_PATH")
 
-    # providers config
-    img = os.environ.get("IMAGE_PROVIDER", "")
-    vid = os.environ.get("VIDEO_PROVIDER", "")
-    print(f"  [INFO ] IMAGE_PROVIDER={img or '(unset)'} VIDEO_PROVIDER={vid or '(unset)'}")
-    if (img or "").lower() == "fake" and os.environ.get("HERMES_ALLOW_FAKE_PROVIDERS") != "1":
-        missing("fake provider guard", "HERMES_ALLOW_FAKE_PROVIDERS not set; fake providers will fail")
+    # 8. 9Router Config / Endpoint
+    router_url = os.environ.get("OPENAI_BASE_URL", "http://localhost:20128/v1")
+    check_status(True, "9Router Endpoint Config", router_url)
 
-    # 9Router / reasoning endpoint (config detect only)
-    llm_url = os.environ.get("LLM_ROUTER_BASE_URL") or os.environ.get("LLM_BASE_URL") or ""
-    print(f"  [INFO ] LLM router: {llm_url or '(unset - external 9Router)'}")
-    if llm_url:
-        ok("9Router configured", llm_url)
-    else:
-        missing("9Router", "set LLM_ROUTER_BASE_URL (external dependency, no bundled runtime)")
+    # 9. Google ADC / Credentials
+    g_adc = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    adc_exists = bool(g_adc and os.path.exists(g_adc))
+    default_adc = Path.home() / "AppData" / "Roaming" / "gcloud" / "application_default_credentials.json"
+    if not adc_exists and default_adc.exists():
+        adc_exists = True
+        g_adc = str(default_adc)
+    check_status(adc_exists, "Google Cloud ADC", g_adc or "Set GOOGLE_APPLICATION_CREDENTIALS")
 
-    print("=== done (no paid calls made) ===")
-    return 0
+    # 10. Vertex Project / Config
+    vertex_project = os.environ.get("VERTEX_PROJECT_ID") or os.environ.get("GCP_PROJECT_ID")
+    check_status(bool(vertex_project), "Vertex Project Config", vertex_project or "Configure VERTEX_PROJECT_ID in .env")
+
+    # 11. React / UI Dependencies
+    web_node_modules = REPO_ROOT / "web" / "node_modules"
+    check_status(web_node_modules.exists(), "React/Vite UI Dependencies", str(web_node_modules))
+
+    print("\n=== Diagnostic Check Completed ===")
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

@@ -37,7 +37,7 @@ from providers.gemini_common import (
     generation_config,
     output_path_for,
 )
-from providers.vertex_auth import get_access_token, vertex_model_endpoint
+from providers.vertex_auth import get_access_token, vertex_model_endpoint, vertex_required_project
 
 
 def vertex_endpoint(project: str, location: str, model: str) -> str:
@@ -55,9 +55,8 @@ class GoogleVertexImageProvider(ImageGenerationPort):
         output_dir: str | None = None,
         timeout: int = 180,
     ):
-        self.project = (project or os.environ.get("GOOGLE_CLOUD_PROJECT", "")).strip()
-        if not self.project:
-            raise ValueError("GOOGLE_CLOUD_PROJECT is required for GoogleVertexImageProvider")
+        self.project = project or vertex_required_project()
+
         self.location = (location or os.environ.get("GOOGLE_CLOUD_LOCATION", "")).strip() or "us-central1"
         self.model = (model or os.environ.get("IMAGE_MODEL", "")).strip() or "gemini-2.5-flash-image"
         self.timeout = int(timeout)

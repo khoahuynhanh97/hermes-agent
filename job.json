@@ -1,0 +1,8 @@
+{
+  "csv_path": "D:\\HermesData\\affiliate_imports\\products_thiet_bi_cong_nghe_thong_minh_20260801_183427.csv",
+  "idempotency_key": "daily-20260801_183428",
+  "package_limit": 8,
+  "reference_urls": [],
+  "status": "processing",
+  "updated_at": "2026-08-01T18:34:30"
+}

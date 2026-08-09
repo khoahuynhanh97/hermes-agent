@@ -42,7 +42,21 @@ def vertex_model_endpoint(project: str, location: str, model: str, action: str) 
 
 
 def vertex_required_project() -> str:
-    project = os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
+    project = (
+        os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
+        or os.environ.get("VERTEX_PROJECT_ID", "").strip()
+        or os.environ.get("GCP_PROJECT_ID", "").strip()
+    )
     if not project:
-        raise ValueError("GOOGLE_CLOUD_PROJECT is required")
+        adc_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+        if adc_path and os.path.exists(adc_path):
+            try:
+                import json
+                with open(adc_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    project = data.get("project_id", "").strip()
+            except Exception:
+                pass
+    if not project:
+        raise ValueError("GOOGLE_CLOUD_PROJECT, VERTEX_PROJECT_ID, or valid GOOGLE_APPLICATION_CREDENTIALS JSON is required for Vertex AI")
     return project

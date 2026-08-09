@@ -132,6 +132,13 @@
       "source_value": "https://vt.tiktok.com/ZS4VoNur6",
       "mode": "learn_hook_cta",
       "created_at": "2026-08-08T05:23:44"
+    },
+    "ec154715261ebd03": {
+      "job_id": "job_20260808_230024_3842ee",
+      "chat_id": 5069349064,
+      "source_value": "https://vt.tiktok.com/ZS4gpvt9m",
+      "mode": "learn_knowledge",
+      "created_at": "2026-08-08T23:00:24"
     }
   }
 }

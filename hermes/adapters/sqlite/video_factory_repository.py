@@ -70,12 +70,21 @@ def _brief(value: dict | None) -> CreativeBrief | None:
     value["content_blocks"] = tuple(value.get("content_blocks", []))
     value["restrictions"] = tuple(value.get("restrictions", []))
     value["required_content"] = tuple(value.get("required_content", []))
-    value["verified_selling_points"] = tuple(
-        Claim(status=ClaimStatus(item["status"]), evidence_refs=tuple(item.get("evidence_refs", [])),
-              **{key: item[key] for key in ("claim", "restriction_reason") if key in item})
-        for item in value.get("verified_selling_points", [])
-    )
+    vsp = []
+    for item in value.get("verified_selling_points", []):
+        if isinstance(item, str):
+            vsp.append(Claim(claim=item, status=ClaimStatus.VERIFIED))
+        elif isinstance(item, dict):
+            item_dict = dict(item)
+            c_text = item_dict.get("claim") or item_dict.get("statement") or ""
+            status_val = item_dict.get("status", "verified")
+            ev_refs = tuple(item_dict.get("evidence_refs", []))
+            restr = item_dict.get("restriction_reason")
+            vsp.append(Claim(claim=c_text, status=ClaimStatus(status_val), evidence_refs=ev_refs, restriction_reason=restr))
+    value["verified_selling_points"] = tuple(vsp)
     return CreativeBrief(**value)
+
+
 
 
 def _scene_plan(value: dict | None) -> ScenePlan | None:
@@ -115,11 +124,42 @@ def _storyboard(value: dict | None) -> Storyboard | None:
     return Storyboard(**value)
 
 
-def _video_prompt(value: dict) -> VideoPrompt:
-    value = dict(value)
-    value["reference_frame_ids"] = tuple(value.get("reference_frame_ids", []))
-    value["provider_options"] = value.get("provider_options", {})
-    return VideoPrompt(**value)
+def _video_prompt(value: dict | str | None | VideoPrompt) -> VideoPrompt:
+    if isinstance(value, VideoPrompt):
+        return value
+    if isinstance(value, str):
+        return VideoPrompt(
+            scene_id="scene_default",
+            duration_seconds=5.0,
+            start_visual_state="",
+            end_visual_state="",
+            subject_action=value,
+            product_action="",
+            camera_movement="",
+            camera_framing="",
+            environment_motion="",
+        )
+    if not value:
+        return VideoPrompt(
+            scene_id="scene_default",
+            duration_seconds=5.0,
+            start_visual_state="",
+            end_visual_state="",
+            subject_action="",
+            product_action="",
+            camera_movement="",
+            camera_framing="",
+            environment_motion="",
+        )
+    val_dict = dict(value)
+    if not val_dict.get("scene_id"):
+        val_dict["scene_id"] = "scene_default"
+    val_dict["reference_frame_ids"] = tuple(val_dict.get("reference_frame_ids", []))
+    val_dict["provider_options"] = val_dict.get("provider_options", {})
+    return VideoPrompt(**val_dict)
+
+
+
 
 
 def _generated_scene(value: dict) -> GeneratedScene:

@@ -10,6 +10,12 @@ venv/
 ENV/
 node_modules/
 
+# Security / Credentials / Secrets
+*.json.key
+*gserviceaccount*.json
+*.credentials.json
+
+
 # Project data and large media files (crucial to prevent GitHub size limit errors)
 projects/
 downloads/
