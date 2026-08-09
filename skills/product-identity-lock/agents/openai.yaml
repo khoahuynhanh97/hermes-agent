@@ -1,0 +1,6 @@
+interface:
+  display_name: "Product Identity Lock"
+  short_description: "Analyze references and lock product identity"
+  default_prompt: "Use $product-identity-lock to analyze all product references and prepare an evidence-backed identity for approval."
+policy:
+  allow_implicit_invocation: true

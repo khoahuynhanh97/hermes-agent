@@ -1,0 +1,6 @@
+interface:
+  display_name: "Product Generation Prompt"
+  short_description: "Compile identity-safe image and video prompts"
+  default_prompt: "Use $product-generation-prompt to compile prompts from the approved plan and locked product references."
+policy:
+  allow_implicit_invocation: true

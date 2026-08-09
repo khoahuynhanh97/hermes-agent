@@ -1,0 +1,6 @@
+interface:
+  display_name: "Product Visual QC"
+  short_description: "Check generated media against real products"
+  default_prompt: "Use $product-visual-qc to compare generated media with canonical product references and report identity violations."
+policy:
+  allow_implicit_invocation: true

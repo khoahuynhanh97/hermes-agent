@@ -1,14 +1,11 @@
 ---
 name: video-production
 description: "Use Hermes Video Factory F1-F5 workflow and durable media jobs."
-version: 2.0.0
-author: Hermes Agent project
 license: Internal
-platforms: [linux, macos, windows]
 metadata:
   hermes:
     tags: [video, media, analysis, rendering, jobs, video-factory, creative-brief, storyboard, generation, timeline]
-    related_skills: [research, knowledge-learning]
+    related_skills: [research, knowledge-learning, product-identity-lock, product-generation-prompt, product-visual-qc]
 ---
 
 # Video Production
@@ -19,37 +16,78 @@ Use this procedure for video/media requests supported by the current project.
 
 ### F1: Resource Pack, Idea, Brief, Scene Plan
 1. For a new creative project, use the Video Factory MCP to create or inspect the owner-scoped project.
-2. Collect B1 Resource Pack references and lock confirmed product/character identity before downstream planning.
-3. Store B2 Raw Idea as editable text and explicit optional constraints; do not turn it into scenes.
-4. Use available Product/Research/Knowledge evidence when Hermes proposes B3 Creative Brief claims.
-5. Preserve claim status and evidence; ask for confirmation for ambiguous claims and omit unsupported/restricted claims.
-6. Save and request explicit approval for the Creative Brief, then save and request approval for the B4 Scene Plan.
+2. Collect B1 Resource Pack references. Use `product-identity-lock` to analyze
+   every canonical product image independently, reconcile evidence across views,
+   and prepare a provisional identity. Do not use product-specific hardcoded
+   geometry or fill occluded details from model knowledge.
+3. Present stable observations, conflicts, unknowns, and excluded inferences.
+   Request explicit approval before `resource_pack_lock`; retrieve and verify the
+   durable lock after mutation. Do not continue while identity is unresolved.
+4. Store B2 Raw Idea as editable text and explicit optional constraints; do not turn it into scenes.
+5. Use available Product/Research/Knowledge evidence when Hermes proposes B3 Creative Brief claims.
+6. Preserve claim status and evidence; ask for confirmation for ambiguous claims and omit unsupported/restricted claims.
+7. Save and request explicit approval for the Creative Brief, then save and request approval for the B4 Scene Plan.
+
+Use these exact keys for `creative_brief_save.creative_brief`; do not invent
+aliases such as `audience`, `summary`, `product_name`, or `key_messages`:
+
+```json
+{
+  "objective": "string",
+  "target_audience": "string",
+  "core_message": "string",
+  "tone": "string",
+  "pace": "string",
+  "cta": "string",
+  "content_blocks": ["string"],
+  "verified_selling_points": [
+    {
+      "claim": "string",
+      "status": "verified | user_provided_unverified | unsupported | restricted",
+      "evidence_refs": ["string"],
+      "restriction_reason": "string"
+    }
+  ],
+  "restrictions": ["string"],
+  "required_content": ["string"],
+  "platform": "string",
+  "aspect_ratio": "string",
+  "target_duration_seconds": 15
+}
+```
 
 ### F2: Storyboard Generation
-7. Plan frames for each scene based on approved Scene Plan. Use 2-5 frames per scene depending on complexity.
-8. Build frame prompts incorporating locked product/character identity, Creative Brief, and visual context.
-9. Save storyboard with frame plan before image generation.
-10. Frame image generation is expensive; use image generation jobs for each frame.
-11. Request storyboard approval after all frames are generated.
-12. Support frame rejection and regeneration.
+8. Plan frames for each scene based on approved Scene Plan. Use 2-5 frames per scene depending on complexity.
+9. Use `product-generation-prompt` to compile frame prompts from the durable
+   lock, approved plan, and original canonical references.
+10. Save storyboard with frame plan before image generation.
+11. Frame image generation is expensive; use image generation jobs for each frame.
+12. Use `product-visual-qc` on every completed frame. A frame must pass QC before
+    it can be included in the storyboard approval request.
+13. Request storyboard approval only after all required frames pass QC.
+14. Support frame rejection and regeneration; never regenerate a paid call without new approval.
 
 ### F3: Video Generation
-13. Build video prompts per scene using approved storyboard frames as reference.
-14. Video generation is expensive and long-running; use durable jobs with provider operation tracking.
-15. Respect start/end visual states from Scene Plan and Storyboard.
-16. Update scene generation status as jobs progress.
+15. Use `product-generation-prompt` to build video prompts per scene. Include
+    canonical original product references; never rely on a generated storyboard
+    frame as the sole identity source.
+16. Video generation is expensive and long-running; use durable jobs with provider operation tracking.
+17. Respect start/end visual states from Scene Plan and Storyboard.
+18. Use `product-visual-qc` to inspect sampled frames and temporal identity
+    stability before a scene becomes eligible for timeline composition.
+19. Update scene generation status as jobs progress.
 
 ### F4: Timeline Composition
-17. Create timeline from generated scene videos in Scene Plan order.
-18. Support optional voiceover/music assets if provided.
-19. Use deterministic Video MCP render jobs for composition.
-20. Save draft video asset after successful render.
+20. Create timeline from generated scene videos in Scene Plan order.
+21. Support optional voiceover/music assets if provided.
+22. Use deterministic Video MCP render jobs for composition.
+23. Save draft video asset after successful render.
 
 ### F5: Final Review and Export
-21. Request explicit approval for draft video.
-22. Support revision requests that route back to appropriate stage.
-23. After approval, create final export using deterministic render.
-24. Save final export asset, reaching status `ready_to_publish`.
+24. Request explicit approval for draft video.
+25. Support revision requests that route back to appropriate stage.
+26. After approval, create final export using deterministic render.
+27. Save final export asset, reaching status `ready_to_publish`.
 
 ## Boundaries
 
