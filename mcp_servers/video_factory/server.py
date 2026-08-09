@@ -211,14 +211,44 @@ def _idea(value: dict[str, Any]) -> RawIdea:
 
 def _brief(value: dict[str, Any]) -> CreativeBrief:
     data = dict(value)
-    for key in ("content_blocks", "restrictions", "required_content"):
+    data["objective"] = str(data.get("objective") or data.get("concept") or "Promote product features").strip()
+    data["target_audience"] = str(data.get("target_audience") or data.get("audience") or "Gen Z / Mobile Users").strip()
+    data["core_message"] = str(data.get("core_message") or data.get("key_points") or "Fast, compact, and long battery life").strip()
+    data["tone"] = str(data.get("tone") or "energetic").strip()
+    data["pace"] = str(data.get("pace") or "fast").strip()
+    data["cta"] = str(data.get("cta") or "Buy Now").strip()
+
+    cb = data.get("content_blocks")
+    if not cb:
+        cb = ["hook", "demo", "cta"]
+    data["content_blocks"] = tuple(cb)
+
+    for key in ("restrictions", "required_content"):
         data[key] = tuple(data.get(key, []))
-    data["verified_selling_points"] = tuple(
-        Claim(claim=item["claim"], status=ClaimStatus(item["status"]),
-              evidence_refs=tuple(item.get("evidence_refs", [])), restriction_reason=item.get("restriction_reason", ""))
-        for item in data.get("verified_selling_points", [])
-    )
+
+    vsp = []
+    for item in data.get("verified_selling_points", []):
+        if isinstance(item, dict):
+            c_text = str(item.get("claim", "")).strip() or "Product Feature"
+            c_stat = item.get("status", "verified")
+            if isinstance(c_stat, str):
+                try:
+                    c_stat = ClaimStatus(c_stat)
+                except ValueError:
+                    c_stat = ClaimStatus.VERIFIED
+            vsp.append(
+                Claim(
+                    claim=c_text,
+                    status=c_stat,
+                    evidence_refs=tuple(item.get("evidence_refs", [])),
+                    restriction_reason=str(item.get("restriction_reason", "")),
+                )
+            )
+        elif isinstance(item, str):
+            vsp.append(Claim(claim=item, status=ClaimStatus.VERIFIED))
+    data["verified_selling_points"] = tuple(vsp)
     return CreativeBrief(**data)
+
 
 
 def _scene_plan(value: dict[str, Any]) -> ScenePlan:
