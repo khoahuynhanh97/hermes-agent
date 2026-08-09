@@ -58,7 +58,8 @@ class GoogleVertexImageProvider(ImageGenerationPort):
         self.project = project or vertex_required_project()
 
         self.location = (location or os.environ.get("GOOGLE_CLOUD_LOCATION", "")).strip() or "us-central1"
-        self.model = (model or os.environ.get("IMAGE_MODEL", "")).strip() or "gemini-2.5-flash-image"
+        self.model = (model or os.environ.get("IMAGE_MODEL", "")).strip() or "gemini-3.1-flash-lite-image"
+
         self.timeout = int(timeout)
 
         configured_dir = output_dir or os.environ.get("HERMES_VIDEO_FACTORY_WORKSPACE", "")
