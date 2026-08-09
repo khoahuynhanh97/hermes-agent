@@ -19,23 +19,51 @@ Provider contract:
 from __future__ import annotations
 
 import base64
+import io
 import os
 from pathlib import Path
 from typing import Any
 
 import requests
+from PIL import Image
 
 from hermes.ports.video_generation import (
     VideoGenerationPort,
     VideoGenerationRequest,
     VideoGenerationResult,
 )
-from providers.gemini_common import mime_for
 from providers.vertex_auth import get_access_token, vertex_model_endpoint, vertex_required_project
+
+SUPPORTED_ASPECT_RATIOS = {"9:16", "16:9", "1:1"}
+SUPPORTED_RESOLUTIONS = {"720p", "1080p"}
 
 
 def vertex_video_predict_endpoint(project: str, location: str, model: str) -> str:
     return vertex_model_endpoint(project, location, model, "predictLongRunning")
+
+
+def _normalized_reference_image(path: Path) -> tuple[bytes, str]:
+    data = path.read_bytes()
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return data, "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return data, "image/jpeg"
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        with Image.open(io.BytesIO(data)) as image:
+            output = io.BytesIO()
+            mode = "RGBA" if "A" in image.getbands() else "RGB"
+            image.convert(mode).save(output, format="PNG")
+        return output.getvalue(), "image/png"
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            output = io.BytesIO()
+            mode = "RGBA" if "A" in image.getbands() else "RGB"
+            image.convert(mode).save(output, format="PNG")
+        return output.getvalue(), "image/png"
+    except Exception as err:
+        raise ValueError(f"unsupported reference image format: {path.name}") from err
+
+
 
 
 class GoogleVertexVideoProvider(VideoGenerationPort):
@@ -163,14 +191,23 @@ class GoogleVertexVideoProvider(VideoGenerationPort):
         if request.reference_image_paths:
             first = Path(request.reference_image_paths[0])
             if first.is_file():
+                image_bytes, mime_type = _normalized_reference_image(first)
                 instance["image"] = {
-                    "bytesBase64Encoded": base64.b64encode(first.read_bytes()).decode("ascii"),
-                    "mimeType": mime_for(first),
+                    "bytesBase64Encoded": base64.b64encode(image_bytes).decode("ascii"),
+                    "mimeType": mime_type,
                 }
 
+        dur = int(request.duration_seconds)
+        if dur <= 4:
+            dur = 4
+        elif dur <= 6:
+            dur = 6
+        else:
+            dur = 8
         parameters: dict[str, Any] = {
-            "durationSeconds": max(1, int(request.duration_seconds)),
+            "durationSeconds": dur,
         }
+
         provider_options = request.provider_options or {}
         if request.aspect_ratio in SUPPORTED_ASPECT_RATIOS:
             parameters["aspectRatio"] = request.aspect_ratio

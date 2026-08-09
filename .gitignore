@@ -2,9 +2,26 @@
 __pycache__/
 *.py[cod]
 *$py.class
+# Pytest temporary test directories
+.pytest-*
+.pytest_cache/
+
+# Scratch & temporary files
+a.txt
+b.txt
+c.txt
+*.tmp
+
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
 
 # Environments
 .env
+.env.*
+!.env.example
 .venv
 venv/
 ENV/
