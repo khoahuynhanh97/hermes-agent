@@ -41,11 +41,13 @@ from providers.vertex_auth import get_access_token, vertex_model_endpoint, verte
 
 
 def vertex_endpoint(project: str, location: str, model: str) -> str:
+    if "imagen" in model.lower() or "imagegeneration" in model.lower():
+        return vertex_model_endpoint(project, location, model, "predict")
     return vertex_model_endpoint(project, location, model, "generateContent")
 
 
 class GoogleVertexImageProvider(ImageGenerationPort):
-    """Vertex AI Gemini image generation adapter."""
+    """Vertex AI Gemini & Imagen image generation adapter."""
 
     def __init__(
         self,
@@ -56,10 +58,8 @@ class GoogleVertexImageProvider(ImageGenerationPort):
         timeout: int = 180,
     ):
         self.project = project or vertex_required_project()
-
         self.location = (location or os.environ.get("GOOGLE_CLOUD_LOCATION", "")).strip() or "us-central1"
         self.model = (model or os.environ.get("IMAGE_MODEL", "")).strip() or "gemini-3.1-flash-lite-image"
-
         self.timeout = int(timeout)
 
         configured_dir = output_dir or os.environ.get("HERMES_VIDEO_FACTORY_WORKSPACE", "")
@@ -83,10 +83,21 @@ class GoogleVertexImageProvider(ImageGenerationPort):
 
         try:
             token = get_access_token()
-            payload = {
-                "contents": build_contents(request),
-                "generationConfig": generation_config(request),
-            }
+            is_imagen = "imagen" in self.model.lower() or "imagegeneration" in self.model.lower()
+            if is_imagen:
+                payload = {
+                    "instances": [{"prompt": request.positive_prompt}],
+                    "parameters": {
+                        "sampleCount": request.num_images or 1,
+                        "aspectRatio": request.aspect_ratio or "9:16",
+                    },
+                }
+            else:
+                payload = {
+                    "contents": build_contents(request),
+                    "generationConfig": generation_config(request),
+                }
+
             endpoint = vertex_endpoint(self.project, self.location, self.model)
             response = requests.post(
                 endpoint,
@@ -102,7 +113,18 @@ class GoogleVertexImageProvider(ImageGenerationPort):
                     metadata={"provider": "google_vertex", "http_status": response.status_code},
                 )
 
-            image_bytes = extract_image(response.json())
+            data = response.json()
+            image_bytes = None
+            if is_imagen and "predictions" in data and len(data["predictions"]) > 0:
+                pred = data["predictions"][0]
+                if isinstance(pred, dict):
+                    b64 = pred.get("bytesBase64Encoded") or pred.get("image", {}).get("bytesBase64Encoded")
+                    if b64:
+                        import base64
+                        image_bytes = base64.b64decode(b64)
+            if not image_bytes:
+                image_bytes = extract_image(data)
+
             if not image_bytes:
                 return ImageGenerationResult(
                     request_id=request.request_id,
@@ -113,6 +135,7 @@ class GoogleVertexImageProvider(ImageGenerationPort):
 
             output_file.parent.mkdir(parents=True, exist_ok=True)
             output_file.write_bytes(image_bytes)
+
 
             return ImageGenerationResult(
                 request_id=request.request_id,
