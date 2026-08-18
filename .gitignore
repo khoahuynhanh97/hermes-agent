@@ -19,6 +19,8 @@ c.txt
 .coverage
 .coverage.*
 htmlcov/
+*.egg-info/
+scripts/temp_verification.py
 
 # Environments
 .env
@@ -28,6 +30,12 @@ htmlcov/
 venv/
 ENV/
 node_modules/
+apps/web/dist/
+apps/web/playwright-report/
+apps/web/test-results/
+apps/web/*.tsbuildinfo
+apps/web/vite.config.js
+apps/web/vite.config.d.ts
 
 # Security / Credentials / Secrets
 *.json.key

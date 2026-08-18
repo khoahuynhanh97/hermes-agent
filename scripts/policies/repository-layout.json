@@ -1,0 +1,86 @@
+{
+  "allowed_root_directories": [
+    ".agents",
+    ".claude",
+    ".git",
+    ".superpowers",
+    ".venv",
+    "apps",
+    "docs",
+    "resources",
+    "scripts",
+    "src",
+    "tests"
+  ],
+  "allowed_root_files": [
+    ".env",
+    ".env.example",
+    ".gitignore",
+    "AGENTS.md",
+    "README.md",
+    "pyproject.toml",
+    "requirements.txt",
+    "requirements-crawl4ai.txt",
+    "setup.ps1",
+    "start.ps1",
+    "MANIFEST.in",
+    "uv.lock"
+  ],
+  "canonical_python_source_root": "src/hermes",
+  "allowed_python_script_roots": [
+    "tests",
+    "scripts"
+  ],
+  "forbidden_root_directories": [
+    ".agent_jobs",
+    ".pytest_cache",
+    "build",
+    "dist",
+    "graphify-out",
+    "jobs",
+    "logs",
+    "runtime_logs",
+    "projects",
+    "workspace",
+    "data",
+    "prompt_output",
+    "scratch",
+    "node_modules",
+    "venv",
+    "hermes_agent.egg-info"
+  ],
+  "forbidden_root_file_patterns": [
+    "*.py",
+    "walkthrough.md",
+    "report.md",
+    "temp*",
+    "smoke*",
+    "*.sqlite",
+    "*.db",
+    "*.log",
+    "*.whl",
+    "*.mp4",
+    "*.wav",
+    "*.png",
+    "*.jpg",
+    "*.webp"
+  ],
+  "runtime_data_environment_variable": "HERMES_DATA_DIR",
+  "runtime_data_subdirectories": [
+    "db",
+    "jobs",
+    "logs",
+    "workspaces",
+    "knowledge",
+    "outputs",
+    "caches",
+    "artifacts",
+    "migration-manifests",
+    "work-journal"
+  ],
+  "bundled_resource_root": "src/hermes/bundled",
+  "application_roots": [
+    "apps/web",
+    "apps/tui"
+  ]
+}

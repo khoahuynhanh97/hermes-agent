@@ -1,7 +1,0 @@
-interface:
-  display_name: "Seedance Product Review Generator"
-  short_description: "Review video prompts for Seedance"
-  default_prompt: "Use $seedance-product-review-generator to create a TikTok product review storyboard, Seedance prompts, and ElevenLabs voice script."
-
-policy:
-  allow_implicit_invocation: true

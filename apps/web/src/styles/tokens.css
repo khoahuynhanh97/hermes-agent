@@ -1,0 +1,69 @@
+:root {
+  /* Surfaces & Backgrounds */
+  --bg-app: #0a0c10;
+  --bg-panel: #11141a;
+  --bg-surface: #161b22;
+  --bg-surface-hover: #1c222b;
+  --bg-surface-active: #222935;
+  --bg-input: #0e1117;
+  --bg-overlay: rgba(10, 12, 16, 0.85);
+
+  /* Borders & Dividers */
+  --border-subtle: #1e242f;
+  --border-default: #28303e;
+  --border-strong: #3b465a;
+  --border-focus: #38bdf8;
+
+  /* Typography Colors */
+  --text-primary: #f0f3f6;
+  --text-secondary: #9da7b5;
+  --text-muted: #647082;
+  --text-inverse: #0a0c10;
+
+  /* Brand & Operational Accents */
+  --accent-primary: #38bdf8;
+  --accent-primary-hover: #0ea5e9;
+  --accent-timeline: #f59e0b;
+  --accent-timeline-hover: #d97706;
+
+  /* Status Colors */
+  --status-success: #10b981;
+  --status-success-bg: rgba(16, 185, 129, 0.12);
+  --status-success-border: rgba(16, 185, 129, 0.3);
+
+  --status-active: #38bdf8;
+  --status-active-bg: rgba(56, 189, 248, 0.12);
+  --status-active-border: rgba(56, 189, 248, 0.3);
+
+  --status-running: #f59e0b;
+  --status-running-bg: rgba(245, 158, 11, 0.12);
+  --status-running-border: rgba(245, 158, 11, 0.3);
+
+  --status-error: #ef4444;
+  --status-error-bg: rgba(239, 68, 68, 0.12);
+  --status-error-border: rgba(239, 68, 68, 0.3);
+
+  --status-blocked: #647082;
+  --status-blocked-bg: rgba(100, 112, 130, 0.12);
+  --status-blocked-border: rgba(100, 112, 130, 0.3);
+
+  /* Radii */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+
+  /* Font & Metrics */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.6);
+
+  /* Layout dimensions */
+  --sidebar-width: 240px;
+  --topbar-height: 52px;
+  --footer-height: 56px;
+  --inspector-width: 360px;
+}
