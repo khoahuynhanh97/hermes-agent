@@ -71,6 +71,8 @@ bgm_library/
 # Custom directories
 scratch_test_downloads/
 reports/
+!docs/reports/
+!docs/reports/**
 workspace/
 .bytecode-fingerprint
 graphify-out/cache/last_query_stamp
