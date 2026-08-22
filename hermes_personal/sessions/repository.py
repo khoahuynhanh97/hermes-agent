@@ -57,6 +57,19 @@ class SessionRepository:
                 session = self._set_active_workflow(session.session_id, workflow_id)
         return session
 
+    def find_by_channel(
+        self,
+        owner_user_id: str,
+        channel: ChannelName,
+        external_conversation_id: str,
+    ) -> ConversationSession | None:
+        """Return an existing channel-local session without creating one."""
+        if not owner_user_id.strip() or not external_conversation_id.strip():
+            raise ValueError("owner_user_id and external_conversation_id must not be blank")
+        return self._find_by_channel(
+            owner_user_id, channel, external_conversation_id
+        )
+
     def link_workflow(self, session_id: str, workflow_id: str) -> ConversationSession:
         if not workflow_id.strip():
             raise ValueError("workflow_id must not be blank")

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+from pathlib import Path
 
 import pytest
 
@@ -185,6 +187,25 @@ def test_workflow_is_denied_before_request_creation_when_not_authorized(
     assert sessions.get(session.session_id).active_workflow_id is None
 
 
+def test_unauthorized_workflow_for_new_conversation_creates_no_session(
+    normalizer_factory, gateway_repositories
+):
+    connection, _, _, _ = gateway_repositories
+
+    with pytest.raises(PermissionError, match="workflow is not authorized"):
+        normalizer_factory("web").normalize(
+            external_subject="subject:khoa",
+            external_conversation_id="new-browser:7",
+            message="continue",
+            workflow_id="wf_denied",
+        )
+
+    count = connection.execute(
+        "SELECT COUNT(*) AS count FROM conversation_session"
+    ).fetchone()["count"]
+    assert count == 0
+
+
 class PublicState:
     def __init__(self) -> None:
         self.values: dict[str, object] = {}
@@ -222,16 +243,18 @@ def test_project_plugin_uses_public_api_durable_metadata_and_cleanup():
 
     context = PublicPluginContext()
     service = object()
-    register_turn_service(context.profile_name, service)
+    lease = register_turn_service(context.profile_name, service)
 
     register(context)
 
     assert get_turn_service(context.profile_name) is service
+    assert lease.profile_name == context.profile_name
     assert context.state.values == {
         "gateway.registration": {
             "profile_name": "personal",
             "registry": "hermes_personal.gateway.turn_service",
             "schema_version": 1,
+            "generation": lease.generation,
         }
     }
     assert len(context.unload_callbacks) == 1
@@ -250,3 +273,103 @@ def test_plugin_package_delegates_and_never_registers_a_platform(monkeypatch):
     project_plugin.register(context)
 
     assert calls == [context]
+
+
+def test_stale_same_profile_unload_does_not_remove_replacement_service():
+    from hermes_personal.gateway.plugin import (
+        get_turn_service,
+        register,
+        register_turn_service,
+    )
+
+    first_context = PublicPluginContext("replacement")
+    first_service = object()
+    first_lease = register_turn_service("replacement", first_service)
+    register(first_context)
+
+    second_context = PublicPluginContext("replacement")
+    second_service = object()
+    second_lease = register_turn_service("replacement", second_service)
+    register(second_context)
+
+    assert first_lease.generation < second_lease.generation
+    first_context.unload_callbacks[0]()
+    assert get_turn_service("replacement") is second_service
+
+    second_context.unload_callbacks[0]()
+    assert get_turn_service("replacement") is None
+
+
+def test_turn_service_registry_isolated_across_profiles():
+    from hermes_personal.gateway.plugin import (
+        get_turn_service,
+        register,
+        register_turn_service,
+    )
+
+    first_context = PublicPluginContext("profile-one")
+    second_context = PublicPluginContext("profile-two")
+    first_service = object()
+    second_service = object()
+    register_turn_service("profile-one", first_service)
+    register_turn_service("profile-two", second_service)
+    register(first_context)
+    register(second_context)
+
+    first_context.unload_callbacks[0]()
+
+    assert get_turn_service("profile-one") is None
+    assert get_turn_service("profile-two") is second_service
+    second_context.unload_callbacks[0]()
+
+
+def test_real_plugin_manifest_is_discovered_without_kind_coercion_and_delegates(
+    tmp_path, monkeypatch, caplog
+):
+    from hermes_cli import plugins as plugins_module
+    from hermes_cli.plugins import PluginManager, PluginState
+    import plugins.hermes_personal as project_plugin
+
+    source_plugin = Path(__file__).resolve().parents[3] / "plugins" / "hermes_personal"
+    bundled_plugins = tmp_path / "bundled"
+    test_plugin = bundled_plugins / "hermes_personal"
+    test_plugin.mkdir(parents=True)
+    (test_plugin / "plugin.yaml").write_text(
+        (source_plugin / "plugin.yaml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (test_plugin / "__init__.py").write_text(
+        "from plugins.hermes_personal import register\n",
+        encoding="utf-8",
+    )
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.yaml").write_text(
+        "plugins:\n  enabled:\n    - hermes-personal\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setattr(
+        plugins_module, "get_bundled_plugins_dir", lambda: bundled_plugins
+    )
+    calls = []
+    original_register = project_plugin.register_gateway
+
+    def record_public_context(ctx):
+        calls.append(ctx)
+        return original_register(ctx)
+
+    monkeypatch.setattr(project_plugin, "register_gateway", record_public_context)
+    manager = PluginManager()
+    with caplog.at_level(logging.WARNING, logger="hermes_cli.plugins"):
+        manager.discover_and_load()
+
+    loaded = manager._plugins["hermes-personal"]
+    assert loaded.manifest.kind == "standalone"
+    assert loaded.enabled is True
+    assert len(calls) == 1
+    assert PluginState("hermes-personal").get("gateway.registration")["registry"] == (
+        "hermes_personal.gateway.turn_service"
+    )
+    assert not any("unknown kind" in record.getMessage().lower() for record in caplog.records)
+    manager.unload()

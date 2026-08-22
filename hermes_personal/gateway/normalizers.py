@@ -76,10 +76,17 @@ class ChannelTurnNormalizer:
 
         # Resolve the authenticated subject before any session can be materialized.
         owner = self._identity_repository.resolve(self._channel, external_subject)
-        session = self._session_repository.get_or_create(
-            owner.owner_user_id, self._channel, external_conversation_id
-        )
-        self._authorize_workflow(session, owner.owner_user_id, workflow_id)
+        if workflow_id is not None:
+            session = self._session_repository.find_by_channel(
+                owner.owner_user_id, self._channel, external_conversation_id
+            )
+            if session is None:
+                raise PermissionError("workflow is not authorized for this session")
+            self._authorize_workflow(session, owner.owner_user_id, workflow_id)
+        else:
+            session = self._session_repository.get_or_create(
+                owner.owner_user_id, self._channel, external_conversation_id
+            )
 
         return AgentTurnRequest(
             principal=PrincipalContext(

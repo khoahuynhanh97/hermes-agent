@@ -44,6 +44,16 @@ def test_get_returns_a_session_by_its_public_identifier(session_repository):
     assert repository.get(session.session_id) == session
 
 
+def test_find_by_channel_is_public_and_does_not_create_a_session(session_repository):
+    repository, owner, _ = session_repository
+
+    assert repository.find_by_channel(owner.owner_user_id, "web", "browser:1") is None
+
+    session = repository.get_or_create(owner.owner_user_id, "web", "browser:1")
+
+    assert repository.find_by_channel(owner.owner_user_id, "web", "browser:1") == session
+
+
 def test_workflow_is_visible_only_after_explicit_handoff(session_repository):
     repository, owner, _ = session_repository
     source = repository.get_or_create(owner.owner_user_id, "telegram", "chat:1")
