@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "upstream_repository": "https://github.com/NousResearch/hermes-agent.git",
+  "upstream_branch": "main",
+  "upstream_sha": "0012dd1e0c7efc7e86fa75b89567a492057f0c02",
+  "observed_at": "2026-08-22T06:34:02Z",
+  "legacy_repository": "https://github.com/khoahuynhanh97/hermes-agent.git",
+  "legacy_branch": "codex/hermes-orchestrator-unification",
+  "legacy_head": "9d63f406f264b3513af9e369bb8d8638f4c02261",
+  "history_relation": "unrelated"
+}
