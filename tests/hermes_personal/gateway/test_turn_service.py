@@ -15,6 +15,7 @@ from hermes_personal.orchestration import (
     AgentOutput,
     AuthorizationError,
     HermesTurnService,
+    UpstreamAIAgentAdapter,
 )
 from hermes_personal.sessions import SessionRepository
 from hermes_personal.storage.sqlite import connect
@@ -112,6 +113,19 @@ class SlowAgent:
         self, request: AgentTurnRequest, history: tuple[Mapping[str, Any], ...]
     ) -> Iterator[AgentOutput]:
         return self.iterator
+
+
+@dataclass
+class PublicAIAgentSpy:
+    calls: list[dict[str, Any]] = field(default_factory=list)
+
+    def run_conversation(self, **kwargs: Any) -> Mapping[str, Any]:
+        self.calls.append(kwargs)
+        return {
+            "final_response": "upstream response",
+            "messages": [],
+            "completed": True,
+        }
 
 
 @pytest.fixture
@@ -234,8 +248,32 @@ async def test_turn_persists_each_event_before_yield(
     assert transcript_factory.session_ids == [session.session_id]
     assert all(transcript_factory.transcript.event_persisted)
     assert transcript_factory.transcript.user_turns == ["Xin chao"]
-    assert agent.calls[0][1] == ({"role": "user", "content": "Xin chao"},)
+    assert agent.calls[0][1] == ()
     assert transcript_factory.transcript.events[0].principal_id == owner.owner_user_id
+
+
+@pytest.mark.asyncio
+async def test_turn_passes_prior_history_once_and_current_message_only_as_user_input(
+    turn_environment, request_factory
+):
+    _, identities, sessions, owner, _, transcript_factory, _ = turn_environment
+    transcript_factory.transcript.user_turns.append("prior turn")
+    upstream = PublicAIAgentSpy()
+    service = HermesTurnService(
+        identities,
+        sessions,
+        transcript_factory,
+        UpstreamAIAgentAdapter(upstream),
+    )
+
+    events = [event async for event in service.handle(request_factory())]
+
+    assert upstream.calls[0]["conversation_history"] == [
+        {"role": "user", "content": "prior turn"}
+    ]
+    assert upstream.calls[0]["user_message"] == "Xin chao"
+    assert transcript_factory.transcript.user_turns == ["prior turn", "Xin chao"]
+    assert [event.event_type for event in events] == ["text_delta", "completed"]
 
 
 @pytest.mark.asyncio

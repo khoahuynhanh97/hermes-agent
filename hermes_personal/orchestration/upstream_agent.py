@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from queue import Queue
-from threading import Thread
+from queue import Full, Queue
+from threading import Event, Thread
 from typing import Any, Callable, Protocol
 
 from hermes_personal.contracts import AgentTurnRequest
@@ -39,9 +39,8 @@ class _Exception:
 
 
 _WORKER_FINISHED = object()
-_REQUIRED_RESULT_FIELDS = frozenset(
-    {"final_response", "messages", "completed", "failed", "interrupted"}
-)
+_REQUIRED_RESULT_FIELDS = frozenset({"final_response", "messages", "completed"})
+_EVENT_QUEUE_MAXSIZE = 32
 
 
 class UpstreamAIAgentAdapter:
@@ -55,12 +54,15 @@ class UpstreamAIAgentAdapter:
         request: AgentTurnRequest,
         history: tuple[Mapping[str, Any], ...],
     ) -> Iterator[AgentOutput]:
-        events: Queue[_TextDelta | _Result | _Exception | object] = Queue()
+        events: Queue[_TextDelta | _Result | _Exception | object] = Queue(
+            maxsize=_EVENT_QUEUE_MAXSIZE
+        )
+        closed = Event()
         streamed_text: list[str] = []
 
         def stream_callback(delta: str | None) -> None:
             if isinstance(delta, str) and delta:
-                events.put(_TextDelta(delta))
+                _enqueue_while_open(events, _TextDelta(delta), closed)
 
         def invoke() -> None:
             try:
@@ -72,29 +74,34 @@ class UpstreamAIAgentAdapter:
                     persist_user_message=request.message,
                 )
             except BaseException as error:
-                events.put(_Exception(error))
+                _enqueue_while_open(events, _Exception(error), closed)
             else:
-                events.put(_Result(result))
+                _enqueue_while_open(events, _Result(result), closed)
             finally:
-                events.put(_WORKER_FINISHED)
+                _enqueue_while_open(events, _WORKER_FINISHED, closed)
 
         worker = Thread(target=invoke, name="hermes-upstream-agent", daemon=True)
         worker.start()
 
-        while True:
-            item = events.get()
-            if isinstance(item, _TextDelta):
-                streamed_text.append(item.text)
-                yield AgentOutput("text_delta", {"text": item.text})
-                continue
-            if isinstance(item, _Exception):
-                raise item.value
-            if isinstance(item, _Result):
-                yield from self._outputs_from_result(item.value, request, history, streamed_text)
-                continue
-            if item is _WORKER_FINISHED:
-                return
-            raise RuntimeError("unexpected upstream adapter worker event")
+        try:
+            while True:
+                item = events.get()
+                if isinstance(item, _TextDelta):
+                    streamed_text.append(item.text)
+                    yield AgentOutput("text_delta", {"text": item.text})
+                    continue
+                if isinstance(item, _Exception):
+                    raise item.value
+                if isinstance(item, _Result):
+                    yield from self._outputs_from_result(
+                        item.value, request, history, streamed_text
+                    )
+                    continue
+                if item is _WORKER_FINISHED:
+                    return
+                raise RuntimeError("unexpected upstream adapter worker event")
+        finally:
+            closed.set()
 
     @staticmethod
     def _outputs_from_result(
@@ -134,17 +141,36 @@ def _validate_result(result: Any) -> Mapping[str, Any]:
         raise ValueError(f"malformed upstream result: missing {', '.join(missing)}")
     if not isinstance(result["messages"], list):
         raise ValueError("malformed upstream result: messages must be a list")
-    for field_name in ("completed", "failed", "interrupted"):
-        if not isinstance(result[field_name], bool):
+    if not isinstance(result["completed"], bool):
+        raise ValueError("malformed upstream result: completed must be a bool")
+    normalized = dict(result)
+    for field_name in ("failed", "interrupted"):
+        value = normalized.get(field_name, False)
+        if not isinstance(value, bool):
             raise ValueError(f"malformed upstream result: {field_name} must be a bool")
-    if result["final_response"] is not None and not isinstance(
-        result["final_response"], str
+        normalized[field_name] = value
+    if normalized["final_response"] is not None and not isinstance(
+        normalized["final_response"], str
     ):
         raise ValueError("malformed upstream result: final_response must be text or null")
-    for message in result["messages"]:
+    for message in normalized["messages"]:
         if not isinstance(message, Mapping):
             raise ValueError("malformed upstream result: messages must contain mappings")
-    return result
+    return normalized
+
+
+def _enqueue_while_open(
+    events: Queue[_TextDelta | _Result | _Exception | object],
+    item: _TextDelta | _Result | _Exception | object,
+    closed: Event,
+) -> bool:
+    while not closed.is_set():
+        try:
+            events.put(item, timeout=0.05)
+        except Full:
+            continue
+        return True
+    return False
 
 
 def _trusted_workflow_id(

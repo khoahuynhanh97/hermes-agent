@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from queue import Queue as StdlibQueue
 from typing import Any, Mapping
 
 import pytest
@@ -232,3 +233,83 @@ def test_adapter_normalizes_interrupted_turn_to_one_failed_terminal(agent_turn):
 
     assert [output.event_type for output in outputs] == ["failed"]
     assert outputs[0].data["interrupted"] is True
+
+
+@pytest.mark.parametrize(
+    ("result", "terminal_type"),
+    [
+        (
+            {"final_response": "early", "messages": [], "completed": True},
+            "completed",
+        ),
+        (
+            {
+                "final_response": "partial",
+                "messages": [],
+                "completed": False,
+                "partial": True,
+            },
+            "failed",
+        ),
+        (
+            {
+                "final_response": "interrupted",
+                "messages": [],
+                "completed": False,
+                "interrupted": True,
+            },
+            "failed",
+        ),
+    ],
+)
+def test_adapter_accepts_public_early_return_shapes_with_optional_flags(
+    agent_turn, result, terminal_type
+):
+    from hermes_personal.orchestration import UpstreamAIAgentAdapter
+
+    outputs = list(UpstreamAIAgentAdapter(SpyAIAgent(result)).run(agent_turn, ()))
+
+    terminals = [output for output in outputs if output.event_type in {"completed", "failed"}]
+    assert [output.event_type for output in terminals] == [terminal_type]
+    assert terminals[0].data["failed"] is False
+    assert terminals[0].data["interrupted"] is result.get("interrupted", False)
+    assert terminals[0].data.get("partial") is result.get("partial")
+
+
+def test_adapter_drops_post_close_deltas_and_bounds_queue_retention(
+    agent_turn, monkeypatch
+):
+    import hermes_personal.orchestration.upstream_agent as upstream_agent
+
+    class TrackingQueue(StdlibQueue):
+        instances: list[TrackingQueue] = []
+
+        def __init__(self, maxsize: int = 0) -> None:
+            super().__init__(maxsize=maxsize)
+            self.__class__.instances.append(self)
+
+    class ManyDeltaAgent:
+        def __init__(self) -> None:
+            self.release = threading.Event()
+            self.completed = threading.Event()
+
+        def run_conversation(self, **kwargs: Any) -> Mapping[str, Any]:
+            callback = kwargs["stream_callback"]
+            callback("first")
+            self.release.wait(1)
+            for _ in range(1_000):
+                callback("after close")
+            self.completed.set()
+            return {"final_response": "", "messages": [], "completed": True}
+
+    monkeypatch.setattr(upstream_agent, "Queue", TrackingQueue)
+    agent = ManyDeltaAgent()
+    outputs = upstream_agent.UpstreamAIAgentAdapter(agent).run(agent_turn, ())
+
+    assert next(outputs).data == {"text": "first"}
+    assert TrackingQueue.instances[0].maxsize > 0
+    outputs.close()
+    agent.release.set()
+
+    assert agent.completed.wait(1)
+    assert TrackingQueue.instances[0].qsize() <= TrackingQueue.instances[0].maxsize

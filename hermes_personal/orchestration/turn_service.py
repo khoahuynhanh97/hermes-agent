@@ -80,12 +80,13 @@ class HermesTurnService:
     async def handle(self, request: AgentTurnRequest) -> AsyncIterator[AgentEvent]:
         self._validate_request(request)
         transcript = self._transcript_factory.for_session(request.session_id)
+        history = transcript.history
         transcript.append_user_turn(request.message)
         outputs: Iterator[AgentOutput] | None = None
         try:
             try:
                 outputs = await _start_agent_in_worker(
-                    self._agent, request, transcript.history
+                    self._agent, request, history
                 )
             except AuthorizationError:
                 raise
