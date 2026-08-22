@@ -37,6 +37,13 @@ def test_sessions_are_separate_per_channel(session_repository):
     assert telegram.owner_user_id == web.owner_user_id
 
 
+def test_get_returns_a_session_by_its_public_identifier(session_repository):
+    repository, owner, _ = session_repository
+    session = repository.get_or_create(owner.owner_user_id, "telegram", "chat:1")
+
+    assert repository.get(session.session_id) == session
+
+
 def test_workflow_is_visible_only_after_explicit_handoff(session_repository):
     repository, owner, _ = session_repository
     source = repository.get_or_create(owner.owner_user_id, "telegram", "chat:1")

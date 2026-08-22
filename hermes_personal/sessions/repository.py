@@ -63,6 +63,9 @@ class SessionRepository:
         with self._connection:
             return self._set_active_workflow(session_id, workflow_id)
 
+    def get(self, session_id: str) -> ConversationSession:
+        return self._require_session(session_id)
+
     def create_handoff(
         self,
         owner_user_id: str,
