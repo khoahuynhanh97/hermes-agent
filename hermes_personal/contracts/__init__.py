@@ -1,3 +1,4 @@
+from .capability import CapabilityCatalog, CapabilityDescriptor
 from .events import AgentEvent, AgentEventType
 from .operator import OperatorCommand, OperatorCommandType
 from .principal import ChannelName, PrincipalContext
@@ -9,6 +10,8 @@ __all__ = [
     "AgentEventType",
     "AgentTurnRequest",
     "AttachmentRef",
+    "CapabilityCatalog",
+    "CapabilityDescriptor",
     "ChannelCapabilities",
     "ChannelName",
     "OperatorCommand",
