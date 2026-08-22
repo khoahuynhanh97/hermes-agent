@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS conversation_session (
   updated_at TEXT NOT NULL,
   UNIQUE(owner_user_id, channel, external_conversation_id)
 );
+CREATE UNIQUE INDEX IF NOT EXISTS conversation_session_identity_idx
+  ON conversation_session(session_id, owner_user_id);
 CREATE TABLE IF NOT EXISTS workflow_handoff (
   handoff_id TEXT PRIMARY KEY,
   owner_user_id TEXT NOT NULL REFERENCES global_user_identity(owner_user_id) ON DELETE RESTRICT,
@@ -37,6 +39,26 @@ CREATE TABLE IF NOT EXISTS workflow_handoff (
   target_session_id TEXT NOT NULL REFERENCES conversation_session(session_id) ON DELETE RESTRICT,
   created_at TEXT NOT NULL,
   UNIQUE(workflow_id, target_session_id)
+);
+CREATE TABLE IF NOT EXISTS turn_execution (
+  owner_user_id TEXT NOT NULL REFERENCES global_user_identity(owner_user_id) ON DELETE RESTRICT,
+  idempotency_key TEXT NOT NULL,
+  request_digest TEXT NOT NULL,
+  turn_id TEXT NOT NULL UNIQUE,
+  session_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('in_progress', 'completed', 'failed')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (owner_user_id, idempotency_key),
+  FOREIGN KEY (session_id, owner_user_id)
+    REFERENCES conversation_session(session_id, owner_user_id) ON DELETE RESTRICT
+);
+CREATE TABLE IF NOT EXISTS turn_event (
+  turn_id TEXT NOT NULL REFERENCES turn_execution(turn_id) ON DELETE RESTRICT,
+  sequence INTEGER NOT NULL CHECK(sequence >= 0),
+  event_id TEXT NOT NULL UNIQUE,
+  payload_json TEXT NOT NULL,
+  PRIMARY KEY (turn_id, sequence)
 );
 """
 

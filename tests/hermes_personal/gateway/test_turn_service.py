@@ -4,7 +4,8 @@ import asyncio
 import threading
 import time
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import timedelta
 from typing import Any, Mapping
 
 import pytest
@@ -16,6 +17,11 @@ from hermes_personal.orchestration import (
     AuthorizationError,
     HermesTurnService,
     UpstreamAIAgentAdapter,
+)
+from hermes_personal.orchestration.event_repository import (
+    EventRepository,
+    IdempotencyConflict,
+    TurnInProgress,
 )
 from hermes_personal.sessions import SessionRepository
 from hermes_personal.storage.sqlite import connect
@@ -128,6 +134,16 @@ class PublicAIAgentSpy:
         }
 
 
+def build_service(identities, sessions, transcript_factory, agent):
+    return HermesTurnService(
+        identities,
+        sessions,
+        EventRepository(sessions._connection),
+        transcript_factory,
+        agent,
+    )
+
+
 @pytest.fixture
 def turn_environment(tmp_path):
     connection = connect(tmp_path / "turn-service.sqlite")
@@ -139,7 +155,7 @@ def turn_environment(tmp_path):
     session = sessions.get_or_create(owner.owner_user_id, "telegram", "chat:1")
     transcript_factory = FakeTranscriptFactory()
     agent = FakeAgent()
-    service = HermesTurnService(identities, sessions, transcript_factory, agent)
+    service = build_service(identities, sessions, transcript_factory, agent)
     try:
         yield service, identities, sessions, owner, session, transcript_factory, agent
     finally:
@@ -181,6 +197,12 @@ async def test_turn_rejects_principal_session_owner_mismatch(
         [event async for event in service.handle(request_factory(owner_user_id="user:other"))]
 
     assert agent.calls == []
+    assert (
+        turn_environment[2]._connection.execute(
+            "SELECT COUNT(*) AS count FROM turn_execution"
+        ).fetchone()["count"]
+        == 0
+    )
 
 
 @pytest.mark.asyncio
@@ -232,17 +254,28 @@ async def test_turn_rejects_workflow_without_owned_handoff(
         ]
 
     assert agent.calls == []
+    assert (
+        sessions._connection.execute(
+            "SELECT COUNT(*) AS count FROM turn_execution"
+        ).fetchone()["count"]
+        == 0
+    )
 
 
 @pytest.mark.asyncio
 async def test_turn_persists_each_event_before_yield(
     turn_environment, request_factory
 ):
-    service, _, _, owner, session, transcript_factory, agent = turn_environment
+    service, _, sessions, owner, session, transcript_factory, agent = turn_environment
     agent.output = [AgentOutput("text_delta", {"text": "Xin chao"})]
 
     async for event in service.handle(request_factory()):
         assert event == transcript_factory.transcript.events[event.sequence]
+        stored = sessions._connection.execute(
+            "SELECT event_id FROM turn_event WHERE turn_id = ? AND sequence = ?",
+            (event.turn_id, event.sequence),
+        ).fetchone()
+        assert stored["event_id"] == event.event_id
         transcript_factory.transcript.event_persisted[event.sequence] = True
 
     assert transcript_factory.session_ids == [session.session_id]
@@ -253,17 +286,129 @@ async def test_turn_persists_each_event_before_yield(
 
 
 @pytest.mark.asyncio
+async def test_terminal_event_is_marked_before_yield_and_stops_stream(
+    turn_environment, request_factory
+):
+    service, _, sessions, _, _, transcript_factory, agent = turn_environment
+    agent.output = [
+        AgentOutput("completed", {"text": "done"}),
+        AgentOutput("warning", {"text": "must not follow terminal"}),
+    ]
+
+    events = []
+    async for event in service.handle(request_factory()):
+        events.append(event)
+        status = sessions._connection.execute(
+            "SELECT status FROM turn_execution WHERE turn_id = ?", (event.turn_id,)
+        ).fetchone()["status"]
+        assert status == "completed"
+
+    assert [event.event_type for event in events] == ["completed"]
+    assert transcript_factory.transcript.events == events
+
+
+@pytest.mark.asyncio
+async def test_terminal_duplicate_replays_exact_events_without_transcript_or_agent_call(
+    turn_environment, request_factory
+):
+    service, _, _, _, _, transcript_factory, agent = turn_environment
+    agent.output = [
+        AgentOutput("text_delta", {"text": "Xin"}),
+        AgentOutput("completed", {"text": "Xin chao"}),
+    ]
+    request = request_factory()
+
+    original = [event async for event in service.handle(request)]
+    replay = [
+        event
+        async for event in service.handle(
+            replace(
+                request,
+                turn_id="turn_retry",
+                occurred_at=request.occurred_at + timedelta(minutes=1),
+            )
+        )
+    ]
+
+    assert replay == original
+    assert [event.event_id for event in replay] == [
+        event.event_id for event in original
+    ]
+    assert len(agent.calls) == 1
+    assert transcript_factory.session_ids == [request.session_id]
+    assert transcript_factory.transcript.user_turns == [request.message]
+    assert transcript_factory.transcript.events == original
+
+
+@pytest.mark.asyncio
+async def test_same_idempotency_key_with_changed_request_fails_before_side_effects(
+    turn_environment, request_factory
+):
+    service, _, _, _, _, transcript_factory, agent = turn_environment
+    agent.output = [AgentOutput("completed", {})]
+    request = request_factory()
+    [event async for event in service.handle(request)]
+
+    with pytest.raises(IdempotencyConflict):
+        [event async for event in service.handle(replace(request, message="changed"))]
+
+    assert len(agent.calls) == 1
+    assert transcript_factory.transcript.user_turns == [request.message]
+
+
+@pytest.mark.asyncio
+async def test_in_progress_duplicate_is_typed_and_does_not_call_agent_again(
+    turn_environment, request_factory
+):
+    service, _, _, _, _, transcript_factory, agent = turn_environment
+    agent.output = [AgentOutput("text_delta", {"text": "partial"})]
+    request = request_factory()
+    [event async for event in service.handle(request)]
+
+    with pytest.raises(TurnInProgress):
+        [
+            event
+            async for event in service.handle(
+                replace(request, turn_id="turn_concurrent")
+            )
+        ]
+
+    assert len(agent.calls) == 1
+    assert transcript_factory.transcript.user_turns == [request.message]
+
+
+@pytest.mark.asyncio
+async def test_failed_duplicate_replays_stored_failure_without_second_agent_call(
+    turn_environment, request_factory
+):
+    service, _, sessions, _, _, transcript_factory, agent = turn_environment
+    agent.failure = RuntimeError("agent unavailable")
+    request = request_factory()
+
+    original = [event async for event in service.handle(request)]
+    replay = [
+        event
+        async for event in service.handle(replace(request, turn_id="turn_retry"))
+    ]
+
+    status = sessions._connection.execute(
+        "SELECT status FROM turn_execution WHERE turn_id = ?", (request.turn_id,)
+    ).fetchone()["status"]
+    assert status == "failed"
+    assert replay == original
+    assert len(agent.calls) == 1
+    assert transcript_factory.transcript.user_turns == [request.message]
+
+
+@pytest.mark.asyncio
 async def test_turn_passes_prior_history_once_and_current_message_only_as_user_input(
     turn_environment, request_factory
 ):
     _, identities, sessions, owner, _, transcript_factory, _ = turn_environment
     transcript_factory.transcript.user_turns.append("prior turn")
     upstream = PublicAIAgentSpy()
-    service = HermesTurnService(
-        identities,
-        sessions,
-        transcript_factory,
-        UpstreamAIAgentAdapter(upstream),
+    service = build_service(
+        identities, sessions, transcript_factory, UpstreamAIAgentAdapter(upstream)
     )
 
     events = [event async for event in service.handle(request_factory())]
@@ -380,7 +525,7 @@ async def test_turn_propagates_agent_start_authorization_error_without_failed_ev
     turn_environment, request_factory
 ):
     _, identities, sessions, _, _, transcript_factory, _ = turn_environment
-    service = HermesTurnService(
+    service = build_service(
         identities,
         sessions,
         FakeTranscriptFactory(transcript_factory.transcript),
@@ -412,7 +557,7 @@ async def test_turn_allows_concurrent_progress_while_slow_iterator_advances(
 ):
     _, identities, sessions, _, _, transcript_factory, _ = turn_environment
     slow_agent = SlowAgent()
-    service = HermesTurnService(identities, sessions, transcript_factory, slow_agent)
+    service = build_service(identities, sessions, transcript_factory, slow_agent)
     progressed = asyncio.Event()
 
     async def mark_progress() -> None:
@@ -434,10 +579,11 @@ async def test_turn_allows_concurrent_progress_while_slow_iterator_advances(
 async def test_turn_closes_slow_iterator_when_consumer_is_cancelled(
     turn_environment, request_factory
 ):
-    _, identities, sessions, _, _, transcript_factory, _ = turn_environment
+    _, identities, sessions, _, session, transcript_factory, _ = turn_environment
     slow_agent = SlowAgent()
-    service = HermesTurnService(identities, sessions, transcript_factory, slow_agent)
-    stream = service.handle(request_factory())
+    service = build_service(identities, sessions, transcript_factory, slow_agent)
+    request = request_factory()
+    stream = service.handle(request)
     pending = asyncio.create_task(anext(stream))
 
     assert await asyncio.to_thread(slow_agent.iterator.started.wait, 0.5)
@@ -446,3 +592,111 @@ async def test_turn_closes_slow_iterator_when_consumer_is_cancelled(
         await pending
 
     assert await asyncio.to_thread(slow_agent.iterator.closed.wait, 0.5)
+
+    status = sessions._connection.execute(
+        "SELECT status FROM turn_execution WHERE turn_id = ?", (request.turn_id,)
+    ).fetchone()["status"]
+    assert status == "in_progress"
+
+    # Subsequent request with same idempotency key fails with TurnInProgress
+    with pytest.raises(TurnInProgress) as raised:
+        [event async for event in service.handle(replace(request, turn_id="turn_retry"))]
+    assert raised.value.turn_id == request.turn_id
+
+
+class ControlledBlockingAgent:
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.unblock = threading.Event()
+        self.calls: list[tuple[AgentTurnRequest, tuple[Mapping[str, Any], ...]]] = []
+
+    def run(
+        self, request: AgentTurnRequest, history: tuple[Mapping[str, Any], ...]
+    ) -> Iterator[AgentOutput]:
+        self.calls.append((request, history))
+        self.started.set()
+        yield AgentOutput("text_delta", {"text": "part1"})
+        self.unblock.wait(timeout=5.0)
+        yield AgentOutput("completed", {"text": "done"})
+
+
+@pytest.mark.asyncio
+async def test_overlapping_turn_duplicate_fails_in_progress_then_replays_after_terminal(
+    turn_environment, request_factory
+):
+    _, identities, sessions, _, _, transcript_factory, _ = turn_environment
+    blocking_agent = ControlledBlockingAgent()
+    service = build_service(identities, sessions, transcript_factory, blocking_agent)
+    request = request_factory()
+
+    stream1 = service.handle(request)
+    first_event = await anext(stream1)
+    assert first_event.event_type == "text_delta"
+    assert first_event.sequence == 0
+    assert blocking_agent.started.is_set()
+
+    # While turn 1 is active and blocked before terminal output,
+    # a duplicate with the same idempotency key and changed turn_id/timestamp raises TurnInProgress
+    retry_request = replace(
+        request,
+        turn_id="turn_concurrent_retry",
+        occurred_at=request.occurred_at + timedelta(seconds=10),
+    )
+    with pytest.raises(TurnInProgress) as raised:
+        [event async for event in service.handle(retry_request)]
+    assert raised.value.turn_id == request.turn_id
+
+    # Verify agent was called exactly once, transcript was appended once, no duplicate events
+    assert len(blocking_agent.calls) == 1
+    assert transcript_factory.transcript.user_turns == [request.message]
+    stored_events_in_progress = sessions._connection.execute(
+        "SELECT sequence, event_id FROM turn_event WHERE turn_id = ?",
+        (request.turn_id,),
+    ).fetchall()
+    assert len(stored_events_in_progress) == 1
+    assert stored_events_in_progress[0]["event_id"] == first_event.event_id
+
+    # Unblock agent and finish turn 1
+    blocking_agent.unblock.set()
+    second_event = await anext(stream1)
+    assert second_event.event_type == "completed"
+    assert second_event.sequence == 1
+
+    with pytest.raises(StopAsyncIteration):
+        await anext(stream1)
+
+    original_events = [first_event, second_event]
+    assert transcript_factory.transcript.events == original_events
+
+    status = sessions._connection.execute(
+        "SELECT status FROM turn_execution WHERE turn_id = ?", (request.turn_id,)
+    ).fetchone()["status"]
+    assert status == "completed"
+
+    # Now that turn 1 is terminal, a retry request replays exact stored events without another agent or transcript call
+    replay_request = replace(
+        request,
+        turn_id="turn_replay_retry",
+        occurred_at=request.occurred_at + timedelta(minutes=5),
+    )
+    replay_events = [event async for event in service.handle(replay_request)]
+
+    assert replay_events == original_events
+    assert [event.event_id for event in replay_events] == [
+        event.event_id for event in original_events
+    ]
+    assert [event.occurred_at for event in replay_events] == [
+        event.occurred_at for event in original_events
+    ]
+    assert [event.turn_id for event in replay_events] == [
+        request.turn_id,
+        request.turn_id,
+    ]
+    assert [event.data for event in replay_events] == [
+        event.data for event in original_events
+    ]
+
+    # Still only 1 agent call and 1 user turn in transcript
+    assert len(blocking_agent.calls) == 1
+    assert transcript_factory.transcript.user_turns == [request.message]
+    assert transcript_factory.transcript.events == original_events

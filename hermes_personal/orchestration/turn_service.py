@@ -8,6 +8,7 @@ from hermes_personal.contracts import AgentEvent, AgentTurnRequest
 from hermes_personal.identity import IdentityRepository, UnknownIdentity
 from hermes_personal.sessions import SessionRepository, UnknownSession
 
+from .event_repository import EventRepository
 from .ports import (
     AgentOutput,
     AuthorizationError,
@@ -69,16 +70,24 @@ class HermesTurnService:
         self,
         identity_repository: IdentityRepository,
         session_repository: SessionRepository,
+        event_repository: EventRepository,
         transcript_factory: TranscriptFactory,
         agent: UpstreamAgentPort,
     ) -> None:
         self._identity_repository = identity_repository
         self._session_repository = session_repository
+        self._event_repository = event_repository
         self._transcript_factory = transcript_factory
         self._agent = agent
 
     async def handle(self, request: AgentTurnRequest) -> AsyncIterator[AgentEvent]:
         self._validate_request(request)
+        replay = self._event_repository.claim(request)
+        if replay is not None:
+            for event in replay:
+                yield event
+            return
+
         transcript = self._transcript_factory.for_session(request.session_id)
         history = transcript.history
         transcript.append_user_turn(request.message)
@@ -92,7 +101,7 @@ class HermesTurnService:
                 raise
             except Exception as error:
                 failed = self._failed_event(request, 0, error)
-                transcript.append_event(failed)
+                self._persist_event(transcript, failed)
                 yield failed
                 return
 
@@ -104,7 +113,7 @@ class HermesTurnService:
                     raise
                 except Exception as error:
                     failed = self._failed_event(request, sequence, error)
-                    transcript.append_event(failed)
+                    self._persist_event(transcript, failed)
                     yield failed
                     return
 
@@ -113,12 +122,22 @@ class HermesTurnService:
 
                 self._validate_output_workflow(request, output)
                 event = self._event_from_output(request, sequence, output)
-                transcript.append_event(event)
+                self._persist_event(transcript, event)
                 yield event
+                if event.event_type in {"completed", "failed"}:
+                    return
                 sequence += 1
         finally:
             if outputs is not None:
                 await asyncio.shield(asyncio.to_thread(_close_iterator, outputs))
+
+    def _persist_event(self, transcript: Any, event: AgentEvent) -> None:
+        self._event_repository.append_event(event)
+        transcript.append_event(event)
+        if event.event_type == "completed":
+            self._event_repository.mark_terminal(event.turn_id, "completed")
+        elif event.event_type == "failed":
+            self._event_repository.mark_terminal(event.turn_id, "failed")
 
     def _validate_request(self, request: AgentTurnRequest) -> None:
         try:
