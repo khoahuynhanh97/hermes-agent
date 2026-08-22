@@ -4,7 +4,7 @@ from copy import deepcopy
 from types import MappingProxyType
 from typing import Any, Mapping, Protocol
 
-from hermes_personal.contracts import AgentEvent
+from hermes_personal.contracts import AgentEvent, to_primitive
 
 
 class TranscriptStore(Protocol):
@@ -15,6 +15,16 @@ class TranscriptStore(Protocol):
     ) -> None: ...
 
 
+def _freeze_transcript_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {key: _freeze_transcript_value(item) for key, item in value.items()}
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_transcript_value(item) for item in value)
+    return value
+
+
 class UpstreamTranscriptAdapter:
     def __init__(self, store: TranscriptStore, session_id: str) -> None:
         self._store = store
@@ -23,7 +33,7 @@ class UpstreamTranscriptAdapter:
     @property
     def history(self) -> tuple[Mapping[str, Any], ...]:
         return tuple(
-            MappingProxyType(deepcopy(message))
+            _freeze_transcript_value(deepcopy(message))
             for message in self._store.load_transcript(self._session_id)
         )
 
@@ -33,21 +43,12 @@ class UpstreamTranscriptAdapter:
         )
 
     def append_event(self, event: AgentEvent) -> None:
-        text = event.data.get("text", "")
+        event_metadata = to_primitive(event)
+        text = event_metadata["data"].get("text", "")
         message = {
             "role": "assistant",
             "content": text if isinstance(text, str) else "",
             "timestamp": event.occurred_at.isoformat(),
-            "event_metadata": {
-                "event_id": event.event_id,
-                "event_type": event.event_type,
-                "turn_id": event.turn_id,
-                "sequence": event.sequence,
-                "workflow_id": event.workflow_id,
-                "job_id": event.job_id,
-                "approval_id": event.approval_id,
-                "tool_call_id": event.tool_call_id,
-                "data": dict(event.data),
-            },
+            "event_metadata": event_metadata,
         }
         self._store.append_to_transcript(self._session_id, message, skip_db=False)

@@ -21,7 +21,7 @@ CREATE INDEX IF NOT EXISTS channel_identity_owner_idx
   ON channel_identity(owner_user_id, channel);
 CREATE TABLE IF NOT EXISTS conversation_session (
   session_id TEXT PRIMARY KEY,
-  owner_user_id TEXT NOT NULL,
+  owner_user_id TEXT NOT NULL REFERENCES global_user_identity(owner_user_id) ON DELETE RESTRICT,
   channel TEXT NOT NULL,
   external_conversation_id TEXT NOT NULL,
   active_workflow_id TEXT,
@@ -31,10 +31,10 @@ CREATE TABLE IF NOT EXISTS conversation_session (
 );
 CREATE TABLE IF NOT EXISTS workflow_handoff (
   handoff_id TEXT PRIMARY KEY,
-  owner_user_id TEXT NOT NULL,
+  owner_user_id TEXT NOT NULL REFERENCES global_user_identity(owner_user_id) ON DELETE RESTRICT,
   workflow_id TEXT NOT NULL,
-  source_session_id TEXT NOT NULL,
-  target_session_id TEXT NOT NULL,
+  source_session_id TEXT NOT NULL REFERENCES conversation_session(session_id) ON DELETE RESTRICT,
+  target_session_id TEXT NOT NULL REFERENCES conversation_session(session_id) ON DELETE RESTRICT,
   created_at TEXT NOT NULL,
   UNIQUE(workflow_id, target_session_id)
 );

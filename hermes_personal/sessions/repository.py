@@ -28,37 +28,32 @@ class SessionRepository:
         if not owner_user_id.strip() or not external_conversation_id.strip():
             raise ValueError("owner_user_id and external_conversation_id must not be blank")
 
+        now = datetime.now(timezone.utc)
         with self._connection:
-            session = self._find_by_channel(owner_user_id, channel, external_conversation_id)
+            self._connection.execute(
+                """
+                INSERT INTO conversation_session (
+                  session_id, owner_user_id, channel, external_conversation_id,
+                  active_workflow_id, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(owner_user_id, channel, external_conversation_id) DO NOTHING
+                """,
+                (
+                    f"session_{uuid4().hex}",
+                    owner_user_id,
+                    channel,
+                    external_conversation_id,
+                    workflow_id,
+                    now.isoformat(),
+                    now.isoformat(),
+                ),
+            )
+            session = self._find_by_channel(
+                owner_user_id, channel, external_conversation_id
+            )
             if session is None:
-                now = datetime.now(timezone.utc)
-                session = ConversationSession(
-                    session_id=f"session_{uuid4().hex}",
-                    owner_user_id=owner_user_id,
-                    channel=channel,
-                    external_conversation_id=external_conversation_id,
-                    active_workflow_id=workflow_id,
-                    created_at=now,
-                    updated_at=now,
-                )
-                self._connection.execute(
-                    """
-                    INSERT INTO conversation_session (
-                      session_id, owner_user_id, channel, external_conversation_id,
-                      active_workflow_id, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        session.session_id,
-                        session.owner_user_id,
-                        session.channel,
-                        session.external_conversation_id,
-                        session.active_workflow_id,
-                        session.created_at.isoformat(),
-                        session.updated_at.isoformat(),
-                    ),
-                )
-            elif workflow_id is not None and session.active_workflow_id != workflow_id:
+                raise RuntimeError("session insert did not produce a canonical row")
+            if workflow_id is not None and session.active_workflow_id != workflow_id:
                 session = self._set_active_workflow(session.session_id, workflow_id)
         return session
 
