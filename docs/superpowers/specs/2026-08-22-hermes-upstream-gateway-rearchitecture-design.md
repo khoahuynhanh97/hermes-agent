@@ -41,6 +41,11 @@ the new Gateway-first replacement strategy before implementation cutover.
 
 The current repository is a self-contained derivative of
 `NousResearch/hermes-agent`, not a clean, currently traceable upstream mirror.
+At the approved design baseline, local commit
+`9d63f406f264b3513af9e369bb8d8638f4c02261` and upstream `main` commit
+`0012dd1e0c7efc7e86fa75b89567a492057f0c02` have no Git merge base. They are
+unrelated histories and must not be combined with
+`git merge --allow-unrelated-histories`.
 It contains the upstream-style `AIAgent`, conversation loop, Gateway, MCP
 discovery, memory, session search, skills, and curator foundations, plus custom
 Product Intelligence, knowledge, job, and Video Factory modules.
@@ -131,9 +136,11 @@ provider invocation.
 
 ## 6. Logical Components
 
-The boundaries below are logical. The implementation plan must map them onto
-the existing `src/hermes` layout without moving upstream code merely for naming
-symmetry.
+The boundaries below are logical. The clean target keeps the upstream package
+layout and places product-specific application code in a separately owned
+`hermes_personal` package, plugins, skills, and MCP adapters. It does not move
+upstream code merely for naming symmetry. The legacy `src/hermes` tree remains
+a migration source until its behavior and data have been ported.
 
 ### 6.1 Gateway Adapters
 
@@ -405,6 +412,10 @@ asset IDs are prohibited.
 ## 16. Upstream And Customization Strategy
 
 The repository must record an `upstream` remote and a pinned upstream base SHA.
+Because the existing fork and upstream have unrelated Git histories, the target
+branch is created from the pinned upstream commit in an isolated worktree.
+Custom components are ported through reviewed commits and contract tests; the
+two roots are never joined with an unrelated-history merge.
 Upstream core files are changed only for isolated, tested defects that cannot be
 implemented through a public boundary. Project-specific behavior belongs in
 Gateway adapters, application services, plugins, skills, MCP integrations, or
@@ -420,7 +431,8 @@ pass.
 The target architecture is clean, but migration is staged rather than a
 big-bang replacement:
 
-1. Record the upstream base, architecture inventory, and replacement ADR.
+1. Record the upstream base, architecture inventory, and replacement ADR; then
+   create the clean target branch and isolated worktree from that upstream SHA.
 2. Freeze canonical request, event, capability, workflow, approval, and budget
    contracts.
 3. Build the new Gateway and Application boundaries beside legacy paths.
