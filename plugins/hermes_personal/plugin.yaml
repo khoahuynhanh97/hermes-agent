@@ -1,0 +1,4 @@
+name: hermes-personal
+kind: integration
+version: 1.0.0
+description: Canonical personal Hermes ingress normalization and lifecycle wiring.
