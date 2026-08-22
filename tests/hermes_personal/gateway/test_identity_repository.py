@@ -1,0 +1,32 @@
+import pytest
+
+from hermes_personal.identity import IdentityConflict, IdentityRepository
+from hermes_personal.storage.sqlite import connect
+
+
+@pytest.fixture
+def identity_repository(tmp_path):
+    connection = connect(tmp_path / "identity.sqlite")
+    repository = IdentityRepository(connection)
+    try:
+        yield repository
+    finally:
+        connection.close()
+
+
+def test_same_owner_resolves_across_linked_channels(identity_repository):
+    owner = identity_repository.create_owner("Khoa")
+    identity_repository.link(owner.owner_user_id, "telegram", "tg:42")
+    identity_repository.link(owner.owner_user_id, "web", "oidc:khoa")
+
+    assert identity_repository.resolve("telegram", "tg:42") == owner
+    assert identity_repository.resolve("web", "oidc:khoa") == owner
+
+
+def test_external_subject_cannot_be_reassigned(identity_repository):
+    first = identity_repository.create_owner("first")
+    second = identity_repository.create_owner("second")
+    identity_repository.link(first.owner_user_id, "cli", "local:khoa")
+
+    with pytest.raises(IdentityConflict):
+        identity_repository.link(second.owner_user_id, "cli", "local:khoa")
