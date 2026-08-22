@@ -325,7 +325,7 @@ def test_mark_terminal_rejects_mismatched_terminal_event_and_status(
     status = connection.execute(
         "SELECT status FROM turn_execution WHERE turn_id = ?", (request.turn_id,)
     ).fetchone()["status"]
-    assert status == "in_progress"
+    assert status == event_type
 
 
 @pytest.mark.parametrize("status", ["completed", "failed"])
@@ -348,3 +348,55 @@ def test_append_event_rejects_after_turn_is_terminal(repository_environment, sta
     ).fetchone()["status"]
     assert current_status == status
 
+
+def test_claim_recovers_stale_in_progress_execution_after_lease_timeout(
+    repository_environment,
+):
+    _, connection, repository, owner, session, _ = repository_environment
+    stale_time = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+    request = make_request(owner.owner_user_id, session.session_id)
+    repository.claim(request)
+    repository.append_event(make_event(request, 0, "text_delta"))
+
+    connection.execute(
+        "UPDATE turn_execution SET updated_at = ? WHERE turn_id = ?",
+        (stale_time, request.turn_id),
+    )
+    connection.commit()
+
+    retry_request = replace(
+        request,
+        turn_id="turn_recovered",
+        occurred_at=datetime.now(timezone.utc),
+    )
+    claim_result = repository.claim(retry_request, lease_timeout_seconds=30.0)
+    assert claim_result is None
+
+    row = connection.execute(
+        "SELECT * FROM turn_execution WHERE owner_user_id = ? AND idempotency_key = ?",
+        (owner.owner_user_id, request.idempotency_key),
+    ).fetchone()
+    assert row["turn_id"] == "turn_recovered"
+    assert row["status"] == "in_progress"
+
+    old_events = connection.execute(
+        "SELECT * FROM turn_event WHERE turn_id = ?", (request.turn_id,)
+    ).fetchall()
+    assert len(old_events) == 0
+
+
+def test_claim_rejects_active_in_progress_execution_within_lease_timeout(
+    repository_environment,
+):
+    _, _, repository, owner, session, _ = repository_environment
+    request = make_request(owner.owner_user_id, session.session_id)
+    repository.claim(request)
+
+    retry_request = replace(
+        request,
+        turn_id="turn_concurrent",
+        occurred_at=datetime.now(timezone.utc),
+    )
+    with pytest.raises(TurnInProgress) as raised:
+        repository.claim(retry_request, lease_timeout_seconds=30.0)
+    assert raised.value.turn_id == request.turn_id

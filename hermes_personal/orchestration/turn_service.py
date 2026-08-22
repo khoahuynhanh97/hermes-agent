@@ -97,7 +97,9 @@ class HermesTurnService:
                 outputs = await _start_agent_in_worker(
                     self._agent, request, history
                 )
-            except AuthorizationError:
+            except AuthorizationError as error:
+                failed = self._failed_event(request, 0, error)
+                self._persist_event(transcript, failed)
                 raise
             except Exception as error:
                 failed = self._failed_event(request, 0, error)
@@ -109,7 +111,9 @@ class HermesTurnService:
             while True:
                 try:
                     output = await _advance_iterator_in_worker(outputs)
-                except AuthorizationError:
+                except AuthorizationError as error:
+                    failed = self._failed_event(request, sequence, error)
+                    self._persist_event(transcript, failed)
                     raise
                 except Exception as error:
                     failed = self._failed_event(request, sequence, error)
@@ -120,7 +124,13 @@ class HermesTurnService:
                 if output is None:
                     return
 
-                self._validate_output_workflow(request, output)
+                try:
+                    self._validate_output_workflow(request, output)
+                except AuthorizationError as error:
+                    failed = self._failed_event(request, sequence, error)
+                    self._persist_event(transcript, failed)
+                    raise
+
                 event = self._event_from_output(request, sequence, output)
                 self._persist_event(transcript, event)
                 yield event
@@ -133,11 +143,11 @@ class HermesTurnService:
 
     def _persist_event(self, transcript: Any, event: AgentEvent) -> None:
         self._event_repository.append_event(event)
-        transcript.append_event(event)
-        if event.event_type == "completed":
-            self._event_repository.mark_terminal(event.turn_id, "completed")
-        elif event.event_type == "failed":
-            self._event_repository.mark_terminal(event.turn_id, "failed")
+        try:
+            transcript.append_event(event)
+        except Exception:
+            # Replay store is canonical; projection failures do not corrupt repository state
+            pass
 
     def _validate_request(self, request: AgentTurnRequest) -> None:
         try:

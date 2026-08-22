@@ -465,16 +465,82 @@ def test_agent_output_copies_and_recursively_freezes_data():
 
 
 @pytest.mark.asyncio
+@dataclass
+class FailingTranscript(FakeTranscript):
+    fail_on_event_types: set[str] = field(default_factory=lambda: {"completed", "failed"})
+
+    def append_event(self, event: AgentEvent) -> None:
+        if event.event_type in self.fail_on_event_types:
+            raise RuntimeError("transcript disk full")
+        super().append_event(event)
+
+
+@pytest.mark.asyncio
+async def test_turn_terminal_status_is_committed_atomically_even_if_transcript_append_fails(
+    turn_environment, request_factory
+):
+    _, identities, sessions, _, _, _, _ = turn_environment
+    failing_transcript = FailingTranscript()
+    agent = FakeAgent(output=[AgentOutput("completed", {"text": "done"})])
+    service = build_service(
+        identities,
+        sessions,
+        FakeTranscriptFactory(failing_transcript),
+        agent,
+    )
+    request = request_factory()
+
+    events = [event async for event in service.handle(request)]
+    assert len(events) == 1
+    assert events[0].event_type == "completed"
+
+    # Execution status in SQLite was committed as completed atomically
+    status = sessions._connection.execute(
+        "SELECT status FROM turn_execution WHERE turn_id = ?", (request.turn_id,)
+    ).fetchone()["status"]
+    assert status == "completed"
+
+    stored_events = sessions._connection.execute(
+        "SELECT event_id, sequence FROM turn_event WHERE turn_id = ?", (request.turn_id,)
+    ).fetchall()
+    assert len(stored_events) == 1
+
+    # Retry replays exact stored events without second agent call or duplicate user turns
+    replay = [
+        event
+        async for event in service.handle(replace(request, turn_id="turn_retry"))
+    ]
+    assert replay == events
+    assert len(agent.calls) == 1
+    assert failing_transcript.user_turns == [request.message]
+
+
+@pytest.mark.asyncio
 async def test_turn_rejects_agent_workflow_when_request_has_no_workflow(
     turn_environment, request_factory
 ):
-    service, _, _, _, _, transcript_factory, agent = turn_environment
+    service, _, sessions, _, _, transcript_factory, agent = turn_environment
     agent.output = [AgentOutput("workflow_state", {}, workflow_id="wf_7")]
+    request = request_factory()
 
     with pytest.raises(AuthorizationError):
-        [event async for event in service.handle(request_factory())]
+        [event async for event in service.handle(request)]
 
-    assert transcript_factory.transcript.events == []
+    status = sessions._connection.execute(
+        "SELECT status FROM turn_execution WHERE turn_id = ?", (request.turn_id,)
+    ).fetchone()["status"]
+    assert status == "failed"
+    assert len(transcript_factory.transcript.events) == 1
+    assert transcript_factory.transcript.events[0].event_type == "failed"
+
+    # Replay returns stored failed event without second agent call
+    replay = [
+        event
+        async for event in service.handle(replace(request, turn_id="turn_retry"))
+    ]
+    assert [e.event_type for e in replay] == ["failed"]
+    assert len(agent.calls) == 1
+    assert transcript_factory.transcript.user_turns == [request.message]
 
 
 @pytest.mark.asyncio
@@ -484,11 +550,25 @@ async def test_turn_rejects_agent_workflow_that_differs_from_authorized_request(
     service, _, sessions, _, session, transcript_factory, agent = turn_environment
     sessions.link_workflow(session.session_id, "wf_7")
     agent.output = [AgentOutput("workflow_state", {}, workflow_id="wf_other")]
+    request = request_factory(workflow_id="wf_7")
 
     with pytest.raises(AuthorizationError):
-        [event async for event in service.handle(request_factory(workflow_id="wf_7"))]
+        [event async for event in service.handle(request)]
 
-    assert transcript_factory.transcript.events == []
+    status = sessions._connection.execute(
+        "SELECT status FROM turn_execution WHERE turn_id = ?", (request.turn_id,)
+    ).fetchone()["status"]
+    assert status == "failed"
+    assert len(transcript_factory.transcript.events) == 1
+    assert transcript_factory.transcript.events[0].event_type == "failed"
+
+    replay = [
+        event
+        async for event in service.handle(replace(request, turn_id="turn_retry"))
+    ]
+    assert [e.event_type for e in replay] == ["failed"]
+    assert len(agent.calls) == 1
+    assert transcript_factory.transcript.user_turns == [request.message]
 
 
 @pytest.mark.asyncio
@@ -521,34 +601,64 @@ async def test_turn_preserves_optional_correlation_for_authorized_workflow(
 
 
 @pytest.mark.asyncio
-async def test_turn_propagates_agent_start_authorization_error_without_failed_event(
+async def test_turn_propagates_agent_start_authorization_error_with_persisted_failed_state(
     turn_environment, request_factory
 ):
     _, identities, sessions, _, _, transcript_factory, _ = turn_environment
+    start_failure_agent = StartFailureAgent(AuthorizationError("agent start denied"))
     service = build_service(
         identities,
         sessions,
         FakeTranscriptFactory(transcript_factory.transcript),
-        StartFailureAgent(AuthorizationError("agent start denied")),
+        start_failure_agent,
     )
+    request = request_factory()
 
     with pytest.raises(AuthorizationError, match="agent start denied"):
-        [event async for event in service.handle(request_factory())]
+        [event async for event in service.handle(request)]
 
-    assert transcript_factory.transcript.events == []
+    status = sessions._connection.execute(
+        "SELECT status FROM turn_execution WHERE turn_id = ?", (request.turn_id,)
+    ).fetchone()["status"]
+    assert status == "failed"
+    assert len(transcript_factory.transcript.events) == 1
+    assert transcript_factory.transcript.events[0].event_type == "failed"
+
+    # Retry returns replayed failed event without second agent call
+    replay = [
+        event
+        async for event in service.handle(replace(request, turn_id="turn_retry"))
+    ]
+    assert [e.event_type for e in replay] == ["failed"]
+    assert transcript_factory.transcript.user_turns == [request.message]
 
 
 @pytest.mark.asyncio
-async def test_turn_propagates_agent_advance_authorization_error_without_failed_event(
+async def test_turn_propagates_agent_advance_authorization_error_with_persisted_failed_state(
     turn_environment, request_factory
 ):
-    service, _, _, _, _, transcript_factory, agent = turn_environment
+    service, _, sessions, _, _, transcript_factory, agent = turn_environment
     agent.failure = AuthorizationError("agent advance denied")
+    request = request_factory()
 
     with pytest.raises(AuthorizationError, match="agent advance denied"):
-        [event async for event in service.handle(request_factory())]
+        [event async for event in service.handle(request)]
 
-    assert transcript_factory.transcript.events == []
+    status = sessions._connection.execute(
+        "SELECT status FROM turn_execution WHERE turn_id = ?", (request.turn_id,)
+    ).fetchone()["status"]
+    assert status == "failed"
+    assert len(transcript_factory.transcript.events) == 1
+    assert transcript_factory.transcript.events[0].event_type == "failed"
+
+    replay = [
+        event
+        async for event in service.handle(replace(request, turn_id="turn_retry"))
+    ]
+    assert [e.event_type for e in replay] == ["failed"]
+    assert len(agent.calls) == 1
+    assert transcript_factory.transcript.user_turns == [request.message]
+
 
 
 @pytest.mark.asyncio

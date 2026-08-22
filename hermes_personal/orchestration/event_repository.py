@@ -82,20 +82,26 @@ class EventRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
 
-    def claim(self, request: AgentTurnRequest) -> tuple[AgentEvent, ...] | None:
+    def claim(
+        self,
+        request: AgentTurnRequest,
+        *,
+        lease_timeout_seconds: float = 30.0,
+    ) -> tuple[AgentEvent, ...] | None:
         digest = _request_digest(request)
         with self._connection:
             self._connection.execute("BEGIN IMMEDIATE")
             row = self._connection.execute(
                 """
-                SELECT request_digest, turn_id, status
+                SELECT request_digest, turn_id, status, updated_at
                 FROM turn_execution
                 WHERE owner_user_id = ? AND idempotency_key = ?
                 """,
                 (request.principal.owner_user_id, request.idempotency_key),
             ).fetchone()
+            now = datetime.now(timezone.utc)
+            now_iso = now.isoformat()
             if row is None:
-                now = datetime.now(timezone.utc).isoformat()
                 self._connection.execute(
                     """
                     INSERT INTO turn_execution (
@@ -109,8 +115,8 @@ class EventRepository:
                         digest,
                         request.turn_id,
                         request.session_id,
-                        now,
-                        now,
+                        now_iso,
+                        now_iso,
                     ),
                 )
                 return None
@@ -118,6 +124,34 @@ class EventRepository:
             if row["request_digest"] != digest:
                 raise IdempotencyConflict(request.idempotency_key)
             if row["status"] == "in_progress":
+                try:
+                    updated_at = datetime.fromisoformat(row["updated_at"])
+                    age_seconds = (now - updated_at).total_seconds()
+                except Exception:
+                    age_seconds = 0.0
+                if age_seconds > lease_timeout_seconds:
+                    old_turn_id = row["turn_id"]
+                    self._connection.execute(
+                        """
+                        DELETE FROM turn_event WHERE turn_id = ?
+                        """,
+                        (old_turn_id,),
+                    )
+                    self._connection.execute(
+                        """
+                        UPDATE turn_execution
+                        SET turn_id = ?, session_id = ?, updated_at = ?
+                        WHERE owner_user_id = ? AND idempotency_key = ? AND status = 'in_progress'
+                        """,
+                        (
+                            request.turn_id,
+                            request.session_id,
+                            now_iso,
+                            request.principal.owner_user_id,
+                            request.idempotency_key,
+                        ),
+                    )
+                    return None
                 raise TurnInProgress(row["turn_id"])
             return self._load_events(row["turn_id"])
 
@@ -152,6 +186,25 @@ class EventRepository:
                 """,
                 (event.turn_id, event.sequence, event.event_id, payload_json),
             )
+            now_iso = datetime.now(timezone.utc).isoformat()
+            if event.event_type in {"completed", "failed"}:
+                self._connection.execute(
+                    """
+                    UPDATE turn_execution
+                    SET status = ?, updated_at = ?
+                    WHERE turn_id = ? AND status = 'in_progress'
+                    """,
+                    (event.event_type, now_iso, event.turn_id),
+                )
+            else:
+                self._connection.execute(
+                    """
+                    UPDATE turn_execution
+                    SET updated_at = ?
+                    WHERE turn_id = ? AND status = 'in_progress'
+                    """,
+                    (now_iso, event.turn_id),
+                )
 
     def mark_terminal(self, turn_id: str, status: TerminalStatus) -> None:
         if status not in {"completed", "failed"}:
@@ -173,6 +226,16 @@ class EventRepository:
             if latest_payload.get("event_type") != status:
                 raise RuntimeError("latest stored event does not match terminal status")
 
+            execution = self._connection.execute(
+                """
+                SELECT status FROM turn_execution WHERE turn_id = ?
+                """,
+                (turn_id,),
+            ).fetchone()
+            if execution is None:
+                raise RuntimeError("claimed turn is missing or already terminal")
+            if execution["status"] == status:
+                return
             cursor = self._connection.execute(
                 """
                 UPDATE turn_execution
