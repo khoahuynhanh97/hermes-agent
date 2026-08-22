@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import threading
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any, Mapping
@@ -62,6 +65,53 @@ class FakeAgent:
         yield from self.output
         if self.failure is not None:
             raise self.failure
+
+
+class StartFailureAgent:
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    def run(
+        self, request: AgentTurnRequest, history: tuple[Mapping[str, Any], ...]
+    ) -> Iterator[AgentOutput]:
+        raise self._error
+
+
+class SlowIterator:
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.finished = threading.Event()
+        self.closed = threading.Event()
+        self._emitted = False
+
+    def __iter__(self) -> SlowIterator:
+        return self
+
+    def __next__(self) -> AgentOutput:
+        self.started.set()
+        try:
+            time.sleep(0.1)
+            if self._emitted:
+                raise StopIteration
+            self._emitted = True
+            return AgentOutput("completed", {})
+        finally:
+            self.finished.set()
+
+    def close(self) -> None:
+        if self.started.is_set() and not self.finished.is_set():
+            raise RuntimeError("iterator closed while advancing")
+        self.closed.set()
+
+
+class SlowAgent:
+    def __init__(self) -> None:
+        self.iterator = SlowIterator()
+
+    def run(
+        self, request: AgentTurnRequest, history: tuple[Mapping[str, Any], ...]
+    ) -> Iterator[AgentOutput]:
+        return self.iterator
 
 
 @pytest.fixture
@@ -211,4 +261,150 @@ async def test_turn_streams_monotonic_events_from_one_agent(
     events = [event async for event in service.handle(request_factory())]
 
     assert [event.sequence for event in events] == [0, 1]
+    assert all(event.event_id.startswith("evt_") for event in events)
     assert agent.calls[0][0].workflow_id is None
+
+
+def test_agent_output_copies_and_recursively_freezes_data():
+    source = {"text": "before", "nested": {"items": ["one"]}}
+
+    output = AgentOutput("text_delta", source)
+    source["text"] = "after"
+    source["nested"]["items"].append("two")
+
+    assert output.data == {"text": "before", "nested": {"items": ("one",)}}
+    with pytest.raises(TypeError):
+        output.data["text"] = "mutated"
+    with pytest.raises(TypeError):
+        output.data["nested"]["items"] = ()
+    with pytest.raises(AttributeError):
+        output.data["nested"]["items"].append("mutated")
+
+
+@pytest.mark.asyncio
+async def test_turn_rejects_agent_workflow_when_request_has_no_workflow(
+    turn_environment, request_factory
+):
+    service, _, _, _, _, transcript_factory, agent = turn_environment
+    agent.output = [AgentOutput("workflow_state", {}, workflow_id="wf_7")]
+
+    with pytest.raises(AuthorizationError):
+        [event async for event in service.handle(request_factory())]
+
+    assert transcript_factory.transcript.events == []
+
+
+@pytest.mark.asyncio
+async def test_turn_rejects_agent_workflow_that_differs_from_authorized_request(
+    turn_environment, request_factory
+):
+    service, _, sessions, _, session, transcript_factory, agent = turn_environment
+    sessions.link_workflow(session.session_id, "wf_7")
+    agent.output = [AgentOutput("workflow_state", {}, workflow_id="wf_other")]
+
+    with pytest.raises(AuthorizationError):
+        [event async for event in service.handle(request_factory(workflow_id="wf_7"))]
+
+    assert transcript_factory.transcript.events == []
+
+
+@pytest.mark.asyncio
+async def test_turn_preserves_optional_correlation_for_authorized_workflow(
+    turn_environment, request_factory
+):
+    service, _, sessions, _, session, _, agent = turn_environment
+    sessions.link_workflow(session.session_id, "wf_7")
+    agent.output = [
+        AgentOutput(
+            "workflow_state",
+            {"state": "running"},
+            workflow_id="wf_7",
+            job_id="job_7",
+            approval_id="approval_7",
+            tool_call_id="tool_7",
+        )
+    ]
+
+    events = [
+        event async for event in service.handle(request_factory(workflow_id="wf_7"))
+    ]
+
+    assert (
+        events[0].workflow_id,
+        events[0].job_id,
+        events[0].approval_id,
+        events[0].tool_call_id,
+    ) == ("wf_7", "job_7", "approval_7", "tool_7")
+
+
+@pytest.mark.asyncio
+async def test_turn_propagates_agent_start_authorization_error_without_failed_event(
+    turn_environment, request_factory
+):
+    _, identities, sessions, _, _, transcript_factory, _ = turn_environment
+    service = HermesTurnService(
+        identities,
+        sessions,
+        FakeTranscriptFactory(transcript_factory.transcript),
+        StartFailureAgent(AuthorizationError("agent start denied")),
+    )
+
+    with pytest.raises(AuthorizationError, match="agent start denied"):
+        [event async for event in service.handle(request_factory())]
+
+    assert transcript_factory.transcript.events == []
+
+
+@pytest.mark.asyncio
+async def test_turn_propagates_agent_advance_authorization_error_without_failed_event(
+    turn_environment, request_factory
+):
+    service, _, _, _, _, transcript_factory, agent = turn_environment
+    agent.failure = AuthorizationError("agent advance denied")
+
+    with pytest.raises(AuthorizationError, match="agent advance denied"):
+        [event async for event in service.handle(request_factory())]
+
+    assert transcript_factory.transcript.events == []
+
+
+@pytest.mark.asyncio
+async def test_turn_allows_concurrent_progress_while_slow_iterator_advances(
+    turn_environment, request_factory
+):
+    _, identities, sessions, _, _, transcript_factory, _ = turn_environment
+    slow_agent = SlowAgent()
+    service = HermesTurnService(identities, sessions, transcript_factory, slow_agent)
+    progressed = asyncio.Event()
+
+    async def mark_progress() -> None:
+        await asyncio.sleep(0.01)
+        progressed.set()
+
+    marker = asyncio.create_task(mark_progress())
+    stream = service.handle(request_factory())
+    event = await anext(stream)
+
+    assert progressed.is_set()
+    assert event.event_type == "completed"
+    await marker
+    await stream.aclose()
+    assert await asyncio.to_thread(slow_agent.iterator.closed.wait, 0.5)
+
+
+@pytest.mark.asyncio
+async def test_turn_closes_slow_iterator_when_consumer_is_cancelled(
+    turn_environment, request_factory
+):
+    _, identities, sessions, _, _, transcript_factory, _ = turn_environment
+    slow_agent = SlowAgent()
+    service = HermesTurnService(identities, sessions, transcript_factory, slow_agent)
+    stream = service.handle(request_factory())
+    pending = asyncio.create_task(anext(stream))
+
+    assert await asyncio.to_thread(slow_agent.iterator.started.wait, 0.5)
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+
+    assert await asyncio.to_thread(slow_agent.iterator.closed.wait, 0.5)

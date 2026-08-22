@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Iterator
 from typing import Any, Mapping
 
@@ -13,6 +14,54 @@ from .ports import (
     TranscriptFactory,
     UpstreamAgentPort,
 )
+
+
+def _advance_iterator(iterator: Iterator[AgentOutput]) -> AgentOutput | None:
+    try:
+        return next(iterator)
+    except StopIteration:
+        return None
+
+
+def _close_iterator(iterator: Iterator[AgentOutput]) -> None:
+    close = getattr(iterator, "close", None)
+    if callable(close):
+        close()
+
+
+async def _start_agent_in_worker(
+    agent: UpstreamAgentPort,
+    request: AgentTurnRequest,
+    history: tuple[Mapping[str, Any], ...],
+) -> Iterator[AgentOutput]:
+    task = asyncio.create_task(asyncio.to_thread(agent.run, request, history))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        try:
+            iterator = await asyncio.shield(task)
+        except Exception:
+            pass
+        else:
+            try:
+                await asyncio.shield(asyncio.to_thread(_close_iterator, iterator))
+            except Exception:
+                pass
+        raise
+
+
+async def _advance_iterator_in_worker(
+    iterator: Iterator[AgentOutput],
+) -> AgentOutput | None:
+    task = asyncio.create_task(asyncio.to_thread(_advance_iterator, iterator))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        try:
+            await asyncio.shield(task)
+        except Exception:
+            pass
+        raise
 
 
 class HermesTurnService:
@@ -32,26 +81,43 @@ class HermesTurnService:
         self._validate_request(request)
         transcript = self._transcript_factory.for_session(request.session_id)
         transcript.append_user_turn(request.message)
-        outputs = self._start_agent(request, transcript.history)
-        sequence = 0
-
-        while True:
+        outputs: Iterator[AgentOutput] | None = None
+        try:
             try:
-                output = next(outputs)
-            except StopIteration:
-                return
+                outputs = await _start_agent_in_worker(
+                    self._agent, request, transcript.history
+                )
             except AuthorizationError:
                 raise
             except Exception as error:
-                failed = self._failed_event(request, sequence, error)
+                failed = self._failed_event(request, 0, error)
                 transcript.append_event(failed)
                 yield failed
                 return
 
-            event = self._event_from_output(request, sequence, output)
-            transcript.append_event(event)
-            yield event
-            sequence += 1
+            sequence = 0
+            while True:
+                try:
+                    output = await _advance_iterator_in_worker(outputs)
+                except AuthorizationError:
+                    raise
+                except Exception as error:
+                    failed = self._failed_event(request, sequence, error)
+                    transcript.append_event(failed)
+                    yield failed
+                    return
+
+                if output is None:
+                    return
+
+                self._validate_output_workflow(request, output)
+                event = self._event_from_output(request, sequence, output)
+                transcript.append_event(event)
+                yield event
+                sequence += 1
+        finally:
+            if outputs is not None:
+                await asyncio.shield(asyncio.to_thread(_close_iterator, outputs))
 
     def _validate_request(self, request: AgentTurnRequest) -> None:
         try:
@@ -86,17 +152,12 @@ class HermesTurnService:
         if handoff is None or handoff.owner_user_id != owner_user_id:
             raise AuthorizationError("workflow is not authorized for this session")
 
-    def _start_agent(
-        self,
-        request: AgentTurnRequest,
-        history: tuple[Mapping[str, Any], ...],
-    ) -> Iterator[AgentOutput]:
-        try:
-            return iter(self._agent.run(request, history))
-        except AuthorizationError:
-            raise
-        except Exception as error:
-            return _FailedAgentIterator(error)
+    @staticmethod
+    def _validate_output_workflow(
+        request: AgentTurnRequest, output: AgentOutput
+    ) -> None:
+        if output.workflow_id is not None and output.workflow_id != request.workflow_id:
+            raise AuthorizationError("agent output workflow is not authorized")
 
     @staticmethod
     def _event_from_output(
@@ -109,7 +170,7 @@ class HermesTurnService:
             turn_id=request.turn_id,
             sequence=sequence,
             data=output.data,
-            workflow_id=output.workflow_id or request.workflow_id,
+            workflow_id=request.workflow_id,
             job_id=output.job_id,
             approval_id=output.approval_id,
             tool_call_id=output.tool_call_id,
@@ -128,18 +189,3 @@ class HermesTurnService:
             data={"error": str(error)},
             workflow_id=request.workflow_id,
         )
-
-
-class _FailedAgentIterator:
-    def __init__(self, error: Exception) -> None:
-        self._error = error
-        self._raised = False
-
-    def __iter__(self) -> _FailedAgentIterator:
-        return self
-
-    def __next__(self) -> AgentOutput:
-        if self._raised:
-            raise StopIteration
-        self._raised = True
-        raise self._error
