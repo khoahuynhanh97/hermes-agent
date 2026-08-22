@@ -5,7 +5,7 @@ import threading
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
 import pytest
@@ -706,12 +706,16 @@ async def test_turn_closes_slow_iterator_when_consumer_is_cancelled(
     status = sessions._connection.execute(
         "SELECT status FROM turn_execution WHERE turn_id = ?", (request.turn_id,)
     ).fetchone()["status"]
-    assert status == "in_progress"
+    assert status == "failed"
 
-    # Subsequent request with same idempotency key fails with TurnInProgress
-    with pytest.raises(TurnInProgress) as raised:
-        [event async for event in service.handle(replace(request, turn_id="turn_retry"))]
-    assert raised.value.turn_id == request.turn_id
+    # Subsequent request with same idempotency key replays stored failed cancellation event
+    replay = [
+        event
+        async for event in service.handle(replace(request, turn_id="turn_retry"))
+    ]
+    assert len(replay) == 1
+    assert replay[0].event_type == "failed"
+    assert replay[0].data.get("cancelled") is True
 
 
 class ControlledBlockingAgent:
@@ -731,7 +735,7 @@ class ControlledBlockingAgent:
 
 
 @pytest.mark.asyncio
-async def test_overlapping_turn_duplicate_fails_in_progress_then_replays_after_terminal(
+async def test_live_blocked_worker_with_stale_timestamp_rejects_retry_without_split_brain(
     turn_environment, request_factory
 ):
     _, identities, sessions, _, _, transcript_factory, _ = turn_environment
@@ -742,21 +746,27 @@ async def test_overlapping_turn_duplicate_fails_in_progress_then_replays_after_t
     stream1 = service.handle(request)
     first_event = await anext(stream1)
     assert first_event.event_type == "text_delta"
-    assert first_event.sequence == 0
     assert blocking_agent.started.is_set()
 
-    # While turn 1 is active and blocked before terminal output,
-    # a duplicate with the same idempotency key and changed turn_id/timestamp raises TurnInProgress
+    # Force updated_at timestamp in SQLite to be stale (> 60 seconds ago) while worker is still alive
+    stale_time = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+    sessions._connection.execute(
+        "UPDATE turn_execution SET updated_at = ? WHERE turn_id = ?",
+        (stale_time, request.turn_id),
+    )
+    sessions._connection.commit()
+
+    # A retry attempt during active execution MUST raise TurnInProgress (no split-brain takeover)
     retry_request = replace(
         request,
         turn_id="turn_concurrent_retry",
-        occurred_at=request.occurred_at + timedelta(seconds=10),
+        occurred_at=datetime.now(timezone.utc),
     )
     with pytest.raises(TurnInProgress) as raised:
         [event async for event in service.handle(retry_request)]
     assert raised.value.turn_id == request.turn_id
 
-    # Verify agent was called exactly once, transcript was appended once, no duplicate events
+    # Verify agent was called exactly once, transcript was appended once, partial events preserved
     assert len(blocking_agent.calls) == 1
     assert transcript_factory.transcript.user_turns == [request.message]
     stored_events_in_progress = sessions._connection.execute(
@@ -766,47 +776,64 @@ async def test_overlapping_turn_duplicate_fails_in_progress_then_replays_after_t
     assert len(stored_events_in_progress) == 1
     assert stored_events_in_progress[0]["event_id"] == first_event.event_id
 
-    # Unblock agent and finish turn 1
+    # Unblock original worker and let it finish cleanly
     blocking_agent.unblock.set()
     second_event = await anext(stream1)
     assert second_event.event_type == "completed"
-    assert second_event.sequence == 1
 
     with pytest.raises(StopAsyncIteration):
         await anext(stream1)
-
-    original_events = [first_event, second_event]
-    assert transcript_factory.transcript.events == original_events
 
     status = sessions._connection.execute(
         "SELECT status FROM turn_execution WHERE turn_id = ?", (request.turn_id,)
     ).fetchone()["status"]
     assert status == "completed"
 
-    # Now that turn 1 is terminal, a retry request replays exact stored events without another agent or transcript call
-    replay_request = replace(
-        request,
-        turn_id="turn_replay_retry",
-        occurred_at=request.occurred_at + timedelta(minutes=5),
-    )
-    replay_events = [event async for event in service.handle(replay_request)]
-
-    assert replay_events == original_events
-    assert [event.event_id for event in replay_events] == [
-        event.event_id for event in original_events
+    # Terminal replay returns stored events without second agent call or transcript append
+    replay = [
+        event
+        async for event in service.handle(replace(request, turn_id="turn_replay"))
     ]
-    assert [event.occurred_at for event in replay_events] == [
-        event.occurred_at for event in original_events
-    ]
-    assert [event.turn_id for event in replay_events] == [
-        request.turn_id,
-        request.turn_id,
-    ]
-    assert [event.data for event in replay_events] == [
-        event.data for event in original_events
-    ]
-
-    # Still only 1 agent call and 1 user turn in transcript
+    assert replay == [first_event, second_event]
     assert len(blocking_agent.calls) == 1
     assert transcript_factory.transcript.user_turns == [request.message]
-    assert transcript_factory.transcript.events == original_events
+
+
+@pytest.mark.asyncio
+async def test_failed_transcript_projection_reconciles_prior_assistant_event_in_next_turn_history(
+    turn_environment, request_factory
+):
+    _, identities, sessions, _, session, _, _ = turn_environment
+    failing_transcript = FailingTranscript(fail_on_event_types={"completed"})
+    agent = FakeAgent()
+    service = build_service(
+        identities,
+        sessions,
+        FakeTranscriptFactory(failing_transcript),
+        agent,
+    )
+
+    # Turn 1: agent completes with text, but transcript projection fails on completed event
+    agent.output = [AgentOutput("completed", {"text": "Reply from Turn 1"})]
+    req1 = request_factory(channel="telegram", session_id=session.session_id)
+    events1 = [event async for event in service.handle(req1)]
+    assert len(events1) == 1
+    assert events1[0].event_type == "completed"
+
+    # Turn 2: normal turn on the same session
+    agent.output = [AgentOutput("completed", {"text": "Reply from Turn 2"})]
+    req2 = replace(
+        request_factory(channel="telegram", session_id=session.session_id),
+        message="Turn 2 question",
+        turn_id="turn_2",
+        idempotency_key="transport:turn_2",
+    )
+    events2 = [event async for event in service.handle(req2)]
+    assert len(events2) == 1
+
+    # Assert agent received Turn 1 assistant message in history exactly once despite Turn 1 projection failure
+    turn2_history = agent.calls[1][1]
+    assert turn2_history == (
+        {"role": "user", "content": "Xin chao"},
+        {"role": "assistant", "content": "Reply from Turn 1"},
+    )

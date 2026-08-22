@@ -82,26 +82,20 @@ class EventRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
 
-    def claim(
-        self,
-        request: AgentTurnRequest,
-        *,
-        lease_timeout_seconds: float = 30.0,
-    ) -> tuple[AgentEvent, ...] | None:
+    def claim(self, request: AgentTurnRequest) -> tuple[AgentEvent, ...] | None:
         digest = _request_digest(request)
         with self._connection:
             self._connection.execute("BEGIN IMMEDIATE")
             row = self._connection.execute(
                 """
-                SELECT request_digest, turn_id, status, updated_at
+                SELECT request_digest, turn_id, status
                 FROM turn_execution
                 WHERE owner_user_id = ? AND idempotency_key = ?
                 """,
                 (request.principal.owner_user_id, request.idempotency_key),
             ).fetchone()
-            now = datetime.now(timezone.utc)
-            now_iso = now.isoformat()
             if row is None:
+                now_iso = datetime.now(timezone.utc).isoformat()
                 self._connection.execute(
                     """
                     INSERT INTO turn_execution (
@@ -124,34 +118,6 @@ class EventRepository:
             if row["request_digest"] != digest:
                 raise IdempotencyConflict(request.idempotency_key)
             if row["status"] == "in_progress":
-                try:
-                    updated_at = datetime.fromisoformat(row["updated_at"])
-                    age_seconds = (now - updated_at).total_seconds()
-                except Exception:
-                    age_seconds = 0.0
-                if age_seconds > lease_timeout_seconds:
-                    old_turn_id = row["turn_id"]
-                    self._connection.execute(
-                        """
-                        DELETE FROM turn_event WHERE turn_id = ?
-                        """,
-                        (old_turn_id,),
-                    )
-                    self._connection.execute(
-                        """
-                        UPDATE turn_execution
-                        SET turn_id = ?, session_id = ?, updated_at = ?
-                        WHERE owner_user_id = ? AND idempotency_key = ? AND status = 'in_progress'
-                        """,
-                        (
-                            request.turn_id,
-                            request.session_id,
-                            now_iso,
-                            request.principal.owner_user_id,
-                            request.idempotency_key,
-                        ),
-                    )
-                    return None
                 raise TurnInProgress(row["turn_id"])
             return self._load_events(row["turn_id"])
 
@@ -246,6 +212,19 @@ class EventRepository:
             )
             if cursor.rowcount != 1:
                 raise RuntimeError("claimed turn is missing or already terminal")
+
+    def load_session_events(self, session_id: str) -> tuple[AgentEvent, ...]:
+        rows = self._connection.execute(
+            """
+            SELECT e.sequence, e.event_id, e.payload_json
+            FROM turn_event e
+            JOIN turn_execution x ON e.turn_id = x.turn_id
+            WHERE x.session_id = ? AND x.status IN ('completed', 'failed')
+            ORDER BY x.created_at, e.sequence
+            """,
+            (session_id,),
+        ).fetchall()
+        return tuple(_deserialize_event(row) for row in rows)
 
     def _load_events(self, turn_id: str) -> tuple[AgentEvent, ...]:
         rows = self._connection.execute(

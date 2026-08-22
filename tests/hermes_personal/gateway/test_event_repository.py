@@ -62,7 +62,12 @@ def make_request(
     )
 
 
-def make_event(request: AgentTurnRequest, sequence: int, event_type="text_delta"):
+def make_event(
+    request: AgentTurnRequest,
+    sequence: int,
+    event_type="text_delta",
+    event_id: str | None = None,
+):
     return AgentEvent(
         event_type=event_type,
         principal_id=request.principal.owner_user_id,
@@ -71,7 +76,7 @@ def make_event(request: AgentTurnRequest, sequence: int, event_type="text_delta"
         sequence=sequence,
         data={"text": f"part {sequence}", "nested": {"items": ["one"]}},
         occurred_at=datetime(2026, 8, 22, 1, sequence, tzinfo=timezone.utc),
-        event_id=f"evt_fixed_{sequence}",
+        event_id=event_id or f"evt_{request.turn_id}_{sequence}",
     )
 
 
@@ -192,10 +197,10 @@ def test_event_sequence_and_event_id_are_unique(repository_environment):
     with pytest.raises(sqlite3.IntegrityError):
         repository.append_event(replace(make_event(request, 0), event_id="evt_other"))
     with pytest.raises(sqlite3.IntegrityError):
-        repository.append_event(replace(make_event(request, 1), event_id="evt_fixed_0"))
+        repository.append_event(replace(make_event(request, 1), event_id=f"evt_{request.turn_id}_0"))
 
     rows = connection.execute("SELECT event_id FROM turn_event").fetchall()
-    assert [row["event_id"] for row in rows] == ["evt_fixed_0"]
+    assert [row["event_id"] for row in rows] == [f"evt_{request.turn_id}_0"]
 
 
 @pytest.mark.parametrize(
@@ -228,7 +233,10 @@ def test_terminal_replay_survives_sqlite_reopen_with_exact_immutable_events(
         reopened.close()
 
     assert replay is not None
-    assert [event.event_id for event in replay] == ["evt_fixed_0", "evt_fixed_1"]
+    assert [event.event_id for event in replay] == [
+        f"evt_{request.turn_id}_0",
+        f"evt_{request.turn_id}_1",
+    ]
     assert [event.sequence for event in replay] == [0, 1]
     assert [event.turn_id for event in replay] == [request.turn_id, request.turn_id]
     assert [event.occurred_at for event in replay] == [
@@ -349,7 +357,7 @@ def test_append_event_rejects_after_turn_is_terminal(repository_environment, sta
     assert current_status == status
 
 
-def test_claim_recovers_stale_in_progress_execution_after_lease_timeout(
+def test_claim_rejects_in_progress_execution_and_preserves_events(
     repository_environment,
 ):
     _, connection, repository, owner, session, _ = repository_environment
@@ -366,37 +374,34 @@ def test_claim_recovers_stale_in_progress_execution_after_lease_timeout(
 
     retry_request = replace(
         request,
-        turn_id="turn_recovered",
-        occurred_at=datetime.now(timezone.utc),
-    )
-    claim_result = repository.claim(retry_request, lease_timeout_seconds=30.0)
-    assert claim_result is None
-
-    row = connection.execute(
-        "SELECT * FROM turn_execution WHERE owner_user_id = ? AND idempotency_key = ?",
-        (owner.owner_user_id, request.idempotency_key),
-    ).fetchone()
-    assert row["turn_id"] == "turn_recovered"
-    assert row["status"] == "in_progress"
-
-    old_events = connection.execute(
-        "SELECT * FROM turn_event WHERE turn_id = ?", (request.turn_id,)
-    ).fetchall()
-    assert len(old_events) == 0
-
-
-def test_claim_rejects_active_in_progress_execution_within_lease_timeout(
-    repository_environment,
-):
-    _, _, repository, owner, session, _ = repository_environment
-    request = make_request(owner.owner_user_id, session.session_id)
-    repository.claim(request)
-
-    retry_request = replace(
-        request,
-        turn_id="turn_concurrent",
+        turn_id="turn_retry",
         occurred_at=datetime.now(timezone.utc),
     )
     with pytest.raises(TurnInProgress) as raised:
-        repository.claim(retry_request, lease_timeout_seconds=30.0)
+        repository.claim(retry_request)
     assert raised.value.turn_id == request.turn_id
+
+    events = connection.execute(
+        "SELECT * FROM turn_event WHERE turn_id = ?", (request.turn_id,)
+    ).fetchall()
+    assert len(events) == 1
+    assert events[0]["sequence"] == 0
+
+
+def test_load_session_events_returns_all_terminal_events_in_session(
+    repository_environment,
+):
+    _, _, repository, owner, session, _ = repository_environment
+    req1 = make_request(owner.owner_user_id, session.session_id, idempotency_key="key:1", turn_id="turn_1")
+    repository.claim(req1)
+    repository.append_event(make_event(req1, 0, "text_delta"))
+    repository.append_event(make_event(req1, 1, "completed"))
+
+    req2 = make_request(owner.owner_user_id, session.session_id, idempotency_key="key:2", turn_id="turn_2")
+    repository.claim(req2)
+    repository.append_event(make_event(req2, 0, "completed"))
+
+    session_events = repository.load_session_events(session.session_id)
+    assert len(session_events) == 3
+    assert [e.turn_id for e in session_events] == ["turn_1", "turn_1", "turn_2"]
+    assert [e.event_type for e in session_events] == ["text_delta", "completed", "completed"]
