@@ -19,6 +19,25 @@ CREATE TABLE IF NOT EXISTS channel_identity (
 );
 CREATE INDEX IF NOT EXISTS channel_identity_owner_idx
   ON channel_identity(owner_user_id, channel);
+CREATE TABLE IF NOT EXISTS conversation_session (
+  session_id TEXT PRIMARY KEY,
+  owner_user_id TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  external_conversation_id TEXT NOT NULL,
+  active_workflow_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(owner_user_id, channel, external_conversation_id)
+);
+CREATE TABLE IF NOT EXISTS workflow_handoff (
+  handoff_id TEXT PRIMARY KEY,
+  owner_user_id TEXT NOT NULL,
+  workflow_id TEXT NOT NULL,
+  source_session_id TEXT NOT NULL,
+  target_session_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(workflow_id, target_session_id)
+);
 """
 
 
