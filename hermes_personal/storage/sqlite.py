@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS turn_execution (
   request_digest TEXT NOT NULL,
   turn_id TEXT NOT NULL UNIQUE,
   session_id TEXT NOT NULL,
+  user_message TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL CHECK(status IN ('in_progress', 'completed', 'failed')),
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,

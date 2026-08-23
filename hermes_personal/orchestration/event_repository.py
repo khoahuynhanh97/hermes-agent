@@ -100,8 +100,8 @@ class EventRepository:
                     """
                     INSERT INTO turn_execution (
                       owner_user_id, idempotency_key, request_digest, turn_id,
-                      session_id, status, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, 'in_progress', ?, ?)
+                      session_id, user_message, status, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'in_progress', ?, ?)
                     """,
                     (
                         request.principal.owner_user_id,
@@ -109,6 +109,7 @@ class EventRepository:
                         digest,
                         request.turn_id,
                         request.session_id,
+                        request.message,
                         now_iso,
                         now_iso,
                     ),
@@ -212,6 +213,54 @@ class EventRepository:
             )
             if cursor.rowcount != 1:
                 raise RuntimeError("claimed turn is missing or already terminal")
+
+    def load_session_history(self, session_id: str) -> tuple[Mapping[str, Any], ...]:
+        rows = self._connection.execute(
+            """
+            SELECT turn_id, user_message, status
+            FROM turn_execution
+            WHERE session_id = ? AND status = 'completed'
+            ORDER BY created_at, rowid
+            """,
+            (session_id,),
+        ).fetchall()
+
+        history: list[Mapping[str, Any]] = []
+        for row in rows:
+            turn_id = row["turn_id"]
+            user_msg = row["user_message"]
+            history.append(MappingProxyType({"role": "user", "content": user_msg}))
+
+            event_rows = self._connection.execute(
+                """
+                SELECT sequence, event_id, payload_json
+                FROM turn_event
+                WHERE turn_id = ?
+                ORDER BY sequence
+                """,
+                (turn_id,),
+            ).fetchall()
+
+            events = [_deserialize_event(er) for er in event_rows]
+            assistant_text = ""
+            for event in events:
+                if event.event_type == "completed":
+                    assistant_text = (
+                        event.data.get("text")
+                        or event.data.get("final_response")
+                        or assistant_text
+                    )
+                elif event.event_type == "text_delta":
+                    delta = event.data.get("text")
+                    if isinstance(delta, str):
+                        assistant_text += delta
+
+            if assistant_text:
+                history.append(
+                    MappingProxyType({"role": "assistant", "content": assistant_text})
+                )
+
+        return tuple(history)
 
     def load_session_events(self, session_id: str) -> tuple[AgentEvent, ...]:
         rows = self._connection.execute(

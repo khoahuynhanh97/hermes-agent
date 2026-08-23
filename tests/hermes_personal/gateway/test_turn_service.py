@@ -800,7 +800,130 @@ async def test_live_blocked_worker_with_stale_timestamp_rejects_retry_without_sp
 
 
 @pytest.mark.asyncio
-async def test_failed_transcript_projection_reconciles_prior_assistant_event_in_next_turn_history(
+async def test_turn_closes_stream_before_first_event_persists_failed_cancellation(
+    turn_environment, request_factory
+):
+    _, identities, sessions, _, session, transcript_factory, _ = turn_environment
+    slow_agent = SlowAgent()
+    service = build_service(identities, sessions, transcript_factory, slow_agent)
+    request = request_factory()
+    stream = service.handle(request)
+
+    # Start stream and wait until worker is started, then cancel task before receiving first event
+    task = asyncio.create_task(anext(stream))
+    assert await asyncio.to_thread(slow_agent.iterator.started.wait, 0.5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    await stream.aclose()
+    assert await asyncio.to_thread(slow_agent.iterator.closed.wait, 0.5)
+
+    status = sessions._connection.execute(
+        "SELECT status FROM turn_execution WHERE turn_id = ?", (request.turn_id,)
+    ).fetchone()["status"]
+    assert status == "failed"
+
+    events = sessions._connection.execute(
+        "SELECT sequence, payload_json FROM turn_event WHERE turn_id = ?",
+        (request.turn_id,),
+    ).fetchall()
+    assert len(events) == 1
+    assert events[0]["sequence"] == 0
+
+    replay = [
+        event
+        async for event in service.handle(replace(request, turn_id="turn_retry"))
+    ]
+    assert len(replay) == 1
+    assert replay[0].event_type == "failed"
+    assert replay[0].sequence == 0
+    assert replay[0].data.get("cancelled") is True
+
+
+@pytest.mark.asyncio
+async def test_turn_closes_stream_after_one_delta_persists_failed_cancellation_with_contiguous_sequence(
+    turn_environment, request_factory
+):
+    _, identities, sessions, _, session, transcript_factory, _ = turn_environment
+    blocking_agent = ControlledBlockingAgent()
+    service = build_service(identities, sessions, transcript_factory, blocking_agent)
+    request = request_factory()
+    stream = service.handle(request)
+
+    first_event = await anext(stream)
+    assert first_event.event_type == "text_delta"
+    assert first_event.sequence == 0
+
+    # Close stream after reading one delta
+    await stream.aclose()
+
+    status = sessions._connection.execute(
+        "SELECT status FROM turn_execution WHERE turn_id = ?", (request.turn_id,)
+    ).fetchone()["status"]
+    assert status == "failed"
+
+    events = sessions._connection.execute(
+        "SELECT sequence, payload_json FROM turn_event WHERE turn_id = ? ORDER BY sequence",
+        (request.turn_id,),
+    ).fetchall()
+    assert len(events) == 2
+    assert [e["sequence"] for e in events] == [0, 1]
+
+    replay = [
+        event
+        async for event in service.handle(replace(request, turn_id="turn_retry"))
+    ]
+    assert len(replay) == 2
+    assert replay[0].event_type == "text_delta"
+    assert replay[0].sequence == 0
+    assert replay[1].event_type == "failed"
+    assert replay[1].sequence == 1
+    assert replay[1].data.get("cancelled") is True
+    assert len(blocking_agent.calls) == 1
+    assert transcript_factory.transcript.user_turns == [request.message]
+
+
+@pytest.mark.asyncio
+async def test_turn_closes_stream_after_terminal_completion_leaves_completed_status(
+    turn_environment, request_factory
+):
+    _, identities, sessions, _, session, transcript_factory, _ = turn_environment
+    blocking_agent = ControlledBlockingAgent()
+    service = build_service(identities, sessions, transcript_factory, blocking_agent)
+    request = request_factory()
+    stream = service.handle(request)
+
+    first_event = await anext(stream)
+    blocking_agent.unblock.set()
+    second_event = await anext(stream)
+    assert second_event.event_type == "completed"
+
+    # Close stream after consuming terminal event
+    await stream.aclose()
+
+    status = sessions._connection.execute(
+        "SELECT status FROM turn_execution WHERE turn_id = ?", (request.turn_id,)
+    ).fetchone()["status"]
+    assert status == "completed"
+
+    events = sessions._connection.execute(
+        "SELECT sequence, payload_json FROM turn_event WHERE turn_id = ? ORDER BY sequence",
+        (request.turn_id,),
+    ).fetchall()
+    assert len(events) == 2
+    assert [e["sequence"] for e in events] == [0, 1]
+
+    replay = [
+        event
+        async for event in service.handle(replace(request, turn_id="turn_retry"))
+    ]
+    assert replay == [first_event, second_event]
+    assert len(blocking_agent.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_canonical_history_preserves_chronological_order_across_multiple_turns_with_projection_failures(
     turn_environment, request_factory
 ):
     _, identities, sessions, _, session, _, _ = turn_environment
@@ -813,27 +936,152 @@ async def test_failed_transcript_projection_reconciles_prior_assistant_event_in_
         agent,
     )
 
-    # Turn 1: agent completes with text, but transcript projection fails on completed event
-    agent.output = [AgentOutput("completed", {"text": "Reply from Turn 1"})]
-    req1 = request_factory(channel="telegram", session_id=session.session_id)
-    events1 = [event async for event in service.handle(req1)]
-    assert len(events1) == 1
-    assert events1[0].event_type == "completed"
+    # Turn 1: projection fails on completed event
+    agent.output = [AgentOutput("completed", {"text": "assistant1"})]
+    req1 = replace(
+        request_factory(channel="telegram", session_id=session.session_id),
+        message="user1",
+        turn_id="turn_1",
+        idempotency_key="key:1",
+    )
+    [e async for e in service.handle(req1)]
 
-    # Turn 2: normal turn on the same session
-    agent.output = [AgentOutput("completed", {"text": "Reply from Turn 2"})]
+    # Turn 2: projection succeeds
+    failing_transcript.fail_on_event_types = set()
+    agent.output = [AgentOutput("completed", {"text": "assistant2"})]
     req2 = replace(
         request_factory(channel="telegram", session_id=session.session_id),
-        message="Turn 2 question",
+        message="user2",
         turn_id="turn_2",
-        idempotency_key="transport:turn_2",
+        idempotency_key="key:2",
     )
-    events2 = [event async for event in service.handle(req2)]
-    assert len(events2) == 1
+    [e async for e in service.handle(req2)]
 
-    # Assert agent received Turn 1 assistant message in history exactly once despite Turn 1 projection failure
-    turn2_history = agent.calls[1][1]
-    assert turn2_history == (
-        {"role": "user", "content": "Xin chao"},
-        {"role": "assistant", "content": "Reply from Turn 1"},
+    # Turn 3: check history passed to agent
+    agent.output = [AgentOutput("completed", {"text": "assistant3"})]
+    req3 = replace(
+        request_factory(channel="telegram", session_id=session.session_id),
+        message="user3",
+        turn_id="turn_3",
+        idempotency_key="key:3",
     )
+    [e async for e in service.handle(req3)]
+
+    turn3_history = agent.calls[2][1]
+    assert turn3_history == (
+        {"role": "user", "content": "user1"},
+        {"role": "assistant", "content": "assistant1"},
+        {"role": "user", "content": "user2"},
+        {"role": "assistant", "content": "assistant2"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_canonical_history_does_not_collapse_identical_assistant_replies_across_turns(
+    turn_environment, request_factory
+):
+    _, identities, sessions, _, session, transcript_factory, _ = turn_environment
+    agent = FakeAgent()
+    service = build_service(identities, sessions, transcript_factory, agent)
+
+    # Turn 1: outputs "Xin chao"
+    agent.output = [AgentOutput("completed", {"text": "Xin chao"})]
+    req1 = replace(
+        request_factory(channel="telegram", session_id=session.session_id),
+        message="user1",
+        turn_id="turn_1",
+        idempotency_key="key:1",
+    )
+    [e async for e in service.handle(req1)]
+
+    # Turn 2: outputs "Xin chao" (identical response text)
+    agent.output = [AgentOutput("completed", {"text": "Xin chao"})]
+    req2 = replace(
+        request_factory(channel="telegram", session_id=session.session_id),
+        message="user2",
+        turn_id="turn_2",
+        idempotency_key="key:2",
+    )
+    [e async for e in service.handle(req2)]
+
+    # Turn 3: check history passed to agent
+    agent.output = [AgentOutput("completed", {"text": "reply3"})]
+    req3 = replace(
+        request_factory(channel="telegram", session_id=session.session_id),
+        message="user3",
+        turn_id="turn_3",
+        idempotency_key="key:3",
+    )
+    [e async for e in service.handle(req3)]
+
+    turn3_history = agent.calls[2][1]
+    assert turn3_history == (
+        {"role": "user", "content": "user1"},
+        {"role": "assistant", "content": "Xin chao"},
+        {"role": "user", "content": "user2"},
+        {"role": "assistant", "content": "Xin chao"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_canonical_history_survives_sqlite_restart(tmp_path):
+    db_path = tmp_path / "restart-test.sqlite"
+    connection = connect(db_path)
+    identities = IdentityRepository(connection)
+    sessions = SessionRepository(connection)
+    owner = identities.create_owner("primary")
+    identities.link(owner.owner_user_id, "telegram", "actor:1")
+    session = sessions.get_or_create(owner.owner_user_id, "telegram", "chat:1")
+    transcript_factory = FakeTranscriptFactory()
+    agent = FakeAgent()
+    service = build_service(identities, sessions, transcript_factory, agent)
+
+    def make_req(msg: str, turn_id: str, key: str) -> AgentTurnRequest:
+        return AgentTurnRequest(
+            principal=PrincipalContext(
+                actor_id="actor:1",
+                owner_user_id=owner.owner_user_id,
+                channel="telegram",  # type: ignore[arg-type]
+                session_id=session.session_id,
+            ),
+            turn_id=turn_id,
+            idempotency_key=key,
+            message=msg,
+        )
+
+    # Turn 1
+    agent.output = [AgentOutput("completed", {"text": "reply1"})]
+    [e async for e in service.handle(make_req("user1", "turn_1", "key:1"))]
+
+    # Turn 2
+    agent.output = [AgentOutput("completed", {"text": "reply2"})]
+    [e async for e in service.handle(make_req("user2", "turn_2", "key:2"))]
+    connection.close()
+
+    # Simulate restart by reconnecting to the database
+    reopened = connect(db_path)
+    try:
+        reopened_identities = IdentityRepository(reopened)
+        reopened_sessions = SessionRepository(reopened)
+        reopened_events = EventRepository(reopened)
+        reopened_agent = FakeAgent()
+        reopened_service = HermesTurnService(
+            reopened_identities,
+            reopened_sessions,
+            reopened_events,
+            transcript_factory,
+            reopened_agent,
+        )
+
+        reopened_agent.output = [AgentOutput("completed", {"text": "reply3"})]
+        [e async for e in reopened_service.handle(make_req("user3", "turn_3", "key:3"))]
+
+        turn3_history = reopened_agent.calls[0][1]
+        assert turn3_history == (
+            {"role": "user", "content": "user1"},
+            {"role": "assistant", "content": "reply1"},
+            {"role": "user", "content": "user2"},
+            {"role": "assistant", "content": "reply2"},
+        )
+    finally:
+        reopened.close()

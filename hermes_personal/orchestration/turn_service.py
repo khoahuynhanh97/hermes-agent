@@ -96,7 +96,7 @@ class HermesTurnService:
         transcript.append_user_turn(request.message)
         outputs: Iterator[AgentOutput] | None = None
         terminal_emitted = False
-        sequence = 0
+        next_sequence = 0
         try:
             try:
                 outputs = await _start_agent_in_worker(
@@ -118,12 +118,12 @@ class HermesTurnService:
                 try:
                     output = await _advance_iterator_in_worker(outputs)
                 except AuthorizationError as error:
-                    failed = self._failed_event(request, sequence, error)
+                    failed = self._failed_event(request, next_sequence, error)
                     self._persist_event(transcript, failed)
                     terminal_emitted = True
                     raise
                 except Exception as error:
-                    failed = self._failed_event(request, sequence, error)
+                    failed = self._failed_event(request, next_sequence, error)
                     self._persist_event(transcript, failed)
                     terminal_emitted = True
                     yield failed
@@ -135,27 +135,27 @@ class HermesTurnService:
                 try:
                     self._validate_output_workflow(request, output)
                 except AuthorizationError as error:
-                    failed = self._failed_event(request, sequence, error)
+                    failed = self._failed_event(request, next_sequence, error)
                     self._persist_event(transcript, failed)
                     terminal_emitted = True
                     raise
 
-                event = self._event_from_output(request, sequence, output)
+                event = self._event_from_output(request, next_sequence, output)
                 if event.event_type in {"completed", "failed"}:
                     terminal_emitted = True
                 self._persist_event(transcript, event)
+                next_sequence += 1
                 yield event
                 if terminal_emitted:
                     return
-                sequence += 1
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, GeneratorExit):
             if not terminal_emitted:
                 cancelled_event = AgentEvent(
                     event_type="failed",
                     principal_id=request.principal.owner_user_id,
                     session_id=request.session_id,
                     turn_id=request.turn_id,
-                    sequence=sequence,
+                    sequence=next_sequence,
                     data={"error": "turn cancelled", "cancelled": True},
                     workflow_id=request.workflow_id,
                 )
@@ -172,8 +172,9 @@ class HermesTurnService:
             transcript.append_event(event)
         except Exception as error:
             logger.warning(
-                "Failed to append event %s to transcript projection for session %s: %s",
+                "Failed to append event %s (turn %s) to transcript projection for session %s: %s",
                 event.event_id,
+                event.turn_id,
                 event.session_id,
                 error,
             )
@@ -181,43 +182,10 @@ class HermesTurnService:
     def _assemble_history(
         self, transcript: Any, session_id: str
     ) -> tuple[Mapping[str, Any], ...]:
-        history = list(transcript.history)
-        canonical_events = self._event_repository.load_session_events(session_id)
-        if not canonical_events:
-            return tuple(history)
-
-        turns: dict[str, list[AgentEvent]] = {}
-        for event in canonical_events:
-            turns.setdefault(event.turn_id, []).append(event)
-
-        for turn_id, events in turns.items():
-            terminal_event = events[-1] if events else None
-            if terminal_event is None or terminal_event.event_type != "completed":
-                continue
-
-            text = terminal_event.data.get("text") or terminal_event.data.get("final_response")
-            if not text:
-                deltas = [
-                    e.data.get("text", "")
-                    for e in events
-                    if e.event_type == "text_delta" and isinstance(e.data.get("text"), str)
-                ]
-                if deltas:
-                    text = "".join(deltas)
-
-            if text:
-                assistant_exists = any(
-                    msg.get("role") == "assistant" and msg.get("content") == text
-                    for msg in history
-                )
-                if not assistant_exists:
-                    history.append({"role": "assistant", "content": text})
-                    try:
-                        transcript.append_event(terminal_event)
-                    except Exception:
-                        pass
-
-        return tuple(history)
+        canonical_history = self._event_repository.load_session_history(session_id)
+        if canonical_history:
+            return canonical_history
+        return tuple(transcript.history)
 
     def _validate_request(self, request: AgentTurnRequest) -> None:
         try:
