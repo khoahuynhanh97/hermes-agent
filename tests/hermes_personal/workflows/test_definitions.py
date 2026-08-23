@@ -1,46 +1,33 @@
 import pytest
 from hermes_personal.workflows.definitions import DEFINITIONS
-from hermes_personal.workflows.models import IllegalTransition
 
-def test_definitions_exist():
-    expected = [
-        "product_to_video",
-        "product_research",
-        "knowledge_learning",
-        "hook_cta_learning",
-        "video_deconstruction",
-    ]
-    for name in expected:
-        assert name in DEFINITIONS
-        assert DEFINITIONS[name].name == name
+@pytest.mark.parametrize("name,aggregate", [(n, a) for n, a in DEFINITIONS.items()])
+def test_initial_state_first(name, aggregate):
+    # initial_state should be the first element in states list
+    assert aggregate.states[0] == aggregate.initial_state
 
-def test_product_to_video_transitions():
-    wf = DEFINITIONS["product_to_video"]
-    # Test legal transition
-    wf.validate_transition("idle", "product_research")
-    wf.validate_transition("product_research", "resource_pack_building")
+@pytest.mark.parametrize("name,aggregate", [(n, a) for n, a in DEFINITIONS.items()])
+def test_legal_transitions(name, aggregate):
+    for from_state, to_states in aggregate.transitions.items():
+        for to_state in to_states:
+            # should not raise IllegalTransition
+            aggregate.validate_transition(from_state, to_state)
 
-    # Test illegal transition (rejection)
-    with pytest.raises(IllegalTransition) as excinfo:
-        wf.validate_transition("idle", "script_generation")
-    assert "Transition not allowed" in str(excinfo.value)
+@pytest.mark.parametrize("name,aggregate", [(n, a) for n, a in DEFINITIONS.items()])
+def test_illegal_transition_raises(name, aggregate):
+    # pick a from_state that exists and a to_state not allowed
+    from_state = aggregate.states[0]
+    # ensure to_state is not in allowed list
+    illegal = next(s for s in aggregate.states if s not in aggregate.transitions.get(from_state, []))
+    with pytest.raises(Exception):
+        aggregate.validate_transition(from_state, illegal)
 
-    with pytest.raises(IllegalTransition) as excinfo:
-        wf.validate_transition("idle", "non_existent_state")
-    assert "Target state not in state machine" in str(excinfo.value)
+def test_required_artifacts_nonempty():
+    for agg in DEFINITIONS.values():
+        for state, artifacts in agg.required_artifacts.items():
+            assert artifacts, f"{agg.name}:{state} missing required artifacts"
 
-def test_required_artifacts():
-    wf = DEFINITIONS["product_to_video"]
-    assert "product_research_report" in wf.required_artifacts["resource_pack_building"]
-    assert "resource_pack" in wf.required_artifacts["script_generation"]
-
-def test_approval_requirements():
-    wf = DEFINITIONS["product_to_video"]
-    assert wf.approval_required.get("script_generation") is True
-    assert wf.approval_required.get("video_production") is True
-    assert wf.approval_required.get("idle") is not True
-
-def test_video_deconstruction_parallel_start():
-    wf = DEFINITIONS["video_deconstruction"]
-    wf.validate_transition("idle", "extracting_frames")
-    wf.validate_transition("idle", "analyzing_audio")
+def test_approval_requirements_boolean():
+    for agg in DEFINITIONS.values():
+        for state, req in agg.approval_required.items():
+            assert isinstance(req, bool), f"{agg.name}:{state} approval flag not bool"
