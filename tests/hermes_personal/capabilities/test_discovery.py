@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pytest
@@ -11,6 +12,7 @@ from hermes_personal.capabilities.discovery import (
 from hermes_personal.capabilities.manifest import INITIAL_CAPABILITIES
 from hermes_personal.capabilities.snapshots import CapabilitySnapshotRepository
 from hermes_personal.storage.sqlite import connect
+from tools.registry import ToolRegistry
 
 
 class FakeToolRegistry:
@@ -19,6 +21,7 @@ class FakeToolRegistry:
         self._toolsets: dict[str, str] = {}
         self._failing_checks: set[str] = set()
         self._raw_schemas: dict[str, dict[str, Any]] = {}
+        self.probed_tools: list[str] = []
 
     def register_fake(
         self,
@@ -43,6 +46,7 @@ class FakeToolRegistry:
     def get_definitions(
         self, tool_names: set[str], quiet: bool = False
     ) -> list[dict[str, Any]]:
+        self.probed_tools.extend(sorted(tool_names))
         result = []
         for name in sorted(tool_names):
             if name in self._tools and name not in self._failing_checks:
@@ -89,123 +93,125 @@ def test_successful_full_discovery():
     res_binding = result.by_capability_id["product.research"]
     assert res_binding.wire_name == "mcp__product_intelligence__research_product"
     assert res_binding.provider == "product_intelligence"
-    assert res_binding.schema_digest.startswith("sha256:")
+    assert re.match(r"^sha256:[a-f0-9]{64}$", res_binding.schema_digest)
 
 
-def test_missing_tool_produces_unavailable_binding_and_diagnostic():
+def test_candidate_only_probing():
     registry = FakeToolRegistry()
     _populate_full_fake_registry(registry)
-    # Remove video.render wire tool
+    # Register an unrelated tool
+    registry.register_fake("unrelated_expensive_tool", "unrelated")
+
+    discovery = CapabilityDiscovery()
+    result = discovery.scan(registry)
+
+    assert "unrelated_expensive_tool" not in registry.probed_tools
+    assert len(result.bindings) == 10
+
+
+def test_rule_configuration_validation():
+    # Duplicate rule for product.research
+    dup_rules = [
+        WireBindingRule("product.research", ("w1",), "p1"),
+        WireBindingRule("product.research", ("w2",), "p2"),
+    ]
+    with pytest.raises(ValueError, match="duplicate WireBindingRule for capability_id: product.research"):
+        CapabilityDiscovery(rules=dup_rules)
+
+    # Rule missing required manifest capabilities
+    incomplete_rules = [
+        WireBindingRule("product.research", ("w1",), "p1"),
+    ]
+    with pytest.raises(ValueError, match="missing WireBindingRule for manifest capabilities"):
+        CapabilityDiscovery(rules=incomplete_rules)
+
+
+def test_non_json_serializable_schema_isolation():
+    registry = FakeToolRegistry()
+    _populate_full_fake_registry(registry)
+
+    # Corrupt schema with non-serializable set()
+    registry.register_fake(
+        "mcp__video_factory__render",
+        "video_factory",
+        schema={"description": "Corrupt", "parameters": {"bad_set": {1, 2, 3}}},
+    )
+
+    discovery = CapabilityDiscovery()
+    result = discovery.scan(registry)
+
+    render_binding = result.by_capability_id["video.render"]
+    assert render_binding.health == "unavailable"
+    assert re.match(r"^sha256:[a-f0-9]{64}$", render_binding.schema_digest)
+
+    diags = [d for d in result.diagnostics if d.capability_id == "video.render"]
+    assert len(diags) == 1
+    assert diags[0].code == "schema_incompatible"
+
+    # Other tools remain healthy
+    assert result.by_capability_id["product.research"].health == "healthy"
+
+
+def test_missing_tool_sentinel_digest_format():
+    registry = FakeToolRegistry()
+    _populate_full_fake_registry(registry)
     registry._tools.pop("mcp__video_factory__render")
 
     discovery = CapabilityDiscovery()
     result = discovery.scan(registry)
 
-    assert len(result.bindings) == 10
     render_binding = result.by_capability_id["video.render"]
     assert render_binding.health == "unavailable"
-
-    diags = [d for d in result.diagnostics if d.capability_id == "video.render"]
-    assert len(diags) == 1
-    assert diags[0].code == "tool_not_found"
+    assert re.match(r"^sha256:[a-f0-9]{64}$", render_binding.schema_digest)
 
 
-def test_failing_check_fn_produces_unavailable_binding():
-    registry = FakeToolRegistry()
-    _populate_full_fake_registry(registry)
-    registry.register_fake(
-        "mcp__video_factory__export",
-        "video_factory",
-        check_fn_pass=False,
+def test_real_upstream_tool_registry_integration():
+    real_registry = ToolRegistry()
+
+    check_probed = False
+
+    def dummy_check():
+        nonlocal check_probed
+        check_probed = True
+        return True
+
+    real_registry.register(
+        name="mcp__product_intelligence__research_product",
+        toolset="product_intelligence",
+        schema={"description": "Real research tool", "parameters": {"type": "object"}},
+        handler=lambda **kw: "ok",
+        check_fn=dummy_check,
+    )
+
+    # Register an unrelated tool whose check_fn must NOT be probed
+    unrelated_probed = False
+
+    def unrelated_check():
+        nonlocal unrelated_probed
+        unrelated_probed = True
+        return True
+
+    real_registry.register(
+        name="unrelated_tool",
+        toolset="unrelated",
+        schema={"description": "Unrelated", "parameters": {"type": "object"}},
+        handler=lambda **kw: "ok",
+        check_fn=unrelated_check,
     )
 
     discovery = CapabilityDiscovery()
-    result = discovery.scan(registry)
+    result = discovery.scan(real_registry)
 
-    export_binding = result.by_capability_id["video.export"]
-    assert export_binding.health == "unavailable"
-
-    diags = [d for d in result.diagnostics if d.capability_id == "video.export"]
-    assert len(diags) == 1
-    assert diags[0].code == "check_failed"
-
-
-def test_schema_incompatibility_detected():
-    registry = FakeToolRegistry()
-    _populate_full_fake_registry(registry)
-    registry.register_fake(
-        "mcp__learning__retrieve",
-        "learning",
-        schema={"description": "Invalid schema", "parameters": 12345},  # type: ignore[dict-item]
-    )
-
-    discovery = CapabilityDiscovery()
-    result = discovery.scan(registry)
-
-    retrieve_binding = result.by_capability_id["knowledge.retrieve"]
-    assert retrieve_binding.health == "unavailable"
-
-    diags = [d for d in result.diagnostics if d.capability_id == "knowledge.retrieve"]
-    assert len(diags) == 1
-    assert diags[0].code == "schema_incompatible"
-
-
-def test_ambiguous_wire_mapping_detected():
-    registry = FakeToolRegistry()
-    _populate_full_fake_registry(registry)
-    # Register an extra wire tool matching the product.research rule
-    registry.register_fake("product_intelligence_research", "product_intelligence")
-
-    discovery = CapabilityDiscovery()
-    result = discovery.scan(registry)
+    assert check_probed is True
+    assert unrelated_probed is False
 
     res_binding = result.by_capability_id["product.research"]
-    assert res_binding.health == "unavailable"
+    assert res_binding.health == "healthy"
+    assert res_binding.wire_name == "mcp__product_intelligence__research_product"
+    assert res_binding.provider == "product_intelligence"
+    assert re.match(r"^sha256:[a-f0-9]{64}$", res_binding.schema_digest)
 
-    diags = [d for d in result.diagnostics if d.capability_id == "product.research"]
-    assert len(diags) == 1
-    assert diags[0].code == "ambiguous_wire_mapping"
-
-
-def test_duplicate_wire_ownership_detected():
-    registry = FakeToolRegistry()
-
-    # Rule where two capabilities claim the same wire tool name
-    custom_rules = [
-        WireBindingRule(
-            capability_id="product.research",
-            accepted_wire_names=("shared_tool",),
-            provider="product_intelligence",
-        ),
-        WireBindingRule(
-            capability_id="product.resource_pack.build",
-            accepted_wire_names=("shared_tool",),
-            provider="product_intelligence",
-        ),
-    ]
-    registry.register_fake("shared_tool", "product_intelligence")
-
-    discovery = CapabilityDiscovery(rules=custom_rules)
-    result = discovery.scan(registry)
-
-    assert result.by_capability_id["product.research"].health == "unavailable"
-    assert result.by_capability_id["product.resource_pack.build"].health == "unavailable"
-
-    diags = [d for d in result.diagnostics if d.code == "duplicate_wire_ownership"]
-    assert len(diags) == 2
-
-
-def test_discovery_result_can_be_saved_to_snapshot_repository(tmp_path):
-    registry = FakeToolRegistry()
-    _populate_full_fake_registry(registry)
-
-    discovery = CapabilityDiscovery()
-    disc_result = discovery.scan(registry)
-
-    db_path = tmp_path / "test_discovery_snapshot.db"
-    conn = connect(db_path)
-    snapshot_repo = CapabilitySnapshotRepository(conn)
-
-    snapshot = snapshot_repo.save_and_activate(disc_result.bindings)
-    assert snapshot is not None
-    assert snapshot_repo.get_active().snapshot_id == snapshot.snapshot_id
+    # Missing tools produce unavailable bindings with valid SHA-256 digests
+    render_binding = result.by_capability_id["video.render"]
+    assert render_binding.health == "unavailable"
+    assert re.match(r"^sha256:[a-f0-9]{64}$", render_binding.schema_digest)

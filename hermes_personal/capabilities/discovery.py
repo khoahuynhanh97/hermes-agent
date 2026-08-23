@@ -143,9 +143,21 @@ class DiscoveryResult:
 
 
 def hash_schema_dict(schema: dict[str, Any]) -> str:
-    canonical = json.dumps(schema, sort_keys=True, separators=(",", ":"))
-    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    return f"sha256:{digest}"
+    try:
+        canonical = json.dumps(schema, sort_keys=True, separators=(",", ":"))
+        digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        return f"sha256:{digest}"
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"schema dict is not JSON serializable: {exc}") from exc
+
+
+def _sentinel_digest(status: str, capability_id: str, wire_name: str) -> str:
+    payload = {
+        "sentinel_status": status,
+        "capability_id": capability_id,
+        "wire_name": wire_name,
+    }
+    return hash_schema_dict(payload)
 
 
 class CapabilityDiscovery:
@@ -153,23 +165,46 @@ class CapabilityDiscovery:
         self,
         rules: Iterable[WireBindingRule] = DEFAULT_WIRE_BINDING_RULES,
     ) -> None:
-        self._rules = tuple(rules)
+        rule_tuple = tuple(rules)
+        rule_caps: set[str] = set()
+        for rule in rule_tuple:
+            if rule.capability_id in rule_caps:
+                raise ValueError(
+                    f"duplicate WireBindingRule for capability_id: {rule.capability_id}"
+                )
+            rule_caps.add(rule.capability_id)
+            if len(rule.accepted_wire_names) != len(set(rule.accepted_wire_names)):
+                raise ValueError(
+                    f"duplicate accepted_wire_names in rule for capability_id: {rule.capability_id}"
+                )
+
+        missing_caps = set(INITIAL_CAPABILITIES.keys()) - rule_caps
+        if missing_caps:
+            raise ValueError(
+                f"missing WireBindingRule for manifest capabilities: {sorted(missing_caps)}"
+            )
+
+        self._rules = rule_tuple
 
     def scan(self, registry: UpstreamToolRegistry) -> DiscoveryResult:
         all_registered_names = set(registry.get_all_tool_names())
-        definitions = registry.get_definitions(all_registered_names, quiet=True)
-        available_defs = {
-            d["function"]["name"]: d["function"]
-            for d in definitions
-            if isinstance(d, dict) and "function" in d and isinstance(d["function"], dict)
+        candidate_wire_names = {
+            wire for rule in self._rules for wire in rule.accepted_wire_names
         }
+        registered_candidates = candidate_wire_names & all_registered_names
+
+        definitions = registry.get_definitions(registered_candidates, quiet=True)
+        available_defs: dict[str, dict[str, Any]] = {}
+        for d in definitions:
+            if isinstance(d, dict) and "function" in d and isinstance(d["function"], dict):
+                fn_name = d["function"].get("name")
+                if isinstance(fn_name, str):
+                    available_defs[fn_name] = d["function"]
 
         bindings_by_id: dict[str, ImplementationBinding] = {}
         diagnostics: list[DiscoveryDiagnostic] = []
-
         rules_by_id = {r.capability_id: r for r in self._rules}
 
-        # Verify wire ownership collisions
         wire_to_capabilities: dict[str, list[str]] = {}
         for rule in self._rules:
             for wire in rule.accepted_wire_names:
@@ -177,13 +212,10 @@ class CapabilityDiscovery:
                     wire_to_capabilities.setdefault(wire, []).append(rule.capability_id)
 
         for cap_id in sorted(INITIAL_CAPABILITIES.keys()):
-            rule = rules_by_id.get(cap_id)
-            if rule is None:
-                rule = WireBindingRule(
-                    capability_id=cap_id,
-                    accepted_wire_names=(f"mcp__{cap_id.replace('.', '_')}",),
-                    provider="unknown",
-                )
+            rule = rules_by_id[cap_id]
+            spec = INITIAL_CAPABILITIES[cap_id]
+            input_ver = spec.input_schema_version
+            output_ver = spec.output_schema_version
 
             matching_wires = [
                 w for w in rule.accepted_wire_names if w in all_registered_names
@@ -208,9 +240,9 @@ class CapabilityDiscovery:
                     source=rule.source,
                     provider=rule.provider,
                     implementation_version="1.0.0",
-                    input_schema_version="1.0",
-                    output_schema_version="1.0",
-                    schema_digest="sha256:ambiguous",
+                    input_schema_version=input_ver,
+                    output_schema_version=output_ver,
+                    schema_digest=_sentinel_digest("ambiguous", cap_id, wire_name),
                     health=health,
                 )
                 continue
@@ -234,16 +266,15 @@ class CapabilityDiscovery:
                     source=rule.source,
                     provider=rule.provider,
                     implementation_version="1.0.0",
-                    input_schema_version="1.0",
-                    output_schema_version="1.0",
-                    schema_digest="sha256:missing",
+                    input_schema_version=input_ver,
+                    output_schema_version=output_ver,
+                    schema_digest=_sentinel_digest("missing", cap_id, wire_name),
                     health=health,
                 )
                 continue
 
             wire_name = matching_wires[0]
 
-            # Check if this wire is claimed by multiple capability rules
             claiming_caps = wire_to_capabilities.get(wire_name, [])
             if len(claiming_caps) > 1:
                 diagnostics.append(
@@ -260,9 +291,9 @@ class CapabilityDiscovery:
                     source=rule.source,
                     provider=rule.provider,
                     implementation_version="1.0.0",
-                    input_schema_version="1.0",
-                    output_schema_version="1.0",
-                    schema_digest="sha256:duplicate",
+                    input_schema_version=input_ver,
+                    output_schema_version=output_ver,
+                    schema_digest=_sentinel_digest("duplicate", cap_id, wire_name),
                     health="unavailable",
                 )
                 continue
@@ -273,7 +304,11 @@ class CapabilityDiscovery:
 
             if wire_name not in available_defs:
                 raw_schema = registry.get_schema(wire_name) or {}
-                digest = hash_schema_dict(raw_schema)
+                try:
+                    digest = hash_schema_dict(raw_schema)
+                except ValueError:
+                    digest = _sentinel_digest("check_failed", cap_id, wire_name)
+
                 diagnostics.append(
                     DiscoveryDiagnostic(
                         capability_id=cap_id,
@@ -288,8 +323,8 @@ class CapabilityDiscovery:
                     source=rule.source,
                     provider=provider,
                     implementation_version="1.0.0",
-                    input_schema_version="1.0",
-                    output_schema_version="1.0",
+                    input_schema_version=input_ver,
+                    output_schema_version=output_ver,
                     schema_digest=digest,
                     health="unavailable",
                 )
@@ -297,12 +332,19 @@ class CapabilityDiscovery:
 
             schema = available_defs[wire_name]
             parameters = schema.get("parameters")
-            if parameters is not None and not isinstance(parameters, dict):
+            try:
+                if parameters is not None and not isinstance(parameters, dict):
+                    raise ValueError("schema parameters is not a dict")
+                digest = hash_schema_dict(schema)
+            except (ValueError, TypeError) as exc:
+                sentinel_digest = _sentinel_digest(
+                    "schema_incompatible", cap_id, wire_name
+                )
                 diagnostics.append(
                     DiscoveryDiagnostic(
                         capability_id=cap_id,
                         code="schema_incompatible",
-                        message=f"wire tool {wire_name!r} schema parameters is not a dict",
+                        message=f"wire tool {wire_name!r} schema is invalid or non-serializable: {exc}",
                         wire_name=wire_name,
                     )
                 )
@@ -312,22 +354,21 @@ class CapabilityDiscovery:
                     source=rule.source,
                     provider=provider,
                     implementation_version="1.0.0",
-                    input_schema_version="1.0",
-                    output_schema_version="1.0",
-                    schema_digest="sha256:incompatible",
+                    input_schema_version=input_ver,
+                    output_schema_version=output_ver,
+                    schema_digest=sentinel_digest,
                     health="unavailable",
                 )
                 continue
 
-            digest = hash_schema_dict(schema)
             bindings_by_id[cap_id] = ImplementationBinding(
                 capability_id=cap_id,
                 wire_name=wire_name,
                 source=rule.source,
                 provider=provider,
                 implementation_version="1.0.0",
-                input_schema_version="1.0",
-                output_schema_version="1.0",
+                input_schema_version=input_ver,
+                output_schema_version=output_ver,
                 schema_digest=digest,
                 health="healthy",
             )
