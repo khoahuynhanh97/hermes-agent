@@ -37,18 +37,18 @@ It decouples stable domain capability declarations (`product.research`, `video.b
 
 The catalog maintains exactly **10 stable capability IDs**:
 
-| Capability ID | Risk | Cost | Approval Policy | Target Workflow / Provider |
-|---|---|---|---|---|
-| `product.research` | low | free | default | `product_to_video` / `product_intelligence` |
-| `product.resource_pack.build` | low | free | default | `product_to_video` / `product_intelligence` |
-| `product.resource_pack.lock` | medium | paid | user_confirmation | `product_to_video` / `product_intelligence` |
-| `video.brief.create` | low | free | default | `product_to_video` / `video_factory` |
-| `video.scene_plan.create` | medium | paid | user_confirmation | `product_to_video` / `video_factory` |
-| `video.storyboard.create` | medium | paid | user_confirmation | `product_to_video` / `video_factory` |
-| `video.render` | high | paid | user_confirmation | `product_to_video` / `video_factory` |
-| `video.export` | high | paid | user_confirmation | `product_to_video` / `video_factory` |
-| `knowledge.candidate.create` | medium | free | approved_only | `knowledge_learning` / `hermes_mcp` |
-| `knowledge.retrieve` | low | free | approved_only | `knowledge_learning` / `hermes_mcp` |
+| Capability ID | Risk | Cost | Approval Policy | Owner | Allowed Workflows |
+|---|---|---|---|---|---|
+| `product.research` | low | free | `none` | `product_intelligence` | `product_research`, `product_to_video` |
+| `product.resource_pack.build` | medium | metered | `none` | `product_intelligence` | `product_research`, `product_to_video` |
+| `product.resource_pack.lock` | high | free | `hitl:product_lock` | `product_intelligence` | `product_research`, `product_to_video` |
+| `video.brief.create` | medium | metered | `precondition:product_locked` | `video_factory` | `product_to_video` |
+| `video.scene_plan.create` | medium | metered | `precondition:brief_approved` | `video_factory` | `product_to_video` |
+| `video.storyboard.create` | medium | paid | `precondition:scene_approved` | `video_factory` | `product_to_video` |
+| `video.render` | high | paid | `hitl:storyboard_and_budget` | `video_factory` | `product_to_video` |
+| `video.export` | high | paid | `hitl:final` | `video_factory` | `product_to_video` |
+| `knowledge.candidate.create` | medium | free | `review_required` | `learning` | `knowledge_learning` |
+| `knowledge.retrieve` | low | free | `approved_only` | `learning` | `product_research`, `product_to_video`, `knowledge_learning` |
 
 > **Note**: `note.create` is intentionally excluded from the stable manifest.
 
