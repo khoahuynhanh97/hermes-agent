@@ -67,13 +67,17 @@ def _sanitize_primitives(val: Any, depth: int = 0) -> Any:
             if idx >= MAX_ITEMS:
                 res["_truncated"] = f"... {len(val) - MAX_ITEMS} more items"
                 break
-            k_str = str(k)[:MAX_STRING_LEN]
+            if isinstance(k, (str, int, float, bool)):
+                k_str = str(k)[:MAX_STRING_LEN]
+            else:
+                k_str = f"[UNSUPPORTED_KEY:{type(k).__name__}]"
+
             if any(kw in k_str.lower() for kw in SECRET_KEYWORDS):
                 res[k_str] = "[REDACTED]"
             else:
                 res[k_str] = _sanitize_primitives(v, depth + 1)
         return res
-    if isinstance(val, (list, tuple, set)):
+    if isinstance(val, (list, tuple, set, frozenset)):
         items = list(val)
         res_list = []
         for idx, item in enumerate(items):
@@ -83,7 +87,4 @@ def _sanitize_primitives(val: Any, depth: int = 0) -> Any:
             res_list.append(_sanitize_primitives(item, depth + 1))
         return res_list
 
-    obj_str = str(val)[:MAX_STRING_LEN]
-    if any(kw in obj_str.lower() for kw in SECRET_KEYWORDS):
-        return "[REDACTED]"
-    return obj_str
+    return f"[UNSUPPORTED_TYPE:{type(val).__name__}]"

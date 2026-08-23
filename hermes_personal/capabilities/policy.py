@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from hermes_personal.capabilities.bindings import ImplementationBinding
 from hermes_personal.capabilities.errors import CapabilityError
@@ -11,9 +11,9 @@ from hermes_personal.capabilities.manifest import CapabilitySpec
 class PolicyRequestContext:
     skill_id: str | None = None
     workflow_id: str | None = None
-    authenticated: bool = True
+    authenticated: bool = False
     user_confirmed_approval: bool = False
-    granted_preconditions: tuple[str, ...] = ()
+    granted_policies: frozenset[str] = field(default_factory=frozenset)
     budget_available: float | None = None
     channel_id: str | None = None
     session_id: str | None = None
@@ -149,11 +149,28 @@ class CapabilityPolicyEvaluator:
                     message=f"Capability {cap_id!r} requires post-execution human review",
                 )
             )
-        elif (
-            spec.approval_policy.startswith("hitl:")
-            or spec.approval_policy == "approved_only"
-        ):
-            if not context.user_confirmed_approval:
+        elif spec.approval_policy == "approved_only":
+            is_satisfied = (
+                "approved_only" in context.granted_policies
+                or spec.approval_policy in context.granted_policies
+                or context.user_confirmed_approval
+            )
+            if not is_satisfied:
+                err = CapabilityError(
+                    code="unmet_precondition",
+                    message=f"Capability {cap_id!r} requires approved retrieval scope ({spec.approval_policy!r})",
+                    retryable=True,
+                    capability_id=cap_id,
+                    actionable_recovery="Grant approved retrieval scope before retrieving knowledge",
+                    details={"approval_policy": spec.approval_policy},
+                )
+                return PolicyDecision(allowed=False, capability_id=cap_id, error=err)
+        elif spec.approval_policy.startswith("hitl:"):
+            is_satisfied = (
+                spec.approval_policy in context.granted_policies
+                or context.user_confirmed_approval
+            )
+            if not is_satisfied:
                 err = CapabilityError(
                     code="unmet_precondition",
                     message=f"Capability {cap_id!r} requires human approval grant ({spec.approval_policy!r})",
@@ -166,8 +183,8 @@ class CapabilityPolicyEvaluator:
         elif spec.approval_policy.startswith("precondition:"):
             required_grant = spec.approval_policy.split("precondition:", 1)[1]
             is_satisfied = (
-                context.user_confirmed_approval
-                or required_grant in context.granted_preconditions
+                required_grant in context.granted_policies
+                or spec.approval_policy in context.granted_policies
             )
             if not is_satisfied:
                 err = CapabilityError(
@@ -179,7 +196,7 @@ class CapabilityPolicyEvaluator:
                     details={
                         "approval_policy": spec.approval_policy,
                         "required_grant": required_grant,
-                        "granted_preconditions": list(context.granted_preconditions),
+                        "granted_policies": list(context.granted_policies),
                     },
                 )
                 return PolicyDecision(allowed=False, capability_id=cap_id, error=err)
