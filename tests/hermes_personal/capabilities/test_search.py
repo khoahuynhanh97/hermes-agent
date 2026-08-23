@@ -6,7 +6,10 @@ from hermes_personal.capabilities.bindings import ImplementationBinding
 from hermes_personal.capabilities.errors import CapabilityError
 from hermes_personal.capabilities.manifest import INITIAL_CAPABILITIES
 from hermes_personal.capabilities.policy import PolicyRequestContext
-from hermes_personal.capabilities.search import GovernedCapabilitySearch
+from hermes_personal.capabilities.search import (
+    CapabilitySearchResultItem,
+    GovernedCapabilitySearch,
+)
 from hermes_personal.capabilities.snapshots import CatalogSnapshot
 
 
@@ -33,7 +36,7 @@ def _make_full_snapshot() -> CatalogSnapshot:
     )
 
 
-def test_search_governed_capabilities_bm25_filtering():
+def test_search_summary_does_not_contain_wire_name_or_provider():
     snapshot = _make_full_snapshot()
     search_adapter = GovernedCapabilitySearch(snapshot=snapshot)
 
@@ -46,9 +49,16 @@ def test_search_governed_capabilities_bm25_filtering():
     res = search_adapter.search(query="product research", context=context, limit=5)
     assert res.total_available > 0
     assert len(res.matches) > 0
-    top_match = res.matches[0]
-    assert top_match.capability_id == "product.research"
-    assert top_match.wire_name == "wire_product_research"
+
+    item = res.matches[0]
+    assert item.capability_id == "product.research"
+    assert hasattr(item, "capability_id")
+    assert hasattr(item, "display_name")
+    assert hasattr(item, "description")
+
+    # Wire name and provider must NOT be present on compact search items
+    assert not hasattr(item, "wire_name")
+    assert not hasattr(item, "provider")
 
 
 def test_search_filters_unauthorized_policy_capabilities():
@@ -96,6 +106,24 @@ def test_describe_allowed_capability_lazy_schema():
     assert desc.wire_name == "wire_product_research"
     assert desc.input_schema["type"] == "object"
     assert "query" in desc.input_schema["properties"]
+
+
+def test_describe_without_registry_raises_schema_unavailable():
+    snapshot = _make_full_snapshot()
+    # GovernedCapabilitySearch without registry or schema provider
+    search_adapter = GovernedCapabilitySearch(snapshot=snapshot, registry=None)
+
+    context = PolicyRequestContext(
+        authenticated=True,
+        skill_id="hermes-personal-product-research",
+        workflow_id="product_research",
+    )
+
+    with pytest.raises(CapabilityError) as exc_info:
+        search_adapter.describe("product.research", context=context)
+
+    assert exc_info.value.code == "schema_unavailable"
+    assert exc_info.value.retryable is True
 
 
 def test_describe_denied_capability_raises_capability_error():

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,7 +13,33 @@ from hermes_personal.capabilities.policy import (
     PolicyWarning,
 )
 from hermes_personal.capabilities.snapshots import CatalogSnapshot
-from tools.tool_search import _bm25_score, _tokenize
+
+
+def _tokenize_text(text: str) -> list[str]:
+    """Adapter wrapping upstream tokenization logic for capability search indexing."""
+    try:
+        from tools.tool_search import _tokenize
+        return _tokenize(text)
+    except Exception:
+        return [t.lower() for t in re.findall(r"[A-Za-z0-9]+", text)]
+
+
+def _score_bm25(
+    query_tokens: list[str],
+    doc_tokens: list[str],
+    doc_lengths: list[int],
+    avg_dl: float,
+    doc_freq: dict[str, int],
+    n_docs: int,
+) -> float:
+    """Adapter wrapping upstream BM25 scoring logic for capability search."""
+    try:
+        from tools.tool_search import _bm25_score
+        return _bm25_score(
+            query_tokens, doc_tokens, doc_lengths, avg_dl, doc_freq, n_docs
+        )
+    except Exception:
+        return 0.0
 
 
 @dataclass(frozen=True)
@@ -20,8 +47,6 @@ class CapabilitySearchResultItem:
     capability_id: str
     display_name: str
     description: str
-    wire_name: str
-    provider: str
     risk: str
     cost_class: str
     approval_policy: str
@@ -83,9 +108,9 @@ class GovernedCapabilitySearch:
                 matches=(),
             )
 
-        query_tokens = _tokenize(query_str)
+        query_tokens = _tokenize_text(query_str)
         doc_tokens_list = [
-            _tokenize(
+            _tokenize_text(
                 f"{spec.capability_id} {spec.owner} {binding.wire_name} {binding.provider}"
             )
             for spec, binding in candidates
@@ -101,7 +126,7 @@ class GovernedCapabilitySearch:
 
         scored: list[tuple[float, CapabilitySpec, ImplementationBinding]] = []
         for idx, (spec, binding) in enumerate(candidates):
-            s = _bm25_score(
+            s = _score_bm25(
                 query_tokens,
                 doc_tokens_list[idx],
                 doc_lengths,
@@ -130,8 +155,6 @@ class GovernedCapabilitySearch:
                 capability_id=spec.capability_id,
                 display_name=spec.capability_id,
                 description=f"{spec.capability_id} (owner={spec.owner})",
-                wire_name=binding.wire_name,
-                provider=binding.provider,
                 risk=spec.risk,
                 cost_class=spec.cost_class,
                 approval_policy=spec.approval_policy,
@@ -184,7 +207,7 @@ class GovernedCapabilitySearch:
                 capability_id=capability_id,
             )
 
-        input_schema: dict[str, Any] = {}
+        input_schema: dict[str, Any] | None = None
         output_schema: dict[str, Any] = {}
 
         if self.registry is not None:
@@ -196,23 +219,30 @@ class GovernedCapabilitySearch:
                         if raw_schema.get("type") == "function"
                         else raw_schema
                     )
-                    if isinstance(fn, dict):
+                    if isinstance(fn, dict) and "parameters" in fn:
                         input_schema = fn.get("parameters") or {}
                         output_schema = fn.get("returns") or {}
             elif isinstance(self.registry, dict):
-                raw_schema = self.registry.get(binding.wire_name, {})
+                raw_schema = self.registry.get(binding.wire_name)
                 if isinstance(raw_schema, dict):
                     fn = (
                         raw_schema.get("function")
                         if raw_schema.get("type") == "function"
                         else raw_schema
                     )
-                    if isinstance(fn, dict):
+                    if isinstance(fn, dict) and "parameters" in fn:
                         input_schema = fn.get("parameters") or {}
                         output_schema = fn.get("returns") or {}
 
-        if not input_schema:
-            input_schema = {"type": "object", "properties": {}}
+        if input_schema is None:
+            raise CapabilityError(
+                code="schema_unavailable",
+                message=f"Schema for capability {capability_id!r} (wire={binding.wire_name!r}) is unavailable",
+                retryable=True,
+                capability_id=capability_id,
+                actionable_recovery="Register tool or configure schema provider before describing capability",
+                details={"wire_name": binding.wire_name},
+            )
 
         return CapabilityDescription(
             capability_id=spec.capability_id,
