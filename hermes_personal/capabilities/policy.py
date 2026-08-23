@@ -153,7 +153,6 @@ class CapabilityPolicyEvaluator:
             is_satisfied = (
                 "approved_only" in context.granted_policies
                 or spec.approval_policy in context.granted_policies
-                or context.user_confirmed_approval
             )
             if not is_satisfied:
                 err = CapabilityError(

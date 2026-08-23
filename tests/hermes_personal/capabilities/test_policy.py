@@ -56,7 +56,6 @@ def test_default_context_unauthenticated():
     binding = _make_healthy_binding("product.research")
     evaluator = CapabilityPolicyEvaluator()
 
-    # Default context has authenticated=False
     context = PolicyRequestContext(
         skill_id="hermes-personal-product-research",
         workflow_id="product_research",
@@ -205,21 +204,18 @@ def test_unauthorized_workflow_denied():
     assert decision.error.code == "unauthorized_workflow"
 
 
-def test_user_confirmed_approval_cannot_bypass_artifact_precondition():
+def test_precondition_policy_denied_without_grant():
     spec = INITIAL_CAPABILITIES["video.brief.create"]
     assert spec.approval_policy == "precondition:product_locked"
 
     binding = _make_healthy_binding("video.brief.create")
     evaluator = CapabilityPolicyEvaluator()
-
-    # Generic user_confirmed_approval=True WITHOUT granted_policies containing product_locked MUST DENY
     context = PolicyRequestContext(
         authenticated=True,
         skill_id="hermes-personal-product-video-production",
         workflow_id="product_to_video",
-        user_confirmed_approval=True,
         granted_policies=frozenset(),
-        budget_available=10.0,
+        user_confirmed_approval=False,
     )
 
     decision = evaluator.evaluate(spec, binding, context)
@@ -228,26 +224,21 @@ def test_user_confirmed_approval_cannot_bypass_artifact_precondition():
     assert decision.error.code == "unmet_precondition"
 
 
-def test_hitl_grant_for_one_gate_cannot_satisfy_another_gate():
-    spec = INITIAL_CAPABILITIES["video.render"]
-    assert spec.approval_policy == "hitl:storyboard_and_budget"
-
-    binding = _make_healthy_binding("video.render")
+def test_precondition_policy_allowed_with_grant():
+    spec = INITIAL_CAPABILITIES["video.brief.create"]
+    binding = _make_healthy_binding("video.brief.create")
     evaluator = CapabilityPolicyEvaluator()
 
-    # Context granted hitl:resource_pack_lock, NOT hitl:storyboard_and_budget
     context = PolicyRequestContext(
         authenticated=True,
         skill_id="hermes-personal-product-video-production",
         workflow_id="product_to_video",
-        granted_policies=frozenset(["hitl:resource_pack_lock"]),
+        granted_policies=frozenset(["product_locked"]),
         budget_available=10.0,
     )
 
     decision = evaluator.evaluate(spec, binding, context)
-    assert decision.allowed is False
-    assert decision.error is not None
-    assert decision.error.code == "unmet_precondition"
+    assert decision.allowed is True
 
 
 def test_approved_only_retrieval_works_with_scope_grant():
@@ -257,7 +248,6 @@ def test_approved_only_retrieval_works_with_scope_grant():
     binding = _make_healthy_binding("knowledge.retrieve")
     evaluator = CapabilityPolicyEvaluator()
 
-    # Approved scope grant is present, user_confirmed_approval is False (no interactive prompt needed)
     context = PolicyRequestContext(
         authenticated=True,
         skill_id="hermes-personal-knowledge-learning",
@@ -269,6 +259,28 @@ def test_approved_only_retrieval_works_with_scope_grant():
     decision = evaluator.evaluate(spec, binding, context)
     assert decision.allowed is True
     assert decision.error is None
+
+
+def test_approved_only_retrieval_denied_without_scope_grant_even_with_user_confirmed_approval():
+    spec = INITIAL_CAPABILITIES["knowledge.retrieve"]
+    assert spec.approval_policy == "approved_only"
+
+    binding = _make_healthy_binding("knowledge.retrieve")
+    evaluator = CapabilityPolicyEvaluator()
+
+    # User confirmed approval is True, BUT granted_policies has NO approved_only scope grant!
+    context = PolicyRequestContext(
+        authenticated=True,
+        skill_id="hermes-personal-knowledge-learning",
+        workflow_id="knowledge_learning",
+        user_confirmed_approval=True,
+        granted_policies=frozenset(),
+    )
+
+    decision = evaluator.evaluate(spec, binding, context)
+    assert decision.allowed is False
+    assert decision.error is not None
+    assert decision.error.code == "unmet_precondition"
 
 
 def test_review_required_policy_emits_warning():
