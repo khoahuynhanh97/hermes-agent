@@ -16,6 +16,12 @@ from hermes_personal.capabilities.policy import (
     PolicyRequestContext,
     PolicyWarning,
 )
+from hermes_personal.capabilities.search import (
+    CapabilityDescription,
+    CapabilitySearchResult,
+    CapabilitySearchResultItem,
+    GovernedCapabilitySearch,
+)
 from hermes_personal.capabilities.snapshots import (
     CapabilitySnapshotRepository,
     CatalogSnapshot,
@@ -37,4 +43,8 @@ __all__ = [
     "PolicyRequestContext",
     "PolicyDecision",
     "PolicyWarning",
+    "GovernedCapabilitySearch",
+    "CapabilitySearchResult",
+    "CapabilitySearchResultItem",
+    "CapabilityDescription",
 ]
