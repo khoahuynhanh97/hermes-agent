@@ -1,0 +1,20 @@
+---
+name: hermes-personal-knowledge-learning
+description: Governed Hermes personal skill for approved retrieval and human-in-the-loop candidate capture.
+allowed-capabilities:
+  - knowledge.candidate.create
+  - knowledge.retrieve
+---
+
+# Hermes Personal Knowledge Learning Skill
+
+## Architectural Boundary
+The Hermes Orchestrator (`AgentTurnRuntime` + `AIAgent`) is the sole brain for all execution turns. This skill provides a governed domain contract for knowledge capture, candidate proposal, and approved knowledge retrieval; it is not an independent agent or router.
+
+## Governed Capabilities
+- `knowledge.candidate.create`: Propose new knowledge lessons or candidate entries for human review.
+- `knowledge.retrieve`: Retrieve officially approved knowledge entries from canonical storage.
+
+## Operational Rules
+- All candidate additions require explicit human-in-the-loop review (`review_required`); auto-approval is strictly forbidden.
+- Retrieval is restricted to approved knowledge entries (`approved_only`); learning or retrieval from unapproved, failed, or raw unverified turns is prohibited.
