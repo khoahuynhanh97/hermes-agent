@@ -64,9 +64,22 @@ CREATE TABLE IF NOT EXISTS turn_event (
 """
 
 
+def _migrate_schema(connection: sqlite3.Connection) -> None:
+    with connection:
+        columns = [
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(turn_execution)").fetchall()
+        ]
+        if columns and "user_message" not in columns:
+            connection.execute(
+                "ALTER TABLE turn_execution ADD COLUMN user_message TEXT NOT NULL DEFAULT ''"
+            )
+
+
 def connect(database_path: str | Path) -> sqlite3.Connection:
     connection = sqlite3.connect(database_path)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.executescript(SCHEMA)
+    _migrate_schema(connection)
     return connection

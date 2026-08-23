@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import sqlite3
 import threading
 import time
 from collections.abc import Iterator
@@ -32,12 +34,12 @@ class FakeTranscript:
     events: list[AgentEvent] = field(default_factory=list)
     user_turns: list[str] = field(default_factory=list)
     event_persisted: list[bool] = field(default_factory=list)
+    initial_history: list[Mapping[str, Any]] = field(default_factory=list)
 
     @property
     def history(self) -> tuple[Mapping[str, Any], ...]:
-        return tuple(
-            {"role": "user", "content": text} for text in self.user_turns
-        )
+        user_msgs = [{"role": "user", "content": text} for text in self.user_turns]
+        return tuple(self.initial_history + user_msgs)
 
     def append_user_turn(self, text: str) -> None:
         self.user_turns.append(text)
@@ -1085,3 +1087,190 @@ async def test_canonical_history_survives_sqlite_restart(tmp_path):
         )
     finally:
         reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_database_migration_from_legacy_schema_without_user_message_column(tmp_path):
+    db_path = tmp_path / "legacy-schema.sqlite"
+    raw_conn = connect_raw = sqlite3.connect(db_path)
+    connect_raw.row_factory = sqlite3.Row
+    connect_raw.execute("PRAGMA foreign_keys = ON")
+    connect_raw.executescript(
+        """
+        CREATE TABLE global_user_identity (
+          owner_user_id TEXT PRIMARY KEY, display_name TEXT NOT NULL, created_at TEXT NOT NULL
+        );
+        CREATE TABLE channel_identity (
+          channel TEXT NOT NULL, external_subject TEXT NOT NULL,
+          owner_user_id TEXT NOT NULL REFERENCES global_user_identity(owner_user_id), created_at TEXT NOT NULL,
+          PRIMARY KEY (channel, external_subject)
+        );
+        CREATE TABLE conversation_session (
+          session_id TEXT PRIMARY KEY,
+          owner_user_id TEXT NOT NULL REFERENCES global_user_identity(owner_user_id),
+          channel TEXT NOT NULL, external_conversation_id TEXT NOT NULL, active_workflow_id TEXT,
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          UNIQUE(owner_user_id, channel, external_conversation_id)
+        );
+        CREATE TABLE turn_execution (
+          owner_user_id TEXT NOT NULL REFERENCES global_user_identity(owner_user_id),
+          idempotency_key TEXT NOT NULL, request_digest TEXT NOT NULL, turn_id TEXT NOT NULL UNIQUE,
+          session_id TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          PRIMARY KEY (owner_user_id, idempotency_key)
+        );
+        CREATE TABLE turn_event (
+          turn_id TEXT NOT NULL REFERENCES turn_execution(turn_id),
+          sequence INTEGER NOT NULL, event_id TEXT NOT NULL UNIQUE, payload_json TEXT NOT NULL,
+          PRIMARY KEY (turn_id, sequence)
+        );
+        """
+    )
+    # Populate legacy records
+    now = datetime.now(timezone.utc).isoformat()
+    connect_raw.execute("INSERT INTO global_user_identity VALUES ('usr_1', 'Legacy User', ?)", (now,))
+    connect_raw.execute("INSERT INTO channel_identity VALUES ('telegram', 'act_1', 'usr_1', ?)", (now,))
+    connect_raw.execute("INSERT INTO conversation_session VALUES ('sess_1', 'usr_1', 'telegram', 'chat_1', NULL, ?, ?)", (now, now))
+    connect_raw.execute("INSERT INTO turn_execution VALUES ('usr_1', 'key_old', 'digest', 'turn_old', 'sess_1', 'completed', ?, ?)", (now, now))
+    connect_raw.execute(
+        "INSERT INTO turn_event VALUES ('turn_old', 0, 'evt_old', ?)",
+        (json.dumps({
+            "event_type": "completed", "principal_id": "act_1", "session_id": "sess_1",
+            "turn_id": "turn_old", "sequence": 0, "schema_version": 1, "data": {"text": "Old assistant reply"},
+            "workflow_id": None, "job_id": None, "approval_id": None, "tool_call_id": None,
+            "occurred_at": now, "event_id": "evt_old"
+        }),)
+    )
+    connect_raw.commit()
+    connect_raw.close()
+
+    # Now open with current connection factory (triggers migration)
+    conn = connect(db_path)
+    try:
+        columns = [r["name"] for r in conn.execute("PRAGMA table_info(turn_execution)").fetchall()]
+        assert "user_message" in columns
+
+        identities = IdentityRepository(conn)
+        sessions = SessionRepository(conn)
+        events = EventRepository(conn)
+        agent = FakeAgent()
+        transcript_factory = FakeTranscriptFactory()
+        transcript_factory.transcript.user_turns = ["Old user turn"]
+        service = HermesTurnService(identities, sessions, events, transcript_factory, agent)
+
+        req = AgentTurnRequest(
+            principal=PrincipalContext(
+                actor_id="act_1", owner_user_id="usr_1", channel="telegram", session_id="sess_1"  # type: ignore[arg-type]
+            ),
+            turn_id="turn_new", idempotency_key="key_new", message="New question"
+        )
+        agent.output = [AgentOutput("completed", {"text": "New reply"})]
+
+        # Executing new turn MUST NOT fail with missing column error
+        results = [e async for e in service.handle(req)]
+        assert len(results) == 1
+        assert results[0].event_type == "completed"
+
+        history = agent.calls[0][1]
+        assert history == (
+            {"role": "user", "content": "Old user turn"},
+            {"role": "assistant", "content": "Old assistant reply"},
+        )
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+async def test_canonical_history_preserves_tool_calls_and_results_without_duplicates(
+    turn_environment, request_factory
+):
+    _, identities, sessions, _, session, transcript_factory, _ = turn_environment
+    agent = FakeAgent()
+    service = build_service(identities, sessions, transcript_factory, agent)
+
+    # Turn 1 emits tool_call and tool_result
+    tool_call_dict = {"id": "call_42", "type": "function", "function": {"name": "search", "arguments": "{}"}}
+    tool_result_msg = {"role": "tool", "tool_call_id": "call_42", "content": "found result"}
+    agent.output = [
+        AgentOutput("tool_activity", {"kind": "tool_call", "tool_call": tool_call_dict}, tool_call_id="call_42"),
+        AgentOutput("tool_activity", {"kind": "tool_result", "message": tool_result_msg}, tool_call_id="call_42"),
+        AgentOutput("completed", {"text": "Search complete"}),
+    ]
+
+    req1 = replace(
+        request_factory(channel="telegram", session_id=session.session_id),
+        message="Search query",
+        turn_id="turn_1",
+        idempotency_key="key:1",
+    )
+    [e async for e in service.handle(req1)]
+
+    # Turn 2
+    agent.output = [AgentOutput("completed", {"text": "Follow up answer"})]
+    req2 = replace(
+        request_factory(channel="telegram", session_id=session.session_id),
+        message="Follow up question",
+        turn_id="turn_2",
+        idempotency_key="key:2",
+    )
+    [e async for e in service.handle(req2)]
+
+    turn2_history = agent.calls[1][1]
+    assert len(turn2_history) == 4
+    assert turn2_history[0] == {"role": "user", "content": "Search query"}
+    assert turn2_history[1] == {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": (tool_call_dict,),
+    }
+    assert turn2_history[2] == tool_result_msg
+    assert turn2_history[3] == {"role": "assistant", "content": "Search complete"}
+
+    # Test upstream adapter _new_tool_outputs duplicate suppression using reconstructed history
+    from hermes_personal.orchestration.upstream_agent import _new_tool_outputs
+    result_messages = [
+        {"role": "assistant", "tool_calls": [tool_call_dict]},
+        tool_result_msg,
+    ]
+    suppressed_outputs = list(_new_tool_outputs(result_messages, turn2_history, None))
+    assert len(suppressed_outputs) == 0
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_and_legacy_transcript_retention(
+    turn_environment, request_factory
+):
+    _, identities, sessions, _, session, transcript_factory, _ = turn_environment
+    transcript_factory.transcript.initial_history = [
+        {"role": "system", "content": "You are Hermes Assistant"},
+    ]
+    agent = FakeAgent()
+    service = build_service(identities, sessions, transcript_factory, agent)
+
+    agent.output = [AgentOutput("completed", {"text": "Reply 1"})]
+    req1 = replace(
+        request_factory(channel="telegram", session_id=session.session_id),
+        message="Hello",
+        turn_id="turn_1",
+        idempotency_key="key:1",
+    )
+    [e async for e in service.handle(req1)]
+
+    turn1_history = agent.calls[0][1]
+    assert len(turn1_history) == 1
+    assert turn1_history[0] == {"role": "system", "content": "You are Hermes Assistant"}
+
+    # Turn 2
+    agent.output = [AgentOutput("completed", {"text": "Reply 2"})]
+    req2 = replace(
+        request_factory(channel="telegram", session_id=session.session_id),
+        message="Follow up",
+        turn_id="turn_2",
+        idempotency_key="key:2",
+    )
+    [e async for e in service.handle(req2)]
+
+    turn2_history = agent.calls[1][1]
+    assert len(turn2_history) == 3
+    assert turn2_history[0] == {"role": "system", "content": "You are Hermes Assistant"}
+    assert turn2_history[1] == {"role": "user", "content": "Hello"}
+    assert turn2_history[2] == {"role": "assistant", "content": "Reply 1"}

@@ -214,7 +214,11 @@ class EventRepository:
             if cursor.rowcount != 1:
                 raise RuntimeError("claimed turn is missing or already terminal")
 
-    def load_session_history(self, session_id: str) -> tuple[Mapping[str, Any], ...]:
+    def load_session_history(
+        self,
+        session_id: str,
+        legacy_transcript_messages: list[Mapping[str, Any]] | None = None,
+    ) -> tuple[Mapping[str, Any], ...]:
         rows = self._connection.execute(
             """
             SELECT turn_id, user_message, status
@@ -225,11 +229,30 @@ class EventRepository:
             (session_id,),
         ).fetchall()
 
+        if not rows:
+            return ()
+
         history: list[Mapping[str, Any]] = []
+
+        legacy_user_msgs = [
+            msg["content"]
+            for msg in (legacy_transcript_messages or [])
+            if isinstance(msg, Mapping)
+            and msg.get("role") == "user"
+            and isinstance(msg.get("content"), str)
+            and msg.get("content")
+        ]
+        legacy_user_idx = 0
+
         for row in rows:
             turn_id = row["turn_id"]
             user_msg = row["user_message"]
-            history.append(MappingProxyType({"role": "user", "content": user_msg}))
+            if not user_msg and legacy_user_idx < len(legacy_user_msgs):
+                user_msg = legacy_user_msgs[legacy_user_idx]
+                legacy_user_idx += 1
+
+            if user_msg:
+                history.append(MappingProxyType({"role": "user", "content": user_msg}))
 
             event_rows = self._connection.execute(
                 """
@@ -242,23 +265,8 @@ class EventRepository:
             ).fetchall()
 
             events = [_deserialize_event(er) for er in event_rows]
-            assistant_text = ""
-            for event in events:
-                if event.event_type == "completed":
-                    assistant_text = (
-                        event.data.get("text")
-                        or event.data.get("final_response")
-                        or assistant_text
-                    )
-                elif event.event_type == "text_delta":
-                    delta = event.data.get("text")
-                    if isinstance(delta, str):
-                        assistant_text += delta
-
-            if assistant_text:
-                history.append(
-                    MappingProxyType({"role": "assistant", "content": assistant_text})
-                )
+            turn_messages = _reconstruct_turn_messages(events)
+            history.extend(turn_messages)
 
         return tuple(history)
 
@@ -291,3 +299,79 @@ class EventRepository:
         if [event.sequence for event in events] != list(range(len(events))):
             raise RuntimeError("stored turn event sequence is not contiguous")
         return events
+
+
+def _reconstruct_turn_messages(events: list[AgentEvent]) -> list[Mapping[str, Any]]:
+    messages: list[Mapping[str, Any]] = []
+    pending_tool_calls: list[Mapping[str, Any]] = []
+    assistant_text_parts: list[str] = []
+    terminal_text: str | None = None
+
+    def flush_pending_tool_calls() -> None:
+        nonlocal pending_tool_calls
+        if pending_tool_calls:
+            messages.append(
+                MappingProxyType(
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": tuple(
+                            MappingProxyType(dict(tc)) for tc in pending_tool_calls
+                        ),
+                    }
+                )
+            )
+            pending_tool_calls = []
+
+    def flush_assistant_text() -> None:
+        nonlocal assistant_text_parts, terminal_text
+        text = terminal_text or "".join(assistant_text_parts)
+        if text:
+            messages.append(
+                MappingProxyType({"role": "assistant", "content": text})
+            )
+        assistant_text_parts = []
+        terminal_text = None
+
+    for event in events:
+        if event.event_type == "tool_activity":
+            kind = event.data.get("kind")
+            if kind == "tool_call":
+                tool_call = event.data.get("tool_call")
+                if isinstance(tool_call, Mapping):
+                    pending_tool_calls.append(dict(tool_call))
+            elif kind == "tool_result":
+                flush_pending_tool_calls()
+                flush_assistant_text()
+                tool_msg = event.data.get("message")
+                if isinstance(tool_msg, Mapping):
+                    messages.append(
+                        MappingProxyType(
+                            {
+                                key: _freeze_json_value(val)
+                                for key, val in tool_msg.items()
+                            }
+                        )
+                    )
+                else:
+                    messages.append(
+                        MappingProxyType(
+                            {
+                                "role": "tool",
+                                "tool_call_id": event.tool_call_id or "",
+                                "content": str(event.data.get("tool_result", "")),
+                            }
+                        )
+                    )
+        elif event.event_type == "text_delta":
+            delta = event.data.get("text")
+            if isinstance(delta, str):
+                assistant_text_parts.append(delta)
+        elif event.event_type == "completed":
+            final_text = event.data.get("text") or event.data.get("final_response")
+            if isinstance(final_text, str) and final_text:
+                terminal_text = final_text
+
+    flush_pending_tool_calls()
+    flush_assistant_text()
+    return messages
