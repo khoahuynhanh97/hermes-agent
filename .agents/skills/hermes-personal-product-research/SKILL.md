@@ -4,12 +4,17 @@ description: Governed Hermes personal skill for product market research and reso
 allowed-capabilities:
   - product.research
   - product.resource_pack.build
+allowed-tools:
+  - web_search
+  - fetch_web_page
 ---
 
 # Hermes Personal Product Research Skill
 
 ## Architectural Boundary
 The Hermes Orchestrator (`AgentTurnRuntime` + `AIAgent`) is the sole brain for all execution turns. This skill provides a governed domain contract and metadata boundary for product intelligence and market research workflows; it is not an independent agent or router.
+
+Stable `allowed-capabilities` are the authoritative source of truth for policy evaluation; wire names listed under `allowed-tools` are advisory candidate bindings resolved dynamically through capability discovery and catalog snapshots.
 
 ## Governed Capabilities
 - `product.research`: Execute market research, feature analysis, and domain discovery for target product lines.

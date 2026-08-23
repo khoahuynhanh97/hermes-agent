@@ -4,12 +4,17 @@ description: Governed Hermes personal skill for approved retrieval and human-in-
 allowed-capabilities:
   - knowledge.candidate.create
   - knowledge.retrieve
+allowed-tools:
+  - knowledge_candidate_create
+  - knowledge_retrieve
 ---
 
 # Hermes Personal Knowledge Learning Skill
 
 ## Architectural Boundary
 The Hermes Orchestrator (`AgentTurnRuntime` + `AIAgent`) is the sole brain for all execution turns. This skill provides a governed domain contract for knowledge capture, candidate proposal, and approved knowledge retrieval; it is not an independent agent or router.
+
+Stable `allowed-capabilities` are the authoritative source of truth for policy evaluation; wire names listed under `allowed-tools` are advisory candidate bindings resolved dynamically through capability discovery and catalog snapshots.
 
 ## Governed Capabilities
 - `knowledge.candidate.create`: Propose new knowledge lessons or candidate entries for human review.

@@ -10,12 +10,20 @@ allowed-capabilities:
   - video.storyboard.create
   - video.render
   - video.export
+allowed-tools:
+  - web_search
+  - fetch_web_page
+  - image_generate
+  - video_render
+  - video_export
 ---
 
 # Hermes Personal Product Video Production Skill
 
 ## Architectural Boundary
 The Hermes Orchestrator (`AgentTurnRuntime` + `AIAgent`) is the sole brain for all execution turns. This skill provides a governed domain contract for the end-to-end product-to-video pipeline; it is not an independent agent or router.
+
+Stable `allowed-capabilities` are the authoritative source of truth for policy evaluation; wire names listed under `allowed-tools` are advisory candidate bindings resolved dynamically through capability discovery and catalog snapshots.
 
 ## Governed Capabilities
 - `product.research`: Execute product research and market positioning.
