@@ -83,6 +83,30 @@ CREATE TABLE IF NOT EXISTS capability_catalog_state (
   active_snapshot_id TEXT NOT NULL REFERENCES capability_snapshot(snapshot_id) ON DELETE RESTRICT,
   activated_at TEXT NOT NULL
 );
+-- New workflow persistence tables
+CREATE TABLE IF NOT EXISTS workflow (
+  workflow_id TEXT PRIMARY KEY,
+  aggregate_json TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS workflow_event (
+  event_id TEXT PRIMARY KEY,
+  workflow_id TEXT NOT NULL REFERENCES workflow(workflow_id) ON DELETE CASCADE,
+  event_type TEXT NOT NULL,
+  timestamp TEXT NOT NULL,
+  payload_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS processed_command (
+  workflow_id TEXT NOT NULL REFERENCES workflow(workflow_id) ON DELETE CASCADE,
+  command_id TEXT NOT NULL,
+  UNIQUE(workflow_id, command_id)
+);
+CREATE TABLE IF NOT EXISTS workflow_outbox (
+  outbox_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  workflow_id TEXT NOT NULL REFERENCES workflow(workflow_id) ON DELETE CASCADE,
+  message TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 """
 
 
