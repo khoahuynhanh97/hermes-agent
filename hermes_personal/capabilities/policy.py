@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping
 
 from hermes_personal.capabilities.bindings import ImplementationBinding
 from hermes_personal.capabilities.errors import CapabilityError
@@ -14,6 +13,7 @@ class PolicyRequestContext:
     workflow_id: str | None = None
     authenticated: bool = True
     user_confirmed_approval: bool = False
+    granted_preconditions: tuple[str, ...] = ()
     budget_available: float | None = None
     channel_id: str | None = None
     session_id: str | None = None
@@ -42,7 +42,66 @@ class CapabilityPolicyEvaluator:
     ) -> PolicyDecision:
         cap_id = spec.capability_id
 
-        # 1. Health check - unavailable
+        # 1. Authentication check
+        if not context.authenticated:
+            err = CapabilityError(
+                code="unauthenticated",
+                message="Request context is unauthenticated",
+                retryable=False,
+                capability_id=cap_id,
+                actionable_recovery="Authenticate request context before executing capability",
+            )
+            return PolicyDecision(allowed=False, capability_id=cap_id, error=err)
+
+        # 2. Capability ID match check
+        if spec.capability_id != binding.capability_id:
+            err = CapabilityError(
+                code="capability_id_mismatch",
+                message=f"Binding capability_id {binding.capability_id!r} does not match spec capability_id {spec.capability_id!r}",
+                retryable=False,
+                capability_id=cap_id,
+                actionable_recovery="Ensure binding capability_id matches spec capability_id",
+                details={
+                    "binding_capability_id": binding.capability_id,
+                    "spec_capability_id": spec.capability_id,
+                },
+            )
+            return PolicyDecision(allowed=False, capability_id=cap_id, error=err)
+
+        # 3. Skill authorization check (skill_id must be provided and allowed)
+        if context.skill_id is None or context.skill_id not in spec.allowed_skills:
+            err = CapabilityError(
+                code="unauthorized_skill",
+                message=f"Skill {context.skill_id!r} is not authorized for capability {cap_id!r}",
+                retryable=False,
+                capability_id=cap_id,
+                actionable_recovery="Specify an authorized skill in PolicyRequestContext",
+                details={
+                    "provided_skill_id": context.skill_id,
+                    "allowed_skills": list(spec.allowed_skills),
+                },
+            )
+            return PolicyDecision(allowed=False, capability_id=cap_id, error=err)
+
+        # 4. Workflow authorization check (workflow_id must be provided and allowed)
+        if (
+            context.workflow_id is None
+            or context.workflow_id not in spec.allowed_workflows
+        ):
+            err = CapabilityError(
+                code="unauthorized_workflow",
+                message=f"Workflow {context.workflow_id!r} is not authorized for capability {cap_id!r}",
+                retryable=False,
+                capability_id=cap_id,
+                actionable_recovery="Specify an authorized workflow in PolicyRequestContext",
+                details={
+                    "provided_workflow_id": context.workflow_id,
+                    "allowed_workflows": list(spec.allowed_workflows),
+                },
+            )
+            return PolicyDecision(allowed=False, capability_id=cap_id, error=err)
+
+        # 5. Binding Health check (unavailable)
         if binding.health == "unavailable":
             err = CapabilityError(
                 code="binding_unavailable",
@@ -54,7 +113,7 @@ class CapabilityPolicyEvaluator:
             )
             return PolicyDecision(allowed=False, capability_id=cap_id, error=err)
 
-        # 2. Schema version match check
+        # 6. Schema Version Match check
         if (
             binding.input_schema_version != spec.input_schema_version
             or binding.output_schema_version != spec.output_schema_version
@@ -78,77 +137,90 @@ class CapabilityPolicyEvaluator:
             )
             return PolicyDecision(allowed=False, capability_id=cap_id, error=err)
 
-        # 3. Skill authorization check
-        if context.skill_id is not None and context.skill_id not in spec.allowed_skills:
-            err = CapabilityError(
-                code="unauthorized_skill",
-                message=f"Skill {context.skill_id!r} is not allowed to use capability {cap_id!r}",
-                retryable=False,
-                capability_id=cap_id,
-                actionable_recovery="Add skill to spec.allowed_skills if access is intended",
-                details={"skill_id": context.skill_id, "allowed_skills": list(spec.allowed_skills)},
-            )
-            return PolicyDecision(allowed=False, capability_id=cap_id, error=err)
+        # 7. Approval / Precondition Policy check
+        policy_warnings: list[PolicyWarning] = []
 
-        # 4. Workflow authorization check
-        if (
-            context.workflow_id is not None
-            and context.workflow_id not in spec.allowed_workflows
+        if spec.approval_policy == "none":
+            pass
+        elif spec.approval_policy == "review_required":
+            policy_warnings.append(
+                PolicyWarning(
+                    code="post_execution_review_required",
+                    message=f"Capability {cap_id!r} requires post-execution human review",
+                )
+            )
+        elif (
+            spec.approval_policy.startswith("hitl:")
+            or spec.approval_policy == "approved_only"
         ):
-            err = CapabilityError(
-                code="unauthorized_workflow",
-                message=f"Workflow {context.workflow_id!r} is not allowed to use capability {cap_id!r}",
-                retryable=False,
-                capability_id=cap_id,
-                actionable_recovery="Add workflow to spec.allowed_workflows if access is intended",
-                details={
-                    "workflow_id": context.workflow_id,
-                    "allowed_workflows": list(spec.allowed_workflows),
-                },
-            )
-            return PolicyDecision(allowed=False, capability_id=cap_id, error=err)
-
-        # 5. Approval / Precondition check
-        requires_approval = spec.approval_policy != "none" and spec.approval_policy.startswith("hitl")
-        if requires_approval and not context.user_confirmed_approval:
-            err = CapabilityError(
-                code="unmet_precondition",
-                message=f"Capability {cap_id!r} requires explicit user approval before execution (policy={spec.approval_policy!r})",
-                retryable=True,
-                capability_id=cap_id,
-                actionable_recovery="Solicit explicit user approval before executing capability",
-                details={"approval_policy": spec.approval_policy},
-            )
-            return PolicyDecision(allowed=False, capability_id=cap_id, error=err)
-
-        # 6. Budget permission check
-        if spec.cost_class in ("metered", "paid"):
-            if context.budget_available is not None and context.budget_available <= 0:
+            if not context.user_confirmed_approval:
                 err = CapabilityError(
-                    code="budget_exceeded",
-                    message=f"Capability {cap_id!r} requires budget (cost_class={spec.cost_class!r}), but available budget is {context.budget_available}",
-                    retryable=False,
+                    code="unmet_precondition",
+                    message=f"Capability {cap_id!r} requires human approval grant ({spec.approval_policy!r})",
+                    retryable=True,
                     capability_id=cap_id,
-                    actionable_recovery="Allocate additional budget before calling capability",
-                    details={"cost_class": spec.cost_class, "budget_available": context.budget_available},
+                    actionable_recovery="Solicit explicit user approval before executing capability",
+                    details={"approval_policy": spec.approval_policy},
+                )
+                return PolicyDecision(allowed=False, capability_id=cap_id, error=err)
+        elif spec.approval_policy.startswith("precondition:"):
+            required_grant = spec.approval_policy.split("precondition:", 1)[1]
+            is_satisfied = (
+                context.user_confirmed_approval
+                or required_grant in context.granted_preconditions
+            )
+            if not is_satisfied:
+                err = CapabilityError(
+                    code="unmet_precondition",
+                    message=f"Capability {cap_id!r} requires precondition grant {required_grant!r}",
+                    retryable=True,
+                    capability_id=cap_id,
+                    actionable_recovery=f"Satisfy precondition {required_grant!r} before calling capability",
+                    details={
+                        "approval_policy": spec.approval_policy,
+                        "required_grant": required_grant,
+                        "granted_preconditions": list(context.granted_preconditions),
+                    },
                 )
                 return PolicyDecision(allowed=False, capability_id=cap_id, error=err)
 
-        # 7. Degraded health check
+        # 8. Budget Permission check
+        if spec.cost_class in ("metered", "paid"):
+            if context.budget_available is None or context.budget_available <= 0:
+                err = CapabilityError(
+                    code="budget_exceeded",
+                    message=f"Capability {cap_id!r} requires cost authorization ({spec.cost_class!r}), but budget_available is {context.budget_available}",
+                    retryable=False,
+                    capability_id=cap_id,
+                    actionable_recovery="Allocate positive budget before calling capability",
+                    details={
+                        "cost_class": spec.cost_class,
+                        "budget_available": context.budget_available,
+                    },
+                )
+                return PolicyDecision(allowed=False, capability_id=cap_id, error=err)
+
+        # 9. Degraded Health check
         if binding.health == "degraded":
+            requires_approval = (
+                spec.approval_policy != "none"
+                and spec.approval_policy != "review_required"
+            )
             if (
                 spec.risk == "low"
                 and spec.cost_class == "free"
                 and not requires_approval
             ):
-                warning = PolicyWarning(
-                    code="degraded_capability_warning",
-                    message=f"Capability {cap_id!r} is operating in degraded mode; results may be incomplete",
+                policy_warnings.append(
+                    PolicyWarning(
+                        code="degraded_capability_warning",
+                        message=f"Capability {cap_id!r} is operating in degraded mode; results may be incomplete",
+                    )
                 )
                 return PolicyDecision(
                     allowed=True,
                     capability_id=cap_id,
-                    warnings=(warning,),
+                    warnings=tuple(policy_warnings),
                 )
 
             err = CapabilityError(
@@ -161,5 +233,9 @@ class CapabilityPolicyEvaluator:
             )
             return PolicyDecision(allowed=False, capability_id=cap_id, error=err)
 
-        # 8. Default Allow
-        return PolicyDecision(allowed=True, capability_id=cap_id)
+        # 10. Default Allow
+        return PolicyDecision(
+            allowed=True,
+            capability_id=cap_id,
+            warnings=tuple(policy_warnings),
+        )

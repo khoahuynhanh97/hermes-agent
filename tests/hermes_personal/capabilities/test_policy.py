@@ -37,9 +37,11 @@ def test_matrix_all_manifest_capabilities_happy_path(cap_id: str):
     allowed_wf = next(iter(spec.allowed_workflows))
 
     context = PolicyRequestContext(
+        authenticated=True,
         skill_id=allowed_skill,
         workflow_id=allowed_wf,
         user_confirmed_approval=True,
+        granted_preconditions=("product_locked", "resource_pack_locked"),
         budget_available=10.0,
     )
 
@@ -47,6 +49,74 @@ def test_matrix_all_manifest_capabilities_happy_path(cap_id: str):
     assert decision.allowed is True
     assert decision.capability_id == cap_id
     assert decision.error is None
+
+
+def test_unauthenticated_denied():
+    spec = INITIAL_CAPABILITIES["product.research"]
+    binding = _make_healthy_binding("product.research")
+    evaluator = CapabilityPolicyEvaluator()
+
+    context = PolicyRequestContext(
+        authenticated=False,
+        skill_id="hermes-personal-product-research",
+        workflow_id="product_research",
+    )
+
+    decision = evaluator.evaluate(spec, binding, context)
+    assert decision.allowed is False
+    assert decision.error is not None
+    assert decision.error.code == "unauthenticated"
+
+
+def test_capability_id_mismatch_denied():
+    spec = INITIAL_CAPABILITIES["knowledge.retrieve"]
+    binding = _make_healthy_binding("product.research")
+    evaluator = CapabilityPolicyEvaluator()
+
+    context = PolicyRequestContext(
+        authenticated=True,
+        skill_id="hermes-personal-product-research",
+        workflow_id="product_research",
+    )
+
+    decision = evaluator.evaluate(spec, binding, context)
+    assert decision.allowed is False
+    assert decision.error is not None
+    assert decision.error.code == "capability_id_mismatch"
+
+
+def test_missing_skill_identity_denied():
+    spec = INITIAL_CAPABILITIES["product.research"]
+    binding = _make_healthy_binding("product.research")
+    evaluator = CapabilityPolicyEvaluator()
+
+    context = PolicyRequestContext(
+        authenticated=True,
+        skill_id=None,
+        workflow_id="product_research",
+    )
+
+    decision = evaluator.evaluate(spec, binding, context)
+    assert decision.allowed is False
+    assert decision.error is not None
+    assert decision.error.code == "unauthorized_skill"
+
+
+def test_missing_workflow_identity_denied():
+    spec = INITIAL_CAPABILITIES["product.research"]
+    binding = _make_healthy_binding("product.research")
+    evaluator = CapabilityPolicyEvaluator()
+
+    context = PolicyRequestContext(
+        authenticated=True,
+        skill_id="hermes-personal-product-research",
+        workflow_id=None,
+    )
+
+    decision = evaluator.evaluate(spec, binding, context)
+    assert decision.allowed is False
+    assert decision.error is not None
+    assert decision.error.code == "unauthorized_workflow"
 
 
 def test_unavailable_binding_denied():
@@ -63,7 +133,10 @@ def test_unavailable_binding_denied():
         health="unavailable",
     )
     evaluator = CapabilityPolicyEvaluator()
-    context = PolicyRequestContext()
+    context = PolicyRequestContext(
+        skill_id="hermes-personal-product-research",
+        workflow_id="product_research",
+    )
 
     decision = evaluator.evaluate(spec, binding, context)
     assert decision.allowed is False
@@ -80,13 +153,16 @@ def test_schema_version_mismatch_denied():
         source="hermes_mcp",
         provider="product_intelligence",
         implementation_version="1.0.0",
-        input_schema_version="2.0",  # Mismatched input version
+        input_schema_version="2.0",
         output_schema_version="1.0",
         schema_digest="sha256:0000000000000000000000000000000000000000000000000000000000000000",
         health="healthy",
     )
     evaluator = CapabilityPolicyEvaluator()
-    context = PolicyRequestContext()
+    context = PolicyRequestContext(
+        skill_id="hermes-personal-product-research",
+        workflow_id="product_research",
+    )
 
     decision = evaluator.evaluate(spec, binding, context)
     assert decision.allowed is False
@@ -99,7 +175,10 @@ def test_unauthorized_skill_denied():
     spec = INITIAL_CAPABILITIES["product.research"]
     binding = _make_healthy_binding("product.research")
     evaluator = CapabilityPolicyEvaluator()
-    context = PolicyRequestContext(skill_id="unauthorized-skill-name")
+    context = PolicyRequestContext(
+        skill_id="unauthorized-skill-name",
+        workflow_id="product_research",
+    )
 
     decision = evaluator.evaluate(spec, binding, context)
     assert decision.allowed is False
@@ -111,7 +190,10 @@ def test_unauthorized_workflow_denied():
     spec = INITIAL_CAPABILITIES["product.research"]
     binding = _make_healthy_binding("product.research")
     evaluator = CapabilityPolicyEvaluator()
-    context = PolicyRequestContext(workflow_id="unauthorized_workflow_name")
+    context = PolicyRequestContext(
+        skill_id="hermes-personal-product-research",
+        workflow_id="unauthorized_workflow_name",
+    )
 
     decision = evaluator.evaluate(spec, binding, context)
     assert decision.allowed is False
@@ -119,30 +201,87 @@ def test_unauthorized_workflow_denied():
     assert decision.error.code == "unauthorized_workflow"
 
 
-def test_unmet_precondition_denied():
-    spec = INITIAL_CAPABILITIES["video.render"]
-    assert spec.approval_policy != "none"
+def test_precondition_policy_denied_without_grant():
+    spec = INITIAL_CAPABILITIES["video.brief.create"]
+    assert spec.approval_policy == "precondition:product_locked"
 
-    binding = _make_healthy_binding("video.render")
+    binding = _make_healthy_binding("video.brief.create")
     evaluator = CapabilityPolicyEvaluator()
-    context = PolicyRequestContext(user_confirmed_approval=False)
+    context = PolicyRequestContext(
+        skill_id="hermes-personal-product-video-production",
+        workflow_id="product_to_video",
+        granted_preconditions=(),
+        user_confirmed_approval=False,
+    )
 
     decision = evaluator.evaluate(spec, binding, context)
     assert decision.allowed is False
     assert decision.error is not None
     assert decision.error.code == "unmet_precondition"
-    assert decision.error.retryable is True
 
 
-def test_budget_exceeded_denied():
+def test_precondition_policy_allowed_with_grant():
+    spec = INITIAL_CAPABILITIES["video.brief.create"]
+    binding = _make_healthy_binding("video.brief.create")
+    evaluator = CapabilityPolicyEvaluator()
+
+    context = PolicyRequestContext(
+        skill_id="hermes-personal-product-video-production",
+        workflow_id="product_to_video",
+        granted_preconditions=("product_locked",),
+        budget_available=10.0,
+    )
+
+    decision = evaluator.evaluate(spec, binding, context)
+    assert decision.allowed is True
+
+
+def test_review_required_policy_emits_warning():
+    spec = INITIAL_CAPABILITIES["knowledge.candidate.create"]
+    assert spec.approval_policy == "review_required"
+
+    binding = _make_healthy_binding("knowledge.candidate.create")
+    evaluator = CapabilityPolicyEvaluator()
+    context = PolicyRequestContext(
+        skill_id="hermes-personal-knowledge-learning",
+        workflow_id="knowledge_learning",
+    )
+
+    decision = evaluator.evaluate(spec, binding, context)
+    assert decision.allowed is True
+    assert len(decision.warnings) == 1
+    assert decision.warnings[0].code == "post_execution_review_required"
+
+
+def test_missing_paid_budget_none_denied():
     spec = INITIAL_CAPABILITIES["video.render"]
     assert spec.cost_class == "paid"
 
     binding = _make_healthy_binding("video.render")
     evaluator = CapabilityPolicyEvaluator()
     context = PolicyRequestContext(
+        skill_id="hermes-personal-product-video-production",
+        workflow_id="product_to_video",
         user_confirmed_approval=True,
-        budget_available=0.0,  # Exceeded / zero budget
+        budget_available=None,
+    )
+
+    decision = evaluator.evaluate(spec, binding, context)
+    assert decision.allowed is False
+    assert decision.error is not None
+    assert decision.error.code == "budget_exceeded"
+
+
+def test_zero_paid_budget_denied():
+    spec = INITIAL_CAPABILITIES["video.render"]
+
+    binding = _make_healthy_binding("video.render")
+    evaluator = CapabilityPolicyEvaluator()
+    context = PolicyRequestContext(
+        skill_id="hermes-personal-product-video-production",
+        workflow_id="product_to_video",
+        user_confirmed_approval=True,
+        budget_available=0.0,
     )
 
     decision = evaluator.evaluate(spec, binding, context)
@@ -169,7 +308,10 @@ def test_degraded_low_risk_free_allowed_with_warning():
         health="degraded",
     )
     evaluator = CapabilityPolicyEvaluator()
-    context = PolicyRequestContext()
+    context = PolicyRequestContext(
+        skill_id="hermes-personal-product-research",
+        workflow_id="product_research",
+    )
 
     decision = evaluator.evaluate(spec, binding, context)
     assert decision.allowed is True
@@ -192,7 +334,12 @@ def test_degraded_medium_high_risk_or_metered_denied():
         health="degraded",
     )
     evaluator = CapabilityPolicyEvaluator()
-    context = PolicyRequestContext(user_confirmed_approval=True, budget_available=10.0)
+    context = PolicyRequestContext(
+        skill_id="hermes-personal-product-video-production",
+        workflow_id="product_to_video",
+        user_confirmed_approval=True,
+        budget_available=10.0,
+    )
 
     decision = evaluator.evaluate(spec, binding, context)
     assert decision.allowed is False
@@ -231,3 +378,34 @@ def test_capability_error_serialization_and_redaction():
     # Verify JSON serializability
     json_str = json.dumps(as_dict)
     assert "test_code" in json_str
+
+
+def test_bounded_serialization_depth_and_length():
+    deep_nested: dict[str, Any] = {"level0": "val"}
+    curr = deep_nested
+    for i in range(1, 10):
+        curr[f"level{i}"] = {}
+        curr = curr[f"level{i}"]
+    curr["leaf"] = "end"
+
+    long_str = "a" * 1000
+
+    err = CapabilityError(
+        code="test_bounded",
+        message=long_str,
+        retryable=False,
+        capability_id="product.research",
+        actionable_recovery=long_str,
+        details={"deep": deep_nested, "long": long_str},
+    )
+
+    as_dict = err.to_dict()
+    assert len(as_dict["message"]) <= 503
+    assert as_dict["message"].endswith("...")
+    assert len(as_dict["actionable_recovery"]) <= 503
+
+    curr_dict = as_dict["details"]["deep"]
+    for i in range(1, 6):
+        assert f"level{i}" in curr_dict
+        curr_dict = curr_dict[f"level{i}"]
+    assert curr_dict == "[TRUNCATED_DEPTH]"
