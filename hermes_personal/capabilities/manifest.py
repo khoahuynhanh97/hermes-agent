@@ -37,8 +37,11 @@ _MANIFEST_ENTRIES: list[CapabilitySpec] = [
         owner="product_intelligence",
         input_schema_version="1.0",
         output_schema_version="1.0",
-        allowed_skills=("hermes-personal-product-research",),
-        allowed_workflows=("product_research",),
+        allowed_skills=(
+            "hermes-personal-product-research",
+            "hermes-personal-product-video-production",
+        ),
+        allowed_workflows=("product_research", "product_to_video"),
         approval_policy="none",
         risk="low",
         cost_class="free",
@@ -48,8 +51,11 @@ _MANIFEST_ENTRIES: list[CapabilitySpec] = [
         owner="product_intelligence",
         input_schema_version="1.0",
         output_schema_version="1.0",
-        allowed_skills=("hermes-personal-product-research",),
-        allowed_workflows=("product_research",),
+        allowed_skills=(
+            "hermes-personal-product-research",
+            "hermes-personal-product-video-production",
+        ),
+        allowed_workflows=("product_research", "product_to_video"),
         approval_policy="none",
         risk="medium",
         cost_class="metered",
@@ -59,7 +65,10 @@ _MANIFEST_ENTRIES: list[CapabilitySpec] = [
         owner="product_intelligence",
         input_schema_version="1.0",
         output_schema_version="1.0",
-        allowed_skills=("hermes-personal-product-research", "hermes-personal-product-video-production"),
+        allowed_skills=(
+            "hermes-personal-product-research",
+            "hermes-personal-product-video-production",
+        ),
         allowed_workflows=("product_research", "product_to_video"),
         approval_policy="hitl:product_lock",
         risk="high",
@@ -141,13 +150,31 @@ _MANIFEST_ENTRIES: list[CapabilitySpec] = [
             "hermes-personal-product-video-production",
             "hermes-personal-knowledge-learning",
         ),
-        allowed_workflows=("product_research", "product_to_video", "knowledge_learning"),
+        allowed_workflows=(
+            "product_research",
+            "product_to_video",
+            "knowledge_learning",
+        ),
         approval_policy="approved_only",
         risk="low",
         cost_class="free",
     ),
 ]
 
-INITIAL_CAPABILITIES: Mapping[str, CapabilitySpec] = MappingProxyType(
-    {spec.capability_id: spec for spec in _MANIFEST_ENTRIES}
+
+def _build_initial_capabilities(
+    entries: list[CapabilitySpec],
+) -> Mapping[str, CapabilitySpec]:
+    mapping: dict[str, CapabilitySpec] = {}
+    for spec in entries:
+        if spec.capability_id in mapping:
+            raise ValueError(
+                f"duplicate capability_id in manifest entries: {spec.capability_id}"
+            )
+        mapping[spec.capability_id] = spec
+    return MappingProxyType(mapping)
+
+
+INITIAL_CAPABILITIES: Mapping[str, CapabilitySpec] = _build_initial_capabilities(
+    _MANIFEST_ENTRIES
 )
