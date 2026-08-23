@@ -381,30 +381,6 @@ class EventRepository:
 
         return pre_canonical
 
-        history: list[Mapping[str, Any]] = list(legacy_messages)
-
-        for row in rows:
-            turn_id = row["turn_id"]
-            user_msg = row["user_message"]
-            if user_msg:
-                history.append(MappingProxyType({"role": "user", "content": user_msg}))
-
-            event_rows = self._connection.execute(
-                """
-                SELECT sequence, event_id, payload_json
-                FROM turn_event
-                WHERE turn_id = ?
-                ORDER BY sequence
-                """,
-                (turn_id,),
-            ).fetchall()
-
-            events = [_deserialize_event(er) for er in event_rows]
-            turn_messages = _reconstruct_turn_messages(events)
-            history.extend(turn_messages)
-
-        return tuple(history)
-
     def load_session_events(self, session_id: str) -> tuple[AgentEvent, ...]:
         rows = self._connection.execute(
             """
