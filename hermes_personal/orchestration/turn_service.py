@@ -5,6 +5,9 @@ import logging
 from collections.abc import AsyncIterator, Iterator
 from typing import Any, Mapping
 
+from hermes_personal.capabilities.errors import CapabilityError
+from hermes_personal.capabilities.policy import PolicyRequestContext
+from hermes_personal.capabilities.service import CapabilityCatalogService
 from hermes_personal.contracts import AgentEvent, AgentTurnRequest
 from hermes_personal.identity import IdentityRepository, UnknownIdentity
 from hermes_personal.sessions import SessionRepository, UnknownSession
@@ -76,12 +79,37 @@ class HermesTurnService:
         event_repository: EventRepository,
         transcript_factory: TranscriptFactory,
         agent: UpstreamAgentPort,
+        catalog_service: CapabilityCatalogService | None = None,
     ) -> None:
         self._identity_repository = identity_repository
         self._session_repository = session_repository
         self._event_repository = event_repository
         self._transcript_factory = transcript_factory
         self._agent = agent
+        self._catalog_service = catalog_service
+
+    @property
+    def catalog_service(self) -> CapabilityCatalogService | None:
+        return self._catalog_service
+
+    def build_policy_context(
+        self,
+        request: AgentTurnRequest,
+        skill_id: str | None = None,
+        granted_policies: frozenset[str] = frozenset(),
+        user_confirmed_approval: bool = False,
+        budget_available: float | None = None,
+    ) -> PolicyRequestContext:
+        return PolicyRequestContext(
+            authenticated=True,
+            skill_id=skill_id,
+            workflow_id=request.workflow_id,
+            channel_id=request.channel,
+            session_id=request.session_id,
+            granted_policies=granted_policies,
+            user_confirmed_approval=user_confirmed_approval,
+            budget_available=budget_available,
+        )
 
     async def handle(self, request: AgentTurnRequest) -> AsyncIterator[AgentEvent]:
         self._validate_request(request)
@@ -251,12 +279,16 @@ class HermesTurnService:
     def _failed_event(
         request: AgentTurnRequest, sequence: int, error: Exception
     ) -> AgentEvent:
+        if isinstance(error, CapabilityError):
+            data = error.to_dict()
+        else:
+            data = {"error": str(error)}
         return AgentEvent(
             event_type="failed",
             principal_id=request.principal.owner_user_id,
             session_id=request.session_id,
             turn_id=request.turn_id,
             sequence=sequence,
-            data={"error": str(error)},
+            data=data,
             workflow_id=request.workflow_id,
         )

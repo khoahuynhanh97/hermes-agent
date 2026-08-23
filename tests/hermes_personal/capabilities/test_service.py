@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from unittest.mock import MagicMock
 import pytest
 
 from hermes_personal.capabilities.discovery import DEFAULT_WIRE_BINDING_RULES
@@ -10,11 +11,13 @@ from hermes_personal.capabilities.policy import PolicyRequestContext
 from hermes_personal.capabilities.service import CapabilityCatalogService
 from hermes_personal.capabilities.snapshots import CapabilitySnapshotRepository
 from hermes_personal.contracts import AgentTurnRequest, PrincipalContext
+from hermes_personal.orchestration.event_repository import EventRepository
+from hermes_personal.orchestration.turn_service import HermesTurnService
+from hermes_personal.storage.sqlite import connect
 
 
 def _create_database() -> sqlite3.Connection:
-    connection = sqlite3.connect(":memory:")
-    connection.row_factory = sqlite3.Row
+    connection = connect(":memory:")
     # Initialize capability tables
     connection.executescript(
         """
@@ -86,7 +89,6 @@ def test_service_controlled_reload_saves_and_activates_snapshot():
 def test_service_reload_with_missing_wire_tools_raises_capability_error():
     connection = _create_database()
     repo = CapabilitySnapshotRepository(connection)
-    # Incomplete registry with only 1 tool
     incomplete_registry = {
         "mcp__product_intelligence__research_product": {
             "type": "function",
@@ -156,3 +158,70 @@ def test_hermetic_vertical_slice_turn_context_to_capability_service():
     desc = service.describe(top_cap, context=policy_context)
     assert desc.capability_id == top_cap
     assert desc.input_schema is not None
+
+
+class _MockUpstreamAgent:
+    def run(self, request, history):
+        return iter([])
+
+
+def test_turn_service_integration_with_catalog_service():
+    connection = _create_database()
+    repo = CapabilitySnapshotRepository(connection)
+    fake_registry = _make_full_fake_registry()
+    catalog_service = CapabilityCatalogService(snapshot_repository=repo, registry=fake_registry)
+    catalog_service.reload()
+
+    event_repo = EventRepository(connection)
+    identity_repo = MagicMock()
+    session_repo = MagicMock()
+    transcript_factory = MagicMock()
+
+    turn_service = HermesTurnService(
+        identity_repository=identity_repo,
+        session_repository=session_repo,
+        event_repository=event_repo,
+        transcript_factory=transcript_factory,
+        agent=_MockUpstreamAgent(),
+        catalog_service=catalog_service,
+    )
+
+    assert turn_service.catalog_service is catalog_service
+
+    principal = PrincipalContext(actor_id="usr_01", session_id="ses_01", owner_user_id="usr_01", channel="cli")
+    request = AgentTurnRequest(
+        principal=principal,
+        message="Find product specs",
+        workflow_id="product_research",
+    )
+
+    policy_context = turn_service.build_policy_context(
+        request, skill_id="hermes-personal-product-research"
+    )
+    search_res = turn_service.catalog_service.search(query=request.message, context=policy_context)
+    assert len(search_res.matches) > 0
+
+
+def test_turn_service_propagates_capability_error_in_failed_event_data():
+    principal = PrincipalContext(actor_id="usr_01", session_id="ses_01", owner_user_id="usr_01", channel="cli")
+    request = AgentTurnRequest(
+        principal=principal,
+        message="Find product specs",
+        workflow_id="product_research",
+    )
+
+    cap_error = CapabilityError(
+        code="binding_unavailable",
+        message="No active catalog snapshot",
+        retryable=True,
+        capability_id="product.research",
+        actionable_recovery="Reload catalog snapshot",
+    )
+
+    event = HermesTurnService._failed_event(request, sequence=0, error=cap_error)
+    assert event.event_type == "failed"
+    assert event.data["code"] == "binding_unavailable"
+    assert event.data["message"] == "No active catalog snapshot"
+    assert event.data["retryable"] is True
+    assert event.data["capability_id"] == "product.research"
+    assert event.data["actionable_recovery"] == "Reload catalog snapshot"
