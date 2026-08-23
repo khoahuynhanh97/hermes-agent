@@ -1550,3 +1550,295 @@ async def test_legacy_migration_restart_without_transcript_and_repeated_text(tmp
         assert turn_new_history[1] == {"role": "assistant", "content": "Old answer"}
     finally:
         reopened.close()
+
+
+class RealContractFakeUpstreamAgent:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def run_conversation(
+        self,
+        *,
+        user_message: Any,
+        conversation_history: list[Mapping[str, Any]],
+        task_id: str,
+        stream_callback: Callable[[str | None], None],
+        persist_user_message: Any,
+    ) -> Mapping[str, Any]:
+        self.calls.append(
+            {
+                "user_message": user_message,
+                "history": conversation_history,
+                "task_id": task_id,
+            }
+        )
+        stream_callback(f"Thinking for {user_message}...")
+        turn_num = len(self.calls)
+        tool_call_dict = {
+            "id": f"call_{turn_num}",
+            "type": "function",
+            "function": {"name": "search", "arguments": "{}"},
+        }
+        tool_result_msg = {
+            "role": "tool",
+            "tool_call_id": f"call_{turn_num}",
+            "content": f"result_{turn_num}",
+        }
+        current_messages = [
+            {"role": "user", "content": user_message},
+            {
+                "role": "assistant",
+                "content": f"Thinking for {user_message}...",
+                "tool_calls": [tool_call_dict],
+            },
+            tool_result_msg,
+            {"role": "assistant", "content": f"Answer for {user_message}"},
+        ]
+        # Real NousResearch contract: cumulative messages = conversation_history + current_messages
+        cumulative_messages = list(conversation_history) + current_messages
+        return {
+            "completed": True,
+            "failed": False,
+            "interrupted": False,
+            "final_response": f"Answer for {user_message}",
+            "messages": cumulative_messages,
+        }
+
+
+@pytest.mark.asyncio
+async def test_real_contract_cumulative_upstream_result_has_linear_payload_growth_and_no_duplicates(
+    tmp_path,
+):
+    db_path = tmp_path / "cumulative-upstream.sqlite"
+    connection = connect(db_path)
+    identities = IdentityRepository(connection)
+    sessions = SessionRepository(connection)
+    events = EventRepository(connection)
+    owner = identities.create_owner("primary")
+    identities.link(owner.owner_user_id, "telegram", "actor:1")
+    session = sessions.get_or_create(owner.owner_user_id, "telegram", "chat:1")
+    transcript_factory = FakeTranscriptFactory()
+
+    upstream_agent = RealContractFakeUpstreamAgent()
+    adapter = UpstreamAIAgentAdapter(upstream_agent)
+    service = HermesTurnService(
+        identities, sessions, events, transcript_factory, adapter
+    )
+
+    def make_req(msg: str, turn_id: str, key: str) -> AgentTurnRequest:
+        return AgentTurnRequest(
+            principal=PrincipalContext(
+                actor_id="actor:1",
+                owner_user_id=owner.owner_user_id,
+                channel="telegram",  # type: ignore[arg-type]
+                session_id=session.session_id,
+            ),
+            turn_id=turn_id,
+            idempotency_key=key,
+            message=msg,
+        )
+
+    # Turn 1
+    [e async for e in service.handle(make_req("Question 1", "turn_1", "key:1"))]
+
+    # Turn 2
+    [e async for e in service.handle(make_req("Question 2", "turn_2", "key:2"))]
+
+    # Turn 3
+    [e async for e in service.handle(make_req("Question 3", "turn_3", "key:3"))]
+
+    # Verify history received by upstream agent in Turn 3
+    turn3_history = upstream_agent.calls[2]["history"]
+    # 4 messages per turn * 2 turns = 8 prior history messages
+    assert len(turn3_history) == 8
+    assert turn3_history[0] == {"role": "user", "content": "Question 1"}
+    assert turn3_history[3] == {"role": "assistant", "content": "Answer for Question 1"}
+    assert turn3_history[4] == {"role": "user", "content": "Question 2"}
+    assert turn3_history[7] == {"role": "assistant", "content": "Answer for Question 2"}
+
+    # Verify linear per-turn payload growth in turn_event completed data
+    for tid in ["turn_1", "turn_2", "turn_3"]:
+        row = connection.execute(
+            """
+            SELECT payload_json FROM turn_event
+            WHERE turn_id = ? AND sequence = (SELECT MAX(sequence) FROM turn_event WHERE turn_id = ?)
+            """,
+            (tid, tid),
+        ).fetchone()
+        payload = json.loads(row["payload_json"])
+        stored_turn_msgs = payload["data"]["turn_messages"]
+        # Stored turn_messages must contain ONLY the 4 current-turn messages (not cumulative history)
+        assert len(stored_turn_msgs) == 4
+
+    connection.close()
+
+    # Restart database connection with an empty transcript adapter
+    reopened = connect(db_path)
+    try:
+        reopened_identities = IdentityRepository(reopened)
+        reopened_sessions = SessionRepository(reopened)
+        reopened_events = EventRepository(reopened)
+        reopened_upstream_agent = RealContractFakeUpstreamAgent()
+        reopened_adapter = UpstreamAIAgentAdapter(reopened_upstream_agent)
+        reopened_service = HermesTurnService(
+            reopened_identities,
+            reopened_sessions,
+            reopened_events,
+            FakeTranscriptFactory(),
+            reopened_adapter,
+        )
+
+        [
+            e
+            async for e in reopened_service.handle(
+                make_req("Question 4", "turn_4", "key:4")
+            )
+        ]
+
+        turn4_history = reopened_upstream_agent.calls[0]["history"]
+        # 3 turns * 4 messages = 12 historical messages
+        assert len(turn4_history) == 12
+        assert turn4_history[0] == {"role": "user", "content": "Question 1"}
+        assert turn4_history[4] == {"role": "user", "content": "Question 2"}
+        assert turn4_history[8] == {"role": "user", "content": "Question 3"}
+        assert turn4_history[11] == {"role": "assistant", "content": "Answer for Question 3"}
+    finally:
+        reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_durable_identity_cutover_with_multiple_legacy_and_canonical_turns(tmp_path):
+    db_path = tmp_path / "legacy-identity-cutover.sqlite"
+    raw_conn = sqlite3.connect(db_path)
+    raw_conn.row_factory = sqlite3.Row
+    raw_conn.execute("PRAGMA foreign_keys = ON")
+    raw_conn.executescript(
+        """
+        CREATE TABLE global_user_identity (
+          owner_user_id TEXT PRIMARY KEY, display_name TEXT NOT NULL, created_at TEXT NOT NULL
+        );
+        CREATE TABLE channel_identity (
+          channel TEXT NOT NULL, external_subject TEXT NOT NULL,
+          owner_user_id TEXT NOT NULL REFERENCES global_user_identity(owner_user_id), created_at TEXT NOT NULL,
+          PRIMARY KEY (channel, external_subject)
+        );
+        CREATE TABLE conversation_session (
+          session_id TEXT PRIMARY KEY,
+          owner_user_id TEXT NOT NULL REFERENCES global_user_identity(owner_user_id),
+          channel TEXT NOT NULL, external_conversation_id TEXT NOT NULL, active_workflow_id TEXT,
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          UNIQUE(owner_user_id, channel, external_conversation_id)
+        );
+        CREATE TABLE turn_execution (
+          owner_user_id TEXT NOT NULL REFERENCES global_user_identity(owner_user_id),
+          idempotency_key TEXT NOT NULL, request_digest TEXT NOT NULL, turn_id TEXT NOT NULL UNIQUE,
+          session_id TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          PRIMARY KEY (owner_user_id, idempotency_key)
+        );
+        CREATE TABLE turn_event (
+          turn_id TEXT NOT NULL REFERENCES turn_execution(turn_id),
+          sequence INTEGER NOT NULL, event_id TEXT NOT NULL UNIQUE, payload_json TEXT NOT NULL,
+          PRIMARY KEY (turn_id, sequence)
+        );
+        """
+    )
+
+    now = datetime.now(timezone.utc).isoformat()
+    raw_conn.execute("INSERT INTO global_user_identity VALUES ('usr_1', 'Legacy User', ?)", (now,))
+    raw_conn.execute("INSERT INTO channel_identity VALUES ('telegram', 'act_1', 'usr_1', ?)", (now,))
+    raw_conn.execute("INSERT INTO conversation_session VALUES ('sess_1', 'usr_1', 'telegram', 'chat_1', NULL, ?, ?)", (now, now))
+    # Insert pre-existing canonical turn_execution without user_message column
+    raw_conn.execute("INSERT INTO turn_execution VALUES ('usr_1', 'key_c1', 'digest_c1', 'turn_c1', 'sess_1', 'completed', ?, ?)", (now, now))
+    raw_conn.execute(
+        "INSERT INTO turn_event VALUES ('turn_c1', 0, 'evt_c1', ?)",
+        (
+            json.dumps(
+                {
+                    "event_type": "completed",
+                    "principal_id": "act_1",
+                    "session_id": "sess_1",
+                    "turn_id": "turn_c1",
+                    "sequence": 0,
+                    "schema_version": 1,
+                    "data": {"text": "Canonical Answer 1"},
+                    "workflow_id": None,
+                    "job_id": None,
+                    "approval_id": None,
+                    "tool_call_id": None,
+                    "occurred_at": now,
+                    "event_id": "evt_c1",
+                }
+            ),
+        ),
+    )
+    raw_conn.commit()
+    raw_conn.close()
+
+    # Step 1: Open via connect() with legacy transcript containing 2 legacy turns + 1 canonical turn linked by turn_id
+    conn1 = connect(db_path)
+    events1 = EventRepository(conn1)
+    transcript_messages = [
+        {"role": "system", "content": "System Prompt"},
+        {"role": "user", "content": "Legacy Question 1"},
+        {"role": "assistant", "content": "Legacy Answer 1"},
+        {"role": "user", "content": "Legacy Question 2"},
+        {"role": "assistant", "content": "Legacy Answer 2"},
+        {"role": "user", "content": "Canonical Question 1"},
+        {
+            "role": "assistant",
+            "content": "Canonical Answer 1",
+            "event_metadata": {"turn_id": "turn_c1"},
+        },
+    ]
+
+    history1 = events1.load_session_history("sess_1", transcript_messages)
+    assert len(history1) == 7
+    assert history1[0] == {"role": "system", "content": "System Prompt"}
+    assert history1[1] == {"role": "user", "content": "Legacy Question 1"}
+    assert history1[2] == {"role": "assistant", "content": "Legacy Answer 1"}
+    assert history1[3] == {"role": "user", "content": "Legacy Question 2"}
+    assert history1[4] == {"role": "assistant", "content": "Legacy Answer 2"}
+    assert history1[5] == {"role": "user", "content": "Canonical Question 1"}
+    assert history1[6] == {"role": "assistant", "content": "Canonical Answer 1"}
+    conn1.close()
+
+    # Step 2: Reopen database connection with an EMPTY transcript adapter (transcript lost/deleted)
+    reopened = connect(db_path)
+    try:
+        reopened_events = EventRepository(reopened)
+        reopened_history = reopened_events.load_session_history("sess_1", [])
+        assert len(reopened_history) == 7
+        assert reopened_history[0] == {"role": "system", "content": "System Prompt"}
+        assert reopened_history[1] == {"role": "user", "content": "Legacy Question 1"}
+        assert reopened_history[2] == {"role": "assistant", "content": "Legacy Answer 1"}
+        assert reopened_history[3] == {"role": "user", "content": "Legacy Question 2"}
+        assert reopened_history[4] == {"role": "assistant", "content": "Legacy Answer 2"}
+        assert reopened_history[5] == {"role": "user", "content": "Canonical Question 1"}
+        assert reopened_history[6] == {"role": "assistant", "content": "Canonical Answer 1"}
+    finally:
+        reopened.close()
+
+
+def test_corrupt_legacy_cutover_json_raises_migration_error(tmp_path):
+
+    from hermes_personal.orchestration.event_repository import MigrationError
+
+    db_path = tmp_path / "corrupt-cutover.sqlite"
+    conn = connect(db_path)
+    identities = IdentityRepository(conn)
+    sessions = SessionRepository(conn)
+    events = EventRepository(conn)
+    owner = identities.create_owner("primary")
+    session = sessions.get_or_create(owner.owner_user_id, "telegram", "chat:1")
+
+    # Manually insert invalid JSON into legacy_session_cutover
+    conn.execute(
+        "INSERT INTO legacy_session_cutover VALUES (?, 'turn_1', 'corrupt_json{', ?)",
+        (session.session_id, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+
+    with pytest.raises(MigrationError, match="corrupt legacy cutover JSON"):
+        events.load_session_history(session.session_id, [])
+
+    conn.close()

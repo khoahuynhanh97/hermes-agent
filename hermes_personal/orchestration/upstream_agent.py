@@ -127,6 +127,13 @@ class UpstreamAIAgentAdapter:
             else "failed"
         )
         terminal_data = dict(result_mapping)
+        raw_msgs = result_mapping.get("messages", [])
+        if len(raw_msgs) >= len(history) and list(raw_msgs[: len(history)]) == list(history):
+            turn_messages = raw_msgs[len(history) :]
+        else:
+            turn_messages = raw_msgs
+        terminal_data["turn_messages"] = turn_messages
+        terminal_data["messages"] = turn_messages
         yield AgentOutput(terminal_type, terminal_data, workflow_id=workflow_id)
 
 

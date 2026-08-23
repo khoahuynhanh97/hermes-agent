@@ -33,6 +33,10 @@ class TurnInProgress(RuntimeError):
         self.turn_id = turn_id
 
 
+class MigrationError(RuntimeError):
+    """Raised when database migration or legacy cutover reconstruction fails."""
+
+
 def _request_digest(request: AgentTurnRequest) -> str:
     payload = to_primitive(request)
     for retry_specific_field in ("turn_id", "occurred_at", "idempotency_key"):
@@ -220,7 +224,7 @@ class EventRepository:
         legacy_transcript_messages: list[Mapping[str, Any]] | None = None,
     ) -> tuple[Mapping[str, Any], ...]:
         cutover_row = self._connection.execute(
-            "SELECT legacy_messages_json FROM legacy_session_cutover WHERE session_id = ?",
+            "SELECT cutover_turn_id, legacy_messages_json FROM legacy_session_cutover WHERE session_id = ?",
             (session_id,),
         ).fetchone()
 
@@ -228,12 +232,13 @@ class EventRepository:
         if cutover_row:
             try:
                 raw_legacy = json.loads(cutover_row["legacy_messages_json"])
-                if isinstance(raw_legacy, list):
-                    legacy_messages = [
-                        _freeze_json_value(m) for m in raw_legacy if isinstance(m, Mapping)
-                    ]
-            except Exception:
-                pass
+                if not isinstance(raw_legacy, list):
+                    raise MigrationError(f"corrupt legacy cutover JSON for session {session_id}")
+                legacy_messages = [
+                    _freeze_json_value(m) for m in raw_legacy if isinstance(m, Mapping)
+                ]
+            except (json.JSONDecodeError, TypeError) as exc:
+                raise MigrationError(f"corrupt legacy cutover JSON for session {session_id}") from exc
 
         rows = self._connection.execute(
             """
@@ -245,61 +250,136 @@ class EventRepository:
             (session_id,),
         ).fetchall()
 
-        if not rows and not legacy_messages:
+        if not rows and not legacy_messages and not legacy_transcript_messages:
             return ()
 
-        if rows:
-            empty_user_rows = [r for r in rows if not r["user_message"]]
-            if empty_user_rows and legacy_transcript_messages:
-                legacy_user_msgs = [
-                    msg["content"]
-                    for msg in legacy_transcript_messages
-                    if isinstance(msg, Mapping)
-                    and msg.get("role") == "user"
-                    and isinstance(msg.get("content"), str)
-                    and msg.get("content")
-                ]
-                with self._connection:
-                    for i, r in enumerate(empty_user_rows):
-                        if i < len(legacy_user_msgs):
-                            backfilled_msg = legacy_user_msgs[i]
-                            self._connection.execute(
-                                "UPDATE turn_execution SET user_message = ? WHERE turn_id = ?",
-                                (backfilled_msg, r["turn_id"]),
-                            )
-                rows = self._connection.execute(
-                    """
-                    SELECT turn_id, user_message, status
-                    FROM turn_execution
-                    WHERE session_id = ? AND status = 'completed'
-                    ORDER BY created_at, rowid
-                    """,
-                    (session_id,),
-                ).fetchall()
+        if not cutover_row and legacy_transcript_messages:
+            legacy_messages = self._migrate_legacy_cutover_and_backfill(
+                session_id, rows, legacy_transcript_messages
+            )
+            rows = self._connection.execute(
+                """
+                SELECT turn_id, user_message, status
+                FROM turn_execution
+                WHERE session_id = ? AND status = 'completed'
+                ORDER BY created_at, rowid
+                """,
+                (session_id,),
+            ).fetchall()
 
-        if rows and not cutover_row and legacy_transcript_messages:
-            first_turn_id = rows[0]["turn_id"]
-            system_and_pre = [
-                _freeze_json_value(dict(msg))
-                for msg in legacy_transcript_messages
-                if isinstance(msg, Mapping) and msg.get("role") == "system"
-            ]
-            if system_and_pre:
-                with self._connection:
-                    self._connection.execute(
-                        """
-                        INSERT OR REPLACE INTO legacy_session_cutover
-                        (session_id, cutover_turn_id, legacy_messages_json, created_at)
-                        VALUES (?, ?, ?, ?)
-                        """,
-                        (
-                            session_id,
-                            first_turn_id,
-                            json.dumps([dict(m) for m in system_and_pre]),
-                            datetime.now(timezone.utc).isoformat(),
-                        ),
-                    )
-                legacy_messages = system_and_pre
+        history: list[Mapping[str, Any]] = list(legacy_messages)
+
+        for row in rows:
+            turn_id = row["turn_id"]
+            user_msg = row["user_message"]
+            if user_msg:
+                history.append(MappingProxyType({"role": "user", "content": user_msg}))
+
+            event_rows = self._connection.execute(
+                """
+                SELECT sequence, event_id, payload_json
+                FROM turn_event
+                WHERE turn_id = ?
+                ORDER BY sequence
+                """,
+                (turn_id,),
+            ).fetchall()
+
+            events = [_deserialize_event(er) for er in event_rows]
+            turn_messages = _reconstruct_turn_messages(events)
+            history.extend(turn_messages)
+
+        return tuple(history)
+
+    def _migrate_legacy_cutover_and_backfill(
+        self,
+        session_id: str,
+        rows: list[sqlite3.Row],
+        legacy_transcript_messages: list[Mapping[str, Any]],
+    ) -> list[Mapping[str, Any]]:
+        turn_id_to_user_msg: dict[str, str] = {}
+        first_canonical_transcript_idx: int | None = None
+
+        for i, msg in enumerate(legacy_transcript_messages):
+            if not isinstance(msg, Mapping):
+                continue
+            meta = msg.get("event_metadata")
+            if isinstance(meta, Mapping):
+                tid = meta.get("turn_id")
+                if isinstance(tid, str) and tid and tid not in turn_id_to_user_msg:
+                    user_idx = i - 1
+                    while user_idx >= 0:
+                        prev = legacy_transcript_messages[user_idx]
+                        if isinstance(prev, Mapping) and prev.get("role") == "user":
+                            content = prev.get("content")
+                            if isinstance(content, str):
+                                turn_id_to_user_msg[tid] = content
+                                if (
+                                    first_canonical_transcript_idx is None
+                                    or user_idx < first_canonical_transcript_idx
+                                ):
+                                    first_canonical_transcript_idx = user_idx
+                            break
+                        user_idx -= 1
+
+        user_msg_entries = [
+            (i, msg.get("content"))
+            for i, msg in enumerate(legacy_transcript_messages)
+            if isinstance(msg, Mapping)
+            and msg.get("role") == "user"
+            and isinstance(msg.get("content"), str)
+            and msg.get("content")
+        ]
+
+        num_canonical = len(rows)
+        if first_canonical_transcript_idx is None and num_canonical > 0 and len(user_msg_entries) >= num_canonical:
+            canonical_user_entries = user_msg_entries[-num_canonical:]
+            first_canonical_transcript_idx = canonical_user_entries[0][0]
+            for r, (_, content) in zip(rows, canonical_user_entries):
+                if content:
+                    turn_id_to_user_msg[r["turn_id"]] = content
+
+        with self._connection:
+            for r in rows:
+                if not r["user_message"]:
+                    tid = r["turn_id"]
+                    user_msg = turn_id_to_user_msg.get(tid, "")
+                    if user_msg:
+                        self._connection.execute(
+                            "UPDATE turn_execution SET user_message = ? WHERE turn_id = ?",
+                            (user_msg, tid),
+                        )
+
+            pre_canonical: list[Mapping[str, Any]] = []
+            if first_canonical_transcript_idx is not None:
+                pre_canonical = [
+                    _freeze_json_value(dict(m))
+                    for m in legacy_transcript_messages[:first_canonical_transcript_idx]
+                    if isinstance(m, Mapping)
+                ]
+            elif legacy_transcript_messages and not rows:
+                pre_canonical = [
+                    _freeze_json_value(dict(m))
+                    for m in legacy_transcript_messages
+                    if isinstance(m, Mapping)
+                ]
+
+            first_turn_id = rows[0]["turn_id"] if rows else "legacy_cutover"
+            self._connection.execute(
+                """
+                INSERT OR REPLACE INTO legacy_session_cutover
+                (session_id, cutover_turn_id, legacy_messages_json, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    first_turn_id,
+                    json.dumps([dict(m) for m in pre_canonical]),
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+
+        return pre_canonical
 
         history: list[Mapping[str, Any]] = list(legacy_messages)
 
