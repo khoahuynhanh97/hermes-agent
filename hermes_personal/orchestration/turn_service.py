@@ -182,43 +182,13 @@ class HermesTurnService:
     def _assemble_history(
         self, transcript: Any, session_id: str
     ) -> tuple[Mapping[str, Any], ...]:
-        transcript_history = list(transcript.history)
-        system_messages = [
-            msg for msg in transcript_history if msg.get("role") == "system"
-        ]
-        canonical_history = list(
-            self._event_repository.load_session_history(
-                session_id, transcript_history
-            )
+        transcript_history = list(transcript.history) if transcript else []
+        canonical_history = self._event_repository.load_session_history(
+            session_id, transcript_history
         )
-        if not canonical_history:
-            return tuple(transcript_history)
-
-        legacy_messages: list[Mapping[str, Any]] = []
-        if transcript_history:
-            first_canonical_user_msg = None
-            for msg in canonical_history:
-                if msg.get("role") == "user" and msg.get("content"):
-                    first_canonical_user_msg = msg.get("content")
-                    break
-
-            if first_canonical_user_msg:
-                non_system = [
-                    m for m in transcript_history if m.get("role") != "system"
-                ]
-                idx = -1
-                for i, m in enumerate(non_system):
-                    if (
-                        m.get("role") == "user"
-                        and m.get("content") == first_canonical_user_msg
-                    ):
-                        idx = i
-                        break
-                if idx > 0:
-                    legacy_messages = non_system[:idx]
-
-        combined = system_messages + legacy_messages + canonical_history
-        return tuple(combined)
+        if canonical_history:
+            return canonical_history
+        return tuple(transcript_history)
 
     def _validate_request(self, request: AgentTurnRequest) -> None:
         try:

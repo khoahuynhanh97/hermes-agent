@@ -126,9 +126,7 @@ class UpstreamAIAgentAdapter:
             if result_mapping["completed"] and not result_mapping["failed"]
             else "failed"
         )
-        terminal_data = {
-            key: value for key, value in result_mapping.items() if key != "messages"
-        }
+        terminal_data = dict(result_mapping)
         yield AgentOutput(terminal_type, terminal_data, workflow_id=workflow_id)
 
 

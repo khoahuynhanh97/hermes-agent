@@ -61,6 +61,12 @@ CREATE TABLE IF NOT EXISTS turn_event (
   payload_json TEXT NOT NULL,
   PRIMARY KEY (turn_id, sequence)
 );
+CREATE TABLE IF NOT EXISTS legacy_session_cutover (
+  session_id TEXT PRIMARY KEY REFERENCES conversation_session(session_id) ON DELETE CASCADE,
+  cutover_turn_id TEXT NOT NULL,
+  legacy_messages_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 """
 
 
@@ -74,6 +80,16 @@ def _migrate_schema(connection: sqlite3.Connection) -> None:
             connection.execute(
                 "ALTER TABLE turn_execution ADD COLUMN user_message TEXT NOT NULL DEFAULT ''"
             )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS legacy_session_cutover (
+              session_id TEXT PRIMARY KEY REFERENCES conversation_session(session_id) ON DELETE CASCADE,
+              cutover_turn_id TEXT NOT NULL,
+              legacy_messages_json TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
+            """
+        )
 
 
 def connect(database_path: str | Path) -> sqlite3.Connection:

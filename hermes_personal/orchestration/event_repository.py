@@ -219,6 +219,22 @@ class EventRepository:
         session_id: str,
         legacy_transcript_messages: list[Mapping[str, Any]] | None = None,
     ) -> tuple[Mapping[str, Any], ...]:
+        cutover_row = self._connection.execute(
+            "SELECT legacy_messages_json FROM legacy_session_cutover WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+
+        legacy_messages: list[Mapping[str, Any]] = []
+        if cutover_row:
+            try:
+                raw_legacy = json.loads(cutover_row["legacy_messages_json"])
+                if isinstance(raw_legacy, list):
+                    legacy_messages = [
+                        _freeze_json_value(m) for m in raw_legacy if isinstance(m, Mapping)
+                    ]
+            except Exception:
+                pass
+
         rows = self._connection.execute(
             """
             SELECT turn_id, user_message, status
@@ -229,28 +245,67 @@ class EventRepository:
             (session_id,),
         ).fetchall()
 
-        if not rows:
+        if not rows and not legacy_messages:
             return ()
 
-        history: list[Mapping[str, Any]] = []
+        if rows:
+            empty_user_rows = [r for r in rows if not r["user_message"]]
+            if empty_user_rows and legacy_transcript_messages:
+                legacy_user_msgs = [
+                    msg["content"]
+                    for msg in legacy_transcript_messages
+                    if isinstance(msg, Mapping)
+                    and msg.get("role") == "user"
+                    and isinstance(msg.get("content"), str)
+                    and msg.get("content")
+                ]
+                with self._connection:
+                    for i, r in enumerate(empty_user_rows):
+                        if i < len(legacy_user_msgs):
+                            backfilled_msg = legacy_user_msgs[i]
+                            self._connection.execute(
+                                "UPDATE turn_execution SET user_message = ? WHERE turn_id = ?",
+                                (backfilled_msg, r["turn_id"]),
+                            )
+                rows = self._connection.execute(
+                    """
+                    SELECT turn_id, user_message, status
+                    FROM turn_execution
+                    WHERE session_id = ? AND status = 'completed'
+                    ORDER BY created_at, rowid
+                    """,
+                    (session_id,),
+                ).fetchall()
 
-        legacy_user_msgs = [
-            msg["content"]
-            for msg in (legacy_transcript_messages or [])
-            if isinstance(msg, Mapping)
-            and msg.get("role") == "user"
-            and isinstance(msg.get("content"), str)
-            and msg.get("content")
-        ]
-        legacy_user_idx = 0
+        if rows and not cutover_row and legacy_transcript_messages:
+            first_turn_id = rows[0]["turn_id"]
+            system_and_pre = [
+                _freeze_json_value(dict(msg))
+                for msg in legacy_transcript_messages
+                if isinstance(msg, Mapping) and msg.get("role") == "system"
+            ]
+            if system_and_pre:
+                with self._connection:
+                    self._connection.execute(
+                        """
+                        INSERT OR REPLACE INTO legacy_session_cutover
+                        (session_id, cutover_turn_id, legacy_messages_json, created_at)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (
+                            session_id,
+                            first_turn_id,
+                            json.dumps([dict(m) for m in system_and_pre]),
+                            datetime.now(timezone.utc).isoformat(),
+                        ),
+                    )
+                legacy_messages = system_and_pre
+
+        history: list[Mapping[str, Any]] = list(legacy_messages)
 
         for row in rows:
             turn_id = row["turn_id"]
             user_msg = row["user_message"]
-            if not user_msg and legacy_user_idx < len(legacy_user_msgs):
-                user_msg = legacy_user_msgs[legacy_user_idx]
-                legacy_user_idx += 1
-
             if user_msg:
                 history.append(MappingProxyType({"role": "user", "content": user_msg}))
 
@@ -302,19 +357,32 @@ class EventRepository:
 
 
 def _reconstruct_turn_messages(events: list[AgentEvent]) -> list[Mapping[str, Any]]:
+    for event in events:
+        if event.event_type == "completed":
+            raw_messages = event.data.get("messages")
+            if isinstance(raw_messages, (list, tuple)) and raw_messages:
+                reconstructed: list[Mapping[str, Any]] = []
+                for msg in raw_messages:
+                    if isinstance(msg, Mapping):
+                        if msg.get("role") != "user":
+                            reconstructed.append(_freeze_json_value(dict(msg)))
+                if reconstructed:
+                    return reconstructed
+
     messages: list[Mapping[str, Any]] = []
     pending_tool_calls: list[Mapping[str, Any]] = []
     assistant_text_parts: list[str] = []
     terminal_text: str | None = None
 
     def flush_pending_tool_calls() -> None:
-        nonlocal pending_tool_calls
+        nonlocal pending_tool_calls, assistant_text_parts
         if pending_tool_calls:
+            text = "".join(assistant_text_parts) if assistant_text_parts else None
             messages.append(
                 MappingProxyType(
                     {
                         "role": "assistant",
-                        "content": None,
+                        "content": text,
                         "tool_calls": tuple(
                             MappingProxyType(dict(tc)) for tc in pending_tool_calls
                         ),
@@ -322,6 +390,7 @@ def _reconstruct_turn_messages(events: list[AgentEvent]) -> list[Mapping[str, An
                 )
             )
             pending_tool_calls = []
+            assistant_text_parts = []
 
     def flush_assistant_text() -> None:
         nonlocal assistant_text_parts, terminal_text
