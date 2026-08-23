@@ -223,23 +223,6 @@ class EventRepository:
         session_id: str,
         legacy_transcript_messages: list[Mapping[str, Any]] | None = None,
     ) -> tuple[Mapping[str, Any], ...]:
-        cutover_row = self._connection.execute(
-            "SELECT cutover_turn_id, legacy_messages_json FROM legacy_session_cutover WHERE session_id = ?",
-            (session_id,),
-        ).fetchone()
-
-        legacy_messages: list[Mapping[str, Any]] = []
-        if cutover_row:
-            try:
-                raw_legacy = json.loads(cutover_row["legacy_messages_json"])
-                if not isinstance(raw_legacy, list):
-                    raise MigrationError(f"corrupt legacy cutover JSON for session {session_id}")
-                legacy_messages = [
-                    _freeze_json_value(m) for m in raw_legacy if isinstance(m, Mapping)
-                ]
-            except (json.JSONDecodeError, TypeError) as exc:
-                raise MigrationError(f"corrupt legacy cutover JSON for session {session_id}") from exc
-
         rows = self._connection.execute(
             """
             SELECT turn_id, user_message, status
@@ -250,11 +233,33 @@ class EventRepository:
             (session_id,),
         ).fetchall()
 
-        if not rows and not legacy_messages and not legacy_transcript_messages:
+        cutover_row = self._connection.execute(
+            "SELECT cutover_turn_id, legacy_messages_json FROM legacy_session_cutover WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+
+        cutover_messages: list[Mapping[str, Any]] = []
+        if cutover_row:
+            try:
+                raw_legacy = json.loads(cutover_row["legacy_messages_json"])
+                if not isinstance(raw_legacy, list):
+                    raise MigrationError(f"corrupt legacy cutover JSON for session {session_id}")
+                stored_cutover_turn_id = cutover_row["cutover_turn_id"]
+                if rows and stored_cutover_turn_id != "legacy_cutover" and stored_cutover_turn_id != rows[0]["turn_id"]:
+                    raise MigrationError(
+                        f"mismatched cutover_turn_id for session {session_id}: stored '{stored_cutover_turn_id}' != first canonical turn '{rows[0]['turn_id']}'"
+                    )
+                cutover_messages = [
+                    _freeze_json_value(m) for m in raw_legacy if isinstance(m, Mapping)
+                ]
+            except (json.JSONDecodeError, TypeError) as exc:
+                raise MigrationError(f"corrupt legacy cutover JSON for session {session_id}") from exc
+
+        if not rows and not cutover_messages and not legacy_transcript_messages:
             return ()
 
         if not cutover_row and legacy_transcript_messages:
-            legacy_messages = self._migrate_legacy_cutover_and_backfill(
+            cutover_messages = self._migrate_legacy_cutover_and_backfill(
                 session_id, rows, legacy_transcript_messages
             )
             rows = self._connection.execute(
@@ -267,7 +272,7 @@ class EventRepository:
                 (session_id,),
             ).fetchall()
 
-        history: list[Mapping[str, Any]] = list(legacy_messages)
+        history: list[Mapping[str, Any]] = list(cutover_messages)
 
         for row in rows:
             turn_id = row["turn_id"]
@@ -297,12 +302,16 @@ class EventRepository:
         rows: list[sqlite3.Row],
         legacy_transcript_messages: list[Mapping[str, Any]],
     ) -> list[Mapping[str, Any]]:
+        for idx, item in enumerate(legacy_transcript_messages):
+            if not isinstance(item, Mapping) or not item.get("role"):
+                raise MigrationError(
+                    f"invalid legacy transcript message at index {idx} for session {session_id}: missing mapping or role"
+                )
+
         turn_id_to_user_msg: dict[str, str] = {}
         first_canonical_transcript_idx: int | None = None
 
         for i, msg in enumerate(legacy_transcript_messages):
-            if not isinstance(msg, Mapping):
-                continue
             meta = msg.get("event_metadata")
             if isinstance(meta, Mapping):
                 tid = meta.get("turn_id")
@@ -339,6 +348,33 @@ class EventRepository:
                 if content:
                     turn_id_to_user_msg[r["turn_id"]] = content
 
+        unresolved = [
+            r["turn_id"]
+            for r in rows
+            if not r["user_message"] and r["turn_id"] not in turn_id_to_user_msg
+        ]
+        if unresolved:
+            raise MigrationError(
+                f"unresolved canonical turn IDs during legacy cutover migration for session {session_id}: {unresolved}"
+            )
+
+        pre_canonical: list[Mapping[str, Any]] = []
+        if first_canonical_transcript_idx is not None:
+            pre_canonical = [
+                _freeze_json_value(dict(m))
+                for m in legacy_transcript_messages[:first_canonical_transcript_idx]
+                if isinstance(m, Mapping)
+            ]
+        elif legacy_transcript_messages and not rows:
+            pre_canonical = [
+                _freeze_json_value(dict(m))
+                for m in legacy_transcript_messages
+                if isinstance(m, Mapping)
+            ]
+
+        json_serializable_pre_canonical = [to_primitive(m) for m in pre_canonical]
+
+        first_turn_id = rows[0]["turn_id"] if rows else "legacy_cutover"
         with self._connection:
             for r in rows:
                 if not r["user_message"]:
@@ -350,21 +386,6 @@ class EventRepository:
                             (user_msg, tid),
                         )
 
-            pre_canonical: list[Mapping[str, Any]] = []
-            if first_canonical_transcript_idx is not None:
-                pre_canonical = [
-                    _freeze_json_value(dict(m))
-                    for m in legacy_transcript_messages[:first_canonical_transcript_idx]
-                    if isinstance(m, Mapping)
-                ]
-            elif legacy_transcript_messages and not rows:
-                pre_canonical = [
-                    _freeze_json_value(dict(m))
-                    for m in legacy_transcript_messages
-                    if isinstance(m, Mapping)
-                ]
-
-            first_turn_id = rows[0]["turn_id"] if rows else "legacy_cutover"
             self._connection.execute(
                 """
                 INSERT OR REPLACE INTO legacy_session_cutover
@@ -374,7 +395,7 @@ class EventRepository:
                 (
                     session_id,
                     first_turn_id,
-                    json.dumps([dict(m) for m in pre_canonical]),
+                    json.dumps(json_serializable_pre_canonical, ensure_ascii=False),
                     datetime.now(timezone.utc).isoformat(),
                 ),
             )

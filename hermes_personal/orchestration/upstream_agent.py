@@ -128,10 +128,28 @@ class UpstreamAIAgentAdapter:
         )
         terminal_data = dict(result_mapping)
         raw_msgs = result_mapping.get("messages", [])
-        if len(raw_msgs) >= len(history) and list(raw_msgs[: len(history)]) == list(history):
+
+        if not raw_msgs:
+            turn_messages = []
+        elif "turn_messages" in result_mapping and isinstance(result_mapping["turn_messages"], (list, tuple)):
+            turn_messages = list(result_mapping["turn_messages"])
+        elif "current_turn_user_idx" in result_mapping and isinstance(result_mapping["current_turn_user_idx"], int):
+            idx = result_mapping["current_turn_user_idx"]
+            if 0 <= idx <= len(raw_msgs):
+                turn_messages = raw_msgs[idx:]
+            else:
+                raise ValueError(
+                    f"invalid current_turn_user_idx: {idx} out of range for messages of length {len(raw_msgs)}"
+                )
+        elif len(raw_msgs) >= len(history) and list(raw_msgs[: len(history)]) == list(history):
             turn_messages = raw_msgs[len(history) :]
-        else:
+        elif isinstance(raw_msgs[0], Mapping) and raw_msgs[0].get("role") == "user":
             turn_messages = raw_msgs
+        else:
+            raise ValueError(
+                "unverifiable current-turn boundary: upstream result prefix changed without explicit turn_messages or current_turn_user_idx"
+            )
+
         terminal_data["turn_messages"] = turn_messages
         terminal_data["messages"] = turn_messages
         yield AgentOutput(terminal_type, terminal_data, workflow_id=workflow_id)

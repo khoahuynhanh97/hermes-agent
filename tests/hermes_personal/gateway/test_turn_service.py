@@ -8,6 +8,7 @@ import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import Any, Mapping
 
 import pytest
@@ -1842,3 +1843,265 @@ def test_corrupt_legacy_cutover_json_raises_migration_error(tmp_path):
         events.load_session_history(session.session_id, [])
 
     conn.close()
+
+
+class PrefixCompressionFakeAgent:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def run_conversation(
+        self,
+        *,
+        user_message: Any,
+        conversation_history: list[Mapping[str, Any]],
+        task_id: str,
+        stream_callback: Callable[[str | None], None],
+        persist_user_message: Any,
+    ) -> Mapping[str, Any]:
+        self.calls.append({"user_message": user_message, "history": conversation_history})
+        # Compressed prefix (replaces old history with a summary)
+        compressed_messages = [
+            {"role": "system", "content": "Summary of prior turns"},
+            {"role": "user", "content": user_message},
+            {"role": "assistant", "content": f"Answer to {user_message}"},
+        ]
+        return {
+            "completed": True,
+            "failed": False,
+            "interrupted": False,
+            "final_response": f"Answer to {user_message}",
+            "messages": compressed_messages,
+            "current_turn_user_idx": 1,
+        }
+
+
+@pytest.mark.asyncio
+async def test_upstream_prefix_compression_and_turn_boundary_fail_closed(tmp_path):
+    db_path = tmp_path / "prefix-compression.sqlite"
+    conn = connect(db_path)
+    identities = IdentityRepository(conn)
+    sessions = SessionRepository(conn)
+    events = EventRepository(conn)
+    owner = identities.create_owner("primary")
+    identities.link(owner.owner_user_id, "telegram", "actor:1")
+    session = sessions.get_or_create(owner.owner_user_id, "telegram", "chat:1")
+
+    agent = PrefixCompressionFakeAgent()
+    adapter = UpstreamAIAgentAdapter(agent)
+    service = HermesTurnService(
+        identities, sessions, events, FakeTranscriptFactory(), adapter
+    )
+
+    req = AgentTurnRequest(
+        principal=PrincipalContext(
+            actor_id="actor:1",
+            owner_user_id=owner.owner_user_id,
+            channel="telegram",  # type: ignore[arg-type]
+            session_id=session.session_id,
+        ),
+        turn_id="turn_compress_1",
+        idempotency_key="key_compress_1",
+        message="Turn 1 msg",
+    )
+
+    [e async for e in service.handle(req)]
+    assert len(agent.calls) == 1
+
+    # Verify fail-closed behavior on Turn 2 when prefix changes without explicit boundary
+    class BadPrefixAgent:
+        def run_conversation(self, **kwargs):
+            return {
+                "completed": True,
+                "failed": False,
+                "interrupted": False,
+                "final_response": "bad",
+                "messages": [{"role": "system", "content": "mutated prefix"}],
+            }
+
+    bad_adapter = UpstreamAIAgentAdapter(BadPrefixAgent())
+    bad_service = HermesTurnService(
+        identities, sessions, events, FakeTranscriptFactory(), bad_adapter
+    )
+    req2 = replace(req, turn_id="turn_compress_2", idempotency_key="key_compress_2")
+
+    # HermesTurnService yields a persisted failed event when upstream agent fails
+    failed_events = [e async for e in bad_service.handle(req2)]
+    assert len(failed_events) >= 1
+    assert failed_events[-1].event_type == "failed"
+    assert "unverifiable current-turn boundary" in str(failed_events[-1].data.get("error"))
+
+    # Direct adapter call directly raises ValueError
+    with pytest.raises(ValueError, match="unverifiable current-turn boundary"):
+        list(bad_adapter.run(req2, history=[{"role": "user", "content": "Turn 1 msg"}]))
+
+    conn.close()
+
+
+def test_all_or_nothing_identity_cutover_migration_rollback_and_retry(tmp_path):
+
+    from hermes_personal.orchestration.event_repository import MigrationError
+
+    db_path = tmp_path / "all-or-nothing-migration.sqlite"
+    raw_conn = sqlite3.connect(db_path)
+    raw_conn.row_factory = sqlite3.Row
+    raw_conn.execute("PRAGMA foreign_keys = ON")
+    raw_conn.executescript(
+        """
+        CREATE TABLE global_user_identity (
+          owner_user_id TEXT PRIMARY KEY, display_name TEXT NOT NULL, created_at TEXT NOT NULL
+        );
+        CREATE TABLE channel_identity (
+          channel TEXT NOT NULL, external_subject TEXT NOT NULL,
+          owner_user_id TEXT NOT NULL REFERENCES global_user_identity(owner_user_id), created_at TEXT NOT NULL,
+          PRIMARY KEY (channel, external_subject)
+        );
+        CREATE TABLE conversation_session (
+          session_id TEXT PRIMARY KEY,
+          owner_user_id TEXT NOT NULL REFERENCES global_user_identity(owner_user_id),
+          channel TEXT NOT NULL, external_conversation_id TEXT NOT NULL, active_workflow_id TEXT,
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          UNIQUE(owner_user_id, channel, external_conversation_id)
+        );
+        CREATE TABLE turn_execution (
+          owner_user_id TEXT NOT NULL REFERENCES global_user_identity(owner_user_id),
+          idempotency_key TEXT NOT NULL, request_digest TEXT NOT NULL, turn_id TEXT NOT NULL UNIQUE,
+          session_id TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          PRIMARY KEY (owner_user_id, idempotency_key)
+        );
+        CREATE TABLE turn_event (
+          turn_id TEXT NOT NULL REFERENCES turn_execution(turn_id),
+          sequence INTEGER NOT NULL, event_id TEXT NOT NULL UNIQUE, payload_json TEXT NOT NULL,
+          PRIMARY KEY (turn_id, sequence)
+        );
+        """
+    )
+
+    now = datetime.now(timezone.utc).isoformat()
+    raw_conn.execute("INSERT INTO global_user_identity VALUES ('usr_1', 'Legacy User', ?)", (now,))
+    raw_conn.execute("INSERT INTO channel_identity VALUES ('telegram', 'act_1', 'usr_1', ?)", (now,))
+    raw_conn.execute("INSERT INTO conversation_session VALUES ('sess_1', 'usr_1', 'telegram', 'chat_1', NULL, ?, ?)", (now, now))
+    # Two canonical turns with empty user_message
+    raw_conn.execute("INSERT INTO turn_execution VALUES ('usr_1', 'k1', 'd1', 't1', 'sess_1', 'completed', ?, ?)", (now, now))
+    raw_conn.execute("INSERT INTO turn_execution VALUES ('usr_1', 'k2', 'd2', 't2', 'sess_1', 'completed', ?, ?)", (now, now))
+    t1_evt = {
+        "event_type": "completed",
+        "principal_id": "act_1",
+        "session_id": "sess_1",
+        "turn_id": "t1",
+        "sequence": 0,
+        "schema_version": 1,
+        "data": {"text": "A1"},
+        "workflow_id": None,
+        "job_id": None,
+        "approval_id": None,
+        "tool_call_id": None,
+        "occurred_at": now,
+        "event_id": "e1",
+    }
+    t2_evt = {
+        "event_type": "completed",
+        "principal_id": "act_1",
+        "session_id": "sess_1",
+        "turn_id": "t2",
+        "sequence": 0,
+        "schema_version": 1,
+        "data": {"text": "A2"},
+        "workflow_id": None,
+        "job_id": None,
+        "approval_id": None,
+        "tool_call_id": None,
+        "occurred_at": now,
+        "event_id": "e2",
+    }
+    raw_conn.execute("INSERT INTO turn_event VALUES ('t1', 0, 'e1', ?)", (json.dumps(t1_evt),))
+    raw_conn.execute("INSERT INTO turn_event VALUES ('t2', 0, 'e2', ?)", (json.dumps(t2_evt),))
+    raw_conn.commit()
+    raw_conn.close()
+
+    # Step 1: Migration attempt with incomplete transcript (missing turn_id metadata for t1)
+    conn1 = connect(db_path)
+    events1 = EventRepository(conn1)
+    partial_transcript = [
+        {"role": "user", "content": "Q1"},
+        {"role": "assistant", "content": "A1"},  # missing event_metadata.turn_id
+        {"role": "user", "content": "Q2"},
+        {"role": "assistant", "content": "A2", "event_metadata": {"turn_id": "t2"}},
+    ]
+
+    with pytest.raises(MigrationError, match="unresolved canonical turn IDs"):
+        events1.load_session_history("sess_1", partial_transcript)
+
+    # Verify database remains completely un-migrated (no legacy_session_cutover row)
+    cutover_check = conn1.execute("SELECT * FROM legacy_session_cutover WHERE session_id = 'sess_1'").fetchone()
+    assert cutover_check is None
+    conn1.close()
+
+    # Step 2: Retry migration with repaired complete transcript
+    conn2 = connect(db_path)
+    events2 = EventRepository(conn2)
+    repaired_transcript = [
+        {"role": "user", "content": "Q1"},
+        {"role": "assistant", "content": "A1", "event_metadata": {"turn_id": "t1"}},
+        {"role": "user", "content": "Q2"},
+        {"role": "assistant", "content": "A2", "event_metadata": {"turn_id": "t2"}},
+    ]
+
+    history2 = events2.load_session_history("sess_1", repaired_transcript)
+    assert len(history2) == 4
+    assert history2[0] == {"role": "user", "content": "Q1"}
+    assert history2[1] == {"role": "assistant", "content": "A1"}
+    assert history2[2] == {"role": "user", "content": "Q2"}
+    assert history2[3] == {"role": "assistant", "content": "A2"}
+    conn2.close()
+
+
+def test_nested_legacy_mcp_tool_payload_serialization_and_deep_immutability(tmp_path):
+    db_path = tmp_path / "nested-mcp-legacy.sqlite"
+    conn = connect(db_path)
+    identities = IdentityRepository(conn)
+    sessions = SessionRepository(conn)
+    events = EventRepository(conn)
+    owner = identities.create_owner("primary")
+    session = sessions.get_or_create(owner.owner_user_id, "telegram", "chat:1")
+
+    # Build deeply nested MappingProxyType legacy transcript message
+    nested_tool_call = MappingProxyType(
+        {
+            "id": "mcp_call_1",
+            "type": "function",
+            "function": MappingProxyType({"name": "search_mcp", "arguments": MappingProxyType({"query": "Antigravity 🚀"})}),
+        }
+    )
+    nested_legacy_transcript = [
+        {"role": "system", "content": "System prompt with Unicode 🌟"},
+        {
+            "role": "assistant",
+            "content": "Running search...",
+            "tool_calls": (nested_tool_call,),
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "mcp_call_1",
+            "content": "Result with nested data",
+        },
+    ]
+
+    # Perform migration (saves nested structures to legacy_session_cutover without TypeError)
+    history1 = events.load_session_history(session.session_id, nested_legacy_transcript)
+    assert len(history1) == 3
+    conn.close()
+
+    # Reopen connection with empty transcript adapter and verify deep immutability after deserialization
+    reopened = connect(db_path)
+    try:
+        reopened_events = EventRepository(reopened)
+        reopened_history = reopened_events.load_session_history(session.session_id, [])
+        assert len(reopened_history) == 3
+        assistant_msg = reopened_history[1]
+        assert assistant_msg["role"] == "assistant"
+        assert isinstance(assistant_msg["tool_calls"], tuple)
+        tool_call = assistant_msg["tool_calls"][0]
+        assert isinstance(tool_call, MappingProxyType)
+        assert tool_call["function"]["arguments"]["query"] == "Antigravity 🚀"
+    finally:
+        reopened.close()
