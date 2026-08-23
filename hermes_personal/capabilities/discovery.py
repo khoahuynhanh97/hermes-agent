@@ -41,6 +41,10 @@ class WireBindingRule:
             )
         if not self.accepted_wire_names:
             raise ValueError("accepted_wire_names must not be empty")
+        if len(self.accepted_wire_names) != len(set(self.accepted_wire_names)):
+            raise ValueError(
+                f"duplicate accepted_wire_names in rule for capability_id: {self.capability_id}"
+            )
 
 
 DEFAULT_WIRE_BINDING_RULES: tuple[WireBindingRule, ...] = (
@@ -173,10 +177,6 @@ class CapabilityDiscovery:
                     f"duplicate WireBindingRule for capability_id: {rule.capability_id}"
                 )
             rule_caps.add(rule.capability_id)
-            if len(rule.accepted_wire_names) != len(set(rule.accepted_wire_names)):
-                raise ValueError(
-                    f"duplicate accepted_wire_names in rule for capability_id: {rule.capability_id}"
-                )
 
         missing_caps = set(INITIAL_CAPABILITIES.keys()) - rule_caps
         if missing_caps:
@@ -194,12 +194,22 @@ class CapabilityDiscovery:
         registered_candidates = candidate_wire_names & all_registered_names
 
         definitions = registry.get_definitions(registered_candidates, quiet=True)
-        available_defs: dict[str, dict[str, Any]] = {}
+
+        # Index returned definition envelopes by wire name
+        def_envelopes: dict[str, dict[str, Any] | Any] = {}
         for d in definitions:
-            if isinstance(d, dict) and "function" in d and isinstance(d["function"], dict):
-                fn_name = d["function"].get("name")
-                if isinstance(fn_name, str):
-                    available_defs[fn_name] = d["function"]
+            if isinstance(d, dict):
+                fn = d.get("function")
+                if isinstance(fn, dict) and isinstance(fn.get("name"), str):
+                    def_envelopes[fn["name"]] = d
+                elif isinstance(d.get("name"), str):
+                    def_envelopes[d["name"]] = d
+                else:
+                    # If function is present or item is present without a clean name,
+                    # index by candidate matching if possible
+                    for cand in registered_candidates:
+                        if cand not in def_envelopes:
+                            def_envelopes[cand] = d
 
         bindings_by_id: dict[str, ImplementationBinding] = {}
         diagnostics: list[DiscoveryDiagnostic] = []
@@ -302,7 +312,7 @@ class CapabilityDiscovery:
                 registry.get_toolset_for_tool(wire_name) or rule.provider
             )
 
-            if wire_name not in available_defs:
+            if wire_name not in def_envelopes:
                 raw_schema = registry.get_schema(wire_name) or {}
                 try:
                     digest = hash_schema_dict(raw_schema)
@@ -330,12 +340,39 @@ class CapabilityDiscovery:
                 )
                 continue
 
-            schema = available_defs[wire_name]
-            parameters = schema.get("parameters")
+            envelope = def_envelopes[wire_name]
+            fn_dict = envelope.get("function") if isinstance(envelope, dict) else None
+
+            if not isinstance(fn_dict, dict):
+                sentinel_digest = _sentinel_digest(
+                    "schema_incompatible", cap_id, wire_name
+                )
+                diagnostics.append(
+                    DiscoveryDiagnostic(
+                        capability_id=cap_id,
+                        code="schema_incompatible",
+                        message=f"wire tool {wire_name!r} definition envelope is malformed or missing function mapping",
+                        wire_name=wire_name,
+                    )
+                )
+                bindings_by_id[cap_id] = ImplementationBinding(
+                    capability_id=cap_id,
+                    wire_name=wire_name,
+                    source=rule.source,
+                    provider=provider,
+                    implementation_version="1.0.0",
+                    input_schema_version=input_ver,
+                    output_schema_version=output_ver,
+                    schema_digest=sentinel_digest,
+                    health="unavailable",
+                )
+                continue
+
+            parameters = fn_dict.get("parameters")
             try:
                 if parameters is not None and not isinstance(parameters, dict):
                     raise ValueError("schema parameters is not a dict")
-                digest = hash_schema_dict(schema)
+                digest = hash_schema_dict(fn_dict)
             except (ValueError, TypeError) as exc:
                 sentinel_digest = _sentinel_digest(
                     "schema_incompatible", cap_id, wire_name
