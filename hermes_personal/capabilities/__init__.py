@@ -22,6 +22,7 @@ from hermes_personal.capabilities.search import (
     CapabilitySearchResultItem,
     GovernedCapabilitySearch,
 )
+from hermes_personal.capabilities.service import CapabilityCatalogService
 from hermes_personal.capabilities.snapshots import (
     CapabilitySnapshotRepository,
     CatalogSnapshot,
@@ -47,4 +48,5 @@ __all__ = [
     "CapabilitySearchResult",
     "CapabilitySearchResultItem",
     "CapabilityDescription",
+    "CapabilityCatalogService",
 ]
