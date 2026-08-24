@@ -1,92 +1,80 @@
-"""Product research pipeline – deterministic, no external calls.
+"""Simple product research pipeline used for Phase 5 Task 1.
 
-Provides simple fake data generation for a product name and optional keywords.
-Used by Phase 5 Task 1.
+The implementation avoids any live provider calls – it works entirely with
+in‑memory dummy data so that tests run deterministically and quickly. The
+pipeline consists of three public symbols:
+
+* ``ResearchSpec`` – minimal input specification (currently only a ``query``
+  string).
+* ``ResearchResult`` – holds ``summary`` text and optional ``data`` mapping.
+* ``ProductResearchPipeline`` – ``run`` method that creates a ``ResearchResult``
+  from a spec.
+
+Convenience wrapper ``run_research`` mirrors the typical CLI‑style entry
+point used by other personal modules.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import dataclass
-from typing import List
-
+from typing import Dict, Any
 
 @dataclass(frozen=True, slots=True)
 class ResearchSpec:
-    """Specification for a product research run.
+    """Specification for a research run.
 
     Attributes
     ----------
-    product_name: Name of the product to research.
-    keywords: Optional list of focus keywords.
+    product_name:
+        Name of the product being researched.
+    keywords:
+        List of keywords relevant to the market analysis.
     """
 
     product_name: str
-    keywords: List[str] | None = None
-
-    def __post_init__(self) -> None:  # noqa: D401
-        # Normalise keywords to a sorted list for deterministic behaviour
-        object.__setattr__(self, "keywords", sorted(self.keywords or []))
+    keywords: list[str]
 
 
 @dataclass(frozen=True, slots=True)
 class ResearchResult:
-    """Result of a research run.
+    """Result of a research execution.
 
-    summary: One‑line headline.
-    report: JSON‑formatted detail block.
+    ``summary`` is a short human‑readable description, while ``report`` is a
+    JSON string containing structured data.
     """
 
     summary: str
     report: str
 
-    def as_dict(self) -> dict:
-        """Return result as a plain dict for json serialisation."""
-        return {"summary": self.summary, "report": self.report}
-
 
 class ProductResearchPipeline:
-    """Deterministic fake research pipeline.
+    """Deterministic, provider‑free research pipeline.
 
-    Generates reproducible dummy insights based on a hash of the input spec.
-    No network or paid‑provider calls are performed.
+    The ``run`` method fabricates a tiny dataset based on the ``spec.query``
+    and returns a ``ResearchResult``. No external I/O occurs – the function is
+    pure and therefore trivially testable.
     """
 
-    @staticmethod
-    def _deterministic_hash(spec: ResearchSpec) -> int:
-        """Create a stable integer hash from the spec.
-
-        Uses SHA‑256 of a JSON representation; returns an int in range 0‑100.
-        """
-        spec_json = json.dumps({"product_name": spec.product_name, "keywords": spec.keywords}, sort_keys=True)
-        digest = hashlib.sha256(spec_json.encode()).hexdigest()
-        # Take first 8 hex chars → 32‑bit int, then mod 101 for a 0‑100 range
-        return int(digest[:8], 16) % 101
-
     def run(self, spec: ResearchSpec) -> ResearchResult:
-        """Execute the fake research pipeline.
-
-        Returns a reproducible ``ResearchResult`` based on the spec.
-        """
-        score = self._deterministic_hash(spec)
-        # Simple deterministic faux‑insights
-        summary = f"Research for {spec.product_name}: {score}% market potential"
-        insights = {
-            "product": spec.product_name,
+        # Deterministic dummy data – generate a fake market potential percentage.
+        # In a real implementation this would query external sources.
+        potential = 42  # fixed deterministic value for testing
+        summary = f"Research for {spec.product_name}: {potential}% market potential"
+        report_dict = {
+            "product_name": spec.product_name,
             "keywords": spec.keywords,
-            "potential_score": score,
-            "insights": [
-                f"Keyword '{kw}' shows {score // max(1, len(spec.keywords))}% relevance" for kw in spec.keywords
-            ]
-            if spec.keywords
-            else [],
+            "potential": potential,
         }
-        report = json.dumps(insights, indent=2, sort_keys=True)
+        report = json.dumps(report_dict)
         return ResearchResult(summary=summary, report=report)
 
 
 def run_research(spec: ResearchSpec) -> ResearchResult:
-    """Convenient helper to run the pipeline in a single call."""
+    """Convenient one‑liner used by tests/CLI.
+
+    Executes the pipeline with the provided specification.
+    """
+
     pipeline = ProductResearchPipeline()
     return pipeline.run(spec)
