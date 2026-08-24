@@ -1,8 +1,8 @@
-import pytest
-import sqlite3
 import json
+import pytest
+
 from hermes_personal.storage.sqlite import connect
-from hermes_personal.workflows.repository import WorkflowRepository, VersionConflict, DuplicateCommandError
+from hermes_personal.workflows.repository import DuplicateCommandError, VersionConflict, WorkflowRepository
 
 
 def test_commit_new_workflow():
