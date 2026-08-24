@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .context import CorrelationContext
 from .health import ComponentHealth, HealthReport, HealthStatus
-from .redaction import REDACTED_PLACEHOLDER, redact
+from .redaction import REDACTED_PLACEHOLDER, redact, redact_string
 
 __all__ = [
     "ComponentHealth",
@@ -11,4 +11,5 @@ __all__ = [
     "HealthStatus",
     "REDACTED_PLACEHOLDER",
     "redact",
+    "redact_string",
 ]

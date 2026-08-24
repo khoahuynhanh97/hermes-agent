@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import re
 import pytest
 
 from hermes_personal.observability.context import CorrelationContext
 from hermes_personal.observability.health import ComponentHealth, HealthReport, HealthStatus
-from hermes_personal.observability.redaction import redact, REDACTED_PLACEHOLDER
+from hermes_personal.observability.redaction import REDACTED_PLACEHOLDER, redact, redact_string
 
 
 def test_correlation_chain_is_preserved():
@@ -68,6 +69,59 @@ def test_redact_handles_primitive_values():
     assert redact(12345) == 12345
     assert redact(None) is None
     assert redact([1, 2, "three"]) == [1, 2, "three"]
+
+
+def test_configured_value_fingerprint_redaction_under_safe_keys():
+    """Prove that configured value fingerprints are redacted even under innocent-looking keys."""
+    raw_secret = "ghp_abcdef1234567890secretkey"
+    payload = {
+        "description": f"Encountered auth failure using {raw_secret} on upstream endpoint",
+        "nested_item": {
+            "stdout": f"Traceback: connection error with token={raw_secret}",
+            "regular_info": "safe normal string",
+        },
+        "log_lines": [
+            f"Line 1: authenticating {raw_secret}",
+            "Line 2: finished",
+        ],
+        "tuple_items": (
+            "innocent_label",
+            f"contains {raw_secret}",
+        ),
+        "set_items": {
+            raw_secret,
+            "another_safe_val",
+        },
+    }
+
+    fingerprints = (raw_secret,)
+    redacted = redact(payload, value_fingerprints=fingerprints)
+
+    assert redacted["description"] == REDACTED_PLACEHOLDER
+    assert redacted["nested_item"]["stdout"] == REDACTED_PLACEHOLDER
+    assert redacted["nested_item"]["regular_info"] == "safe normal string"
+    assert redacted["log_lines"][0] == REDACTED_PLACEHOLDER
+    assert redacted["log_lines"][1] == "Line 2: finished"
+    assert redacted["tuple_items"] == ("innocent_label", REDACTED_PLACEHOLDER)
+    assert REDACTED_PLACEHOLDER in redacted["set_items"]
+    assert "another_safe_val" in redacted["set_items"]
+
+
+def test_configured_value_fingerprint_regex_patterns():
+    """Prove that regex patterns can be supplied as value fingerprints."""
+    api_pattern = re.compile(r"sk-[a-zA-Z0-9]{16,}")
+    payload = {
+        "query_param": "sk-1234567890abcdef123456",
+        "safe_param": "sk-short",
+    }
+    redacted = redact(payload, value_fingerprints=(api_pattern,))
+    assert redacted["query_param"] == REDACTED_PLACEHOLDER
+    assert redacted["safe_param"] == "sk-short"
+
+
+def test_redact_string_directly():
+    assert redact_string("my-secret-token-value", value_fingerprints=("secret-token",)) == REDACTED_PLACEHOLDER
+    assert redact_string("normal public text", value_fingerprints=("secret-token",)) == "normal public text"
 
 
 def test_required_unhealthy_dependency_blocks_readiness():
