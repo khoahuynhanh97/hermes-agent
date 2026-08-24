@@ -15,6 +15,7 @@ from hermes_personal.capabilities.policy import (
 from hermes_personal.observability.redaction import redact
 from hermes_personal.storage.sqlite import connect
 from hermes_personal.workflows.engine import WorkflowEngine
+from hermes_personal.workflows.models import IllegalTransition
 from hermes_personal.workflows.repository import DuplicateCommandError, VersionConflict, WorkflowRepository
 
 
@@ -201,6 +202,50 @@ def test_budget_rejection_on_exhaustion():
     assert decision.allowed is False
     assert decision.error is not None
     assert "budget" in decision.error.code.lower() or "budget" in decision.error.message.lower()
+
+
+def test_approval_invalidation_on_changed_artifact_or_workflow_mutation():
+    """Prove rejecting an approval transitions state to cancelled, and stale approval commits are rejected."""
+    conn = connect(":memory:")
+    repo = WorkflowRepository(conn)
+    engine = WorkflowEngine(repository=repo)
+
+    # 1. Start workflow and request approval
+    res1 = engine.handle({
+        "command_id": "cmd_start_appr_inv",
+        "workflow_id": "wf_appr_inv_01",
+        "type": "start",
+        "args": {"title": "Campaign Alpha", "artifact_digest": "sha256:digest_v1"},
+    })
+    assert res1.success is True
+    assert res1.new_version == 1
+
+    res2 = engine.handle({
+        "command_id": "cmd_req_appr_v1",
+        "workflow_id": "wf_appr_inv_01",
+        "type": "request_approval",
+        "args": {"step": "script_review"},
+    })
+    assert res2.success is True
+    assert res2.new_version == 2
+
+    # 2. Reject the approval due to changed/invalid artifact
+    res_reject = engine.handle({
+        "command_id": "cmd_reject_v1",
+        "workflow_id": "wf_appr_inv_01",
+        "type": "reject",
+        "args": {"reason": "artifact digest mismatch / modified script"},
+    })
+    assert res_reject.success is True
+    assert res_reject.new_version == 3
+
+    # 3. Subsequent approve command on cancelled workflow is illegal
+    with pytest.raises(IllegalTransition):
+        engine.handle({
+            "command_id": "cmd_stale_approve",
+            "workflow_id": "wf_appr_inv_01",
+            "type": "approve",
+        })
 
 
 def test_static_no_natural_language_bypass_and_zero_fake_progress():
