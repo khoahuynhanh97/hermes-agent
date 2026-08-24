@@ -12,7 +12,7 @@ export function OmniChatPage() {
     ownerId,
   });
 
-  const { submitCommand, isSubmitting } = useHermesOperator({
+  const { submitCommand, isSubmitting, lastCommandId, error: operatorError } = useHermesOperator({
     ownerId,
   });
 
@@ -21,6 +21,10 @@ export function OmniChatPage() {
       .filter((e: HermesEvent) => e.event_type === 'text_delta')
       .map((e: HermesEvent) => (e.data.delta as string) || '')
       .join('');
+  }, [events]);
+
+  const pendingApprovals = useMemo(() => {
+    return events.filter((e: HermesEvent) => e.event_type === 'approval_required');
   }, [events]);
 
   const handleSend = async (e: React.FormEvent) => {
@@ -43,6 +47,19 @@ export function OmniChatPage() {
       console.error('Failed to submit turn:', err);
     } finally {
       setIsSending(false);
+    }
+  };
+
+  const handleApprove = async (event: HermesEvent) => {
+    try {
+      await submitCommand({
+        command_type: 'approve',
+        target_id: event.turn_id || event.event_id,
+        expected_version: 1,
+        payload: { reason: 'Operator approved via Omni UI' },
+      });
+    } catch (err) {
+      console.error('Approval failed:', err);
     }
   };
 
@@ -71,6 +88,31 @@ export function OmniChatPage() {
         </div>
       )}
 
+      {operatorError && (
+        <div className="p-3 bg-red-900/40 border border-red-500 rounded text-red-200 text-sm">
+          Operator Error: {operatorError}
+        </div>
+      )}
+
+      {pendingApprovals.length > 0 && (
+        <div className="p-3 bg-amber-950/40 border border-amber-500 rounded space-y-2">
+          <div className="text-sm font-semibold text-amber-300">Pending Operator Approvals</div>
+          {pendingApprovals.map((appr) => (
+            <div key={appr.event_id} className="flex justify-between items-center text-xs text-amber-200">
+              <span>Approval requested for {appr.turn_id}</span>
+              <button
+                type="button"
+                disabled={isSubmitting}
+                onClick={() => void handleApprove(appr)}
+                className="px-3 py-1 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded font-medium"
+              >
+                {isSubmitting ? 'Approving...' : 'Approve Action'}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="flex-1 overflow-y-auto p-4 bg-gray-900/50 rounded border border-gray-800 space-y-2">
         {events.length === 0 ? (
           <div className="text-gray-500 italic text-center py-8">
@@ -79,8 +121,9 @@ export function OmniChatPage() {
         ) : (
           <div>
             <div className="text-gray-200 whitespace-pre-wrap">{textDeltas}</div>
-            <div className="mt-4 pt-2 border-t border-gray-800 text-xs text-gray-500">
-              Total events recorded: {events.length}
+            <div className="mt-4 pt-2 border-t border-gray-800 text-xs text-gray-500 flex justify-between">
+              <span>Total events recorded: {events.length}</span>
+              {lastCommandId && <span>Last Operator Command: {lastCommandId}</span>}
             </div>
           </div>
         )}

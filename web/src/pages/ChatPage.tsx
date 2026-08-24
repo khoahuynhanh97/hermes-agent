@@ -1789,6 +1789,30 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
         </div>
       )}
 
+      {hermesEvents.length > 0 && (
+        <div className="flex items-center justify-between border border-blue-500/30 bg-blue-950/20 text-blue-300 px-3 py-1.5 text-xs">
+          <span>Hermes Stream Active: {hermesEvents.length} events</span>
+          {hermesEvents.some((e) => e.event_type === "approval_required") && (
+            <button
+              type="button"
+              onClick={() => {
+                const target = hermesEvents.find((e) => e.event_type === "approval_required");
+                if (target) {
+                  void submitHermesOperatorCommand({
+                    command_type: "approve",
+                    target_id: target.turn_id || target.event_id,
+                    expected_version: 1,
+                  });
+                }
+              }}
+              className="px-2 py-0.5 bg-blue-600 hover:bg-blue-500 text-white rounded text-[11px]"
+            >
+              Approve
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="flex min-h-0 flex-1 flex-col gap-2 lg:flex-row lg:gap-3">
         <div
           ref={termWrapRef}

@@ -23,11 +23,17 @@ export function useHermesEventStream({
   const [error, setError] = useState<string | null>(null);
 
   const eventSourceRef = useRef<EventSource | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cursorRef = useRef<number>(cursor);
   cursorRef.current = cursor;
 
   const connect = useCallback(() => {
     if (!ownerId) return;
+
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
 
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
@@ -88,13 +94,21 @@ export function useHermesEventStream({
       setIsConnected(false);
       setError('Event stream disconnected');
       es.close();
+      if (autoReconnect) {
+        reconnectTimerRef.current = setTimeout(() => {
+          connect();
+        }, 3000);
+      }
     };
-  }, [ownerId, authToken, endpoint]);
+  }, [ownerId, authToken, endpoint, autoReconnect]);
 
   useEffect(() => {
     connect();
 
     return () => {
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+      }
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
       }
