@@ -94,6 +94,7 @@ class ProductVideoJobHandlers:
         self.workflow_engine = workflow_engine
         self.workflow_repository = workflow_repository or (workflow_engine.repo if workflow_engine else None)
         self.dispatcher = dispatcher
+        self._idempotency_cache: dict[str, JobSucceeded] = {}
 
     def _get_workflow_state_and_version(self, ctx: JobContext) -> tuple[str, int] | None:
         """Load state and version through public WorkflowEngine or WorkflowRepository methods."""
@@ -159,7 +160,10 @@ class ProductVideoJobHandlers:
 
         return None
 
-    def research_job(self, ctx: JobContext, product_name: str, keywords: list[str]) -> JobSucceeded | JobFailed:
+    def research_job(self, ctx: JobContext, product_name: str, keywords: list[str], pdp_url: str | None = None) -> JobSucceeded | JobFailed:
+        cache_key = f"{ctx.workflow_id}:research:{ctx.idempotency_key}" if ctx.idempotency_key else None
+        if cache_key and cache_key in self._idempotency_cache:
+            return self._idempotency_cache[cache_key]
         inputs = {"product_name": product_name, "keywords": keywords}
         err = self._validate_state_and_version(ctx, {ProductVideoWorkflowState.RESEARCHING}, inputs)
         if err:
@@ -167,18 +171,28 @@ class ProductVideoJobHandlers:
         if not product_name:
             return JobFailed(retryable=False, code="INVALID_INPUT", message="product_name cannot be empty")
         try:
+            extra_kwargs = {"pdp_url": pdp_url} if pdp_url is not None else {}
             result = self.pi_client.research(
                 product_name,
                 keywords,
                 workflow_id=ctx.workflow_id,
                 job_id=ctx.job_id,
                 idempotency_key=ctx.idempotency_key,
+                **extra_kwargs,
             )
-            return JobSucceeded(artifact_ref=result, next_command={"command": "build_resource_pack", "product_name": product_name})
+            if pdp_url:
+                result["pdp_url"] = pdp_url
+            res = JobSucceeded(artifact_ref=result, next_command={"command": "build_resource_pack", "product_name": product_name})
+            if cache_key:
+                self._idempotency_cache[cache_key] = res
+            return res
         except Exception as e:
             return JobFailed(retryable=True, code="PI_RESEARCH_FAILED", message=str(e))
 
     def resource_pack_job(self, ctx: JobContext, research_result: dict) -> JobSucceeded | JobFailed:
+        cache_key = f"{ctx.workflow_id}:resource_pack:{ctx.idempotency_key}" if ctx.idempotency_key else None
+        if cache_key and cache_key in self._idempotency_cache:
+            return self._idempotency_cache[cache_key]
         inputs = {"research_result": research_result}
         err = self._validate_state_and_version(ctx, {ProductVideoWorkflowState.BUILDING_RESOURCE_PACK}, inputs)
         if err:
@@ -192,11 +206,17 @@ class ProductVideoJobHandlers:
                 job_id=ctx.job_id,
                 idempotency_key=ctx.idempotency_key,
             )
-            return JobSucceeded(artifact_ref=result, next_command={"command": "lock_resource_pack"})
+            res = JobSucceeded(artifact_ref=result, next_command={"command": "lock_resource_pack"})
+            if cache_key:
+                self._idempotency_cache[cache_key] = res
+            return res
         except Exception as e:
-            return JobFailed(retryable=True, code="PI_BUILD_FAILED", message=str(e))
+            return JobFailed(retryable=True, code="PI_PACK_FAILED", message=str(e))
 
     def lock_job(self, ctx: JobContext, pack_dict: dict) -> JobSucceeded | JobFailed:
+        cache_key = f"{ctx.workflow_id}:lock:{ctx.idempotency_key}" if ctx.idempotency_key else None
+        if cache_key and cache_key in self._idempotency_cache:
+            return self._idempotency_cache[cache_key]
         inputs = {"pack_dict": pack_dict}
         err = self._validate_state_and_version(ctx, {ProductVideoWorkflowState.BUILDING_RESOURCE_PACK}, inputs)
         if err:
@@ -211,11 +231,17 @@ class ProductVideoJobHandlers:
                 job_id=ctx.job_id,
                 idempotency_key=ctx.idempotency_key,
             )
-            return JobSucceeded(artifact_ref=result, next_command={"command": "create_creative_brief"})
+            res = JobSucceeded(artifact_ref=result, next_command={"command": "create_creative_brief"})
+            if cache_key:
+                self._idempotency_cache[cache_key] = res
+            return res
         except Exception as e:
             return JobFailed(retryable=True, code="PI_LOCK_FAILED", message=str(e))
 
     def creative_brief_job(self, ctx: JobContext, product_id: str, brief_config: dict | None = None) -> JobSucceeded | JobFailed:
+        cache_key = f"{ctx.workflow_id}:creative_brief:{ctx.idempotency_key}" if ctx.idempotency_key else None
+        if cache_key and cache_key in self._idempotency_cache:
+            return self._idempotency_cache[cache_key]
         inputs = {"product_id": product_id, "brief_config": brief_config or {}}
         err = self._validate_state_and_version(ctx, {ProductVideoWorkflowState.CREATING_BRIEF}, inputs)
         if err:
@@ -224,7 +250,7 @@ class ProductVideoJobHandlers:
             return JobFailed(retryable=False, code="MISSING_INPUT_REF", message="product_id cannot be empty")
         alloc = None
         try:
-            alloc = reserve_budget("video_factory", 5)
+            alloc = reserve_budget("video_factory", 5, idempotency_key=cache_key)
             result = self.video_client.create_creative_brief(
                 brief_config,
                 workflow_id=ctx.workflow_id,
@@ -232,13 +258,19 @@ class ProductVideoJobHandlers:
                 idempotency_key=ctx.idempotency_key,
             )
             commit_budget(alloc)
-            return JobSucceeded(artifact_ref=result, next_command={"command": "create_scene_plan", "product_id": product_id})
+            res = JobSucceeded(artifact_ref=result, next_command={"command": "create_scene_plan", "product_id": product_id})
+            if cache_key:
+                self._idempotency_cache[cache_key] = res
+            return res
         except Exception as e:
             if alloc:
                 release_budget(alloc)
             return JobFailed(retryable=True, code="VF_BRIEF_FAILED", message=str(e))
 
     def scene_plan_job(self, ctx: JobContext, brief_ref: Any) -> JobSucceeded | JobFailed:
+        cache_key = f"{ctx.workflow_id}:scene_plan:{ctx.idempotency_key}" if ctx.idempotency_key else None
+        if cache_key and cache_key in self._idempotency_cache:
+            return self._idempotency_cache[cache_key]
         inputs = {"brief_ref": brief_ref}
         err = self._validate_state_and_version(ctx, {ProductVideoWorkflowState.CREATING_SCENE_PLAN}, inputs)
         if err:
@@ -247,7 +279,7 @@ class ProductVideoJobHandlers:
             return JobFailed(retryable=False, code="MISSING_INPUT_REF", message="brief_ref cannot be empty")
         alloc = None
         try:
-            alloc = reserve_budget("video_factory", 5)
+            alloc = reserve_budget("video_factory", 5, idempotency_key=cache_key)
             result = self.video_client.create_scene_plan(
                 brief_ref,
                 workflow_id=ctx.workflow_id,
@@ -255,13 +287,19 @@ class ProductVideoJobHandlers:
                 idempotency_key=ctx.idempotency_key,
             )
             commit_budget(alloc)
-            return JobSucceeded(artifact_ref=result, next_command={"command": "create_storyboard"})
+            res = JobSucceeded(artifact_ref=result, next_command={"command": "create_storyboard"})
+            if cache_key:
+                self._idempotency_cache[cache_key] = res
+            return res
         except Exception as e:
             if alloc:
                 release_budget(alloc)
             return JobFailed(retryable=True, code="VF_SCENE_FAILED", message=str(e))
 
     def storyboard_job(self, ctx: JobContext, scene_ref: Any) -> JobSucceeded | JobFailed:
+        cache_key = f"{ctx.workflow_id}:storyboard:{ctx.idempotency_key}" if ctx.idempotency_key else None
+        if cache_key and cache_key in self._idempotency_cache:
+            return self._idempotency_cache[cache_key]
         inputs = {"scene_ref": scene_ref}
         err = self._validate_state_and_version(ctx, {ProductVideoWorkflowState.CREATING_STORYBOARD}, inputs)
         if err:
@@ -270,7 +308,7 @@ class ProductVideoJobHandlers:
             return JobFailed(retryable=False, code="MISSING_INPUT_REF", message="scene_ref cannot be empty")
         alloc = None
         try:
-            alloc = reserve_budget("video_factory", 10)
+            alloc = reserve_budget("video_factory", 10, idempotency_key=cache_key)
             result = self.video_client.create_storyboard(
                 scene_ref,
                 workflow_id=ctx.workflow_id,
@@ -278,13 +316,19 @@ class ProductVideoJobHandlers:
                 idempotency_key=ctx.idempotency_key,
             )
             commit_budget(alloc)
-            return JobSucceeded(artifact_ref=result, next_command={"command": "render_video"})
+            res = JobSucceeded(artifact_ref=result, next_command={"command": "render_video"})
+            if cache_key:
+                self._idempotency_cache[cache_key] = res
+            return res
         except Exception as e:
             if alloc:
                 release_budget(alloc)
             return JobFailed(retryable=True, code="VF_STORYBOARD_FAILED", message=str(e))
 
     def render_job(self, ctx: JobContext, story_ref: Any) -> JobSucceeded | JobFailed:
+        cache_key = f"{ctx.workflow_id}:render:{ctx.idempotency_key}" if ctx.idempotency_key else None
+        if cache_key and cache_key in self._idempotency_cache:
+            return self._idempotency_cache[cache_key]
         inputs = {"story_ref": story_ref}
         err = self._validate_state_and_version(ctx, {ProductVideoWorkflowState.RENDERING}, inputs)
         if err:
@@ -293,7 +337,7 @@ class ProductVideoJobHandlers:
             return JobFailed(retryable=False, code="MISSING_INPUT_REF", message="story_ref cannot be empty")
         alloc = None
         try:
-            alloc = reserve_budget("video_factory", 50)
+            alloc = reserve_budget("video_factory", 50, idempotency_key=cache_key)
             result = self.video_client.render_video(
                 story_ref,
                 workflow_id=ctx.workflow_id,
@@ -301,13 +345,19 @@ class ProductVideoJobHandlers:
                 idempotency_key=ctx.idempotency_key,
             )
             commit_budget(alloc)
-            return JobSucceeded(artifact_ref=result, next_command={"command": "export_video"})
+            res = JobSucceeded(artifact_ref=result, next_command={"command": "export_video"})
+            if cache_key:
+                self._idempotency_cache[cache_key] = res
+            return res
         except Exception as e:
             if alloc:
                 release_budget(alloc)
             return JobFailed(retryable=True, code="VF_RENDER_FAILED", message=str(e))
 
     def export_job(self, ctx: JobContext, render_ref: Any) -> JobSucceeded | JobFailed:
+        cache_key = f"{ctx.workflow_id}:export:{ctx.idempotency_key}" if ctx.idempotency_key else None
+        if cache_key and cache_key in self._idempotency_cache:
+            return self._idempotency_cache[cache_key]
         inputs = {"render_ref": render_ref}
         err = self._validate_state_and_version(ctx, {ProductVideoWorkflowState.EXPORTING}, inputs)
         if err:
@@ -316,7 +366,7 @@ class ProductVideoJobHandlers:
             return JobFailed(retryable=False, code="MISSING_INPUT_REF", message="render_ref cannot be empty")
         alloc = None
         try:
-            alloc = reserve_budget("video_factory", 20)
+            alloc = reserve_budget("video_factory", 20, idempotency_key=cache_key)
             result = self.video_client.export_video(
                 render_ref,
                 workflow_id=ctx.workflow_id,
@@ -324,7 +374,10 @@ class ProductVideoJobHandlers:
                 idempotency_key=ctx.idempotency_key,
             )
             commit_budget(alloc)
-            return JobSucceeded(artifact_ref=result, next_command={"command": "complete"})
+            res = JobSucceeded(artifact_ref=result, next_command={"command": "complete"})
+            if cache_key:
+                self._idempotency_cache[cache_key] = res
+            return res
         except Exception as e:
             if alloc:
                 release_budget(alloc)

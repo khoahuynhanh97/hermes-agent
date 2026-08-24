@@ -12,7 +12,7 @@ from hermes_personal.product_video.handlers import (
     ProductVideoJobHandlers,
     register_product_video_job_handlers,
 )
-from hermes_personal.workflows.budgets import init_default_engine, BudgetPolicy
+from hermes_personal.workflows.budgets import init_default_engine, BudgetPolicy, get_allocated_budget
 from hermes_personal.workflows.engine import WorkflowEngine
 from hermes_personal.workflows.jobs import JobDispatcher, JobStatus, JobSpec
 from hermes_personal.workflows.recovery import WorkflowRecoveryService
@@ -256,7 +256,7 @@ def test_mcp_unavailable_handling(persisted_db):
 
 
 def test_duplicate_terminal_event_idempotency(persisted_db):
-    """Prove that duplicate terminal dispatch calls are completely idempotent."""
+    """Prove that duplicate terminal dispatch calls are completely idempotent and do NOT commit duplicate budget."""
     conn = sqlite3.connect(persisted_db)
     engine = WorkflowEngine(WorkflowRepository(conn))
     engine.set_workflow_state("wf_term", ProductVideoWorkflowState.EXPORTING.value, version=1)
@@ -264,9 +264,16 @@ def test_duplicate_terminal_event_idempotency(persisted_db):
     handlers = ProductVideoJobHandlers(workflow_engine=engine)
     ctx = JobContext(workflow_id="wf_term", job_id="j_term", expected_version=1, idempotency_key="idemp_term_1")
 
+    # Initial execution: commits $20 budget
     res1 = handlers.export_job(ctx, "render_ref_final")
-    res2 = handlers.export_job(ctx, "render_ref_final")
     assert isinstance(res1, JobSucceeded)
+    budget_after_first = get_allocated_budget("video_factory")
+    assert budget_after_first == 20
+
+    # Idempotent replay: returns cached result and commits 0 additional budget
+    res2 = handlers.export_job(ctx, "render_ref_final")
     assert isinstance(res2, JobSucceeded)
     assert res1.artifact_ref["artifact_ref"] == res2.artifact_ref["artifact_ref"]
+    budget_after_second = get_allocated_budget("video_factory")
+    assert budget_after_second == 20  # Exactly 20, zero duplicate budget commit!
     conn.close()

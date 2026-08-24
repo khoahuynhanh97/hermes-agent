@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import pytest
 
@@ -42,9 +43,9 @@ def test_full_fourteen_state_product_to_video_e2e(workflow_env):
     """Prove the complete 14-state product-to-video workflow from a TikTok Shop PDP request across 5 HITL gates.
 
     Asserts:
-    1. Exact 14 state sequence traversed in order from TikTok Shop PDP link.
+    1. Exact 14 state sequence traversed in order originating from a TikTok Shop PDP URL.
     2. Real ApprovalService handles all 5 Human-In-The-Loop approval gates (pending -> approved).
-    3. Artifact refs preserve owner, version, digest, payload, and PDP correlation.
+    3. Artifact refs preserve owner, version, digest, payload, and PDP correlation metadata.
     4. Real BudgetEngine records exactly $90 committed across the 5 paid pipeline stages ($5 + $5 + $10 + $50 + $20).
     """
     conn, _, approval_service, engine, dispatcher, handlers = workflow_env
@@ -81,12 +82,13 @@ def test_full_fourteen_state_product_to_video_e2e(workflow_env):
     # 2. State 2: RESEARCHING - Market research on PDP
     transition_to(ProductVideoWorkflowState.RESEARCHING, version=2)
     ctx_res = JobContext(workflow_id=wf_id, job_id="job_res", expected_version=2, idempotency_key="idemp_res_1")
-    res_res = handlers.research_job(ctx_res, "TikTok Wireless Earbuds ANC", ["bluetooth", "anc", "tiktok_shop"])
+    res_res = handlers.research_job(ctx_res, "TikTok Wireless Earbuds ANC", ["bluetooth", "anc", "tiktok_shop"], pdp_url=pdp_url)
     assert isinstance(res_res, JobSucceeded)
     research_art = res_res.artifact_ref
     assert "report" in research_art
     assert research_art["workflow_id"] == wf_id
     assert research_art["idempotency_key"] == "idemp_res_1"
+    assert research_art["pdp_url"] == pdp_url
 
     # 3. State 3: AwaitingProductLock (HITL Gate 1 - Web approval)
     transition_to(ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK, version=3)
@@ -101,6 +103,8 @@ def test_full_fourteen_state_product_to_video_e2e(workflow_env):
     assert isinstance(res_pack, JobSucceeded)
     pack_art = res_pack.artifact_ref
     assert "assets_mapping" in pack_art
+    assert pack_art["workflow_id"] == wf_id
+    assert pack_art["idempotency_key"] == "idemp_pack_1"
 
     res_lock = handlers.lock_job(ctx_pack, pack_art)
     assert isinstance(res_lock, JobSucceeded)
@@ -108,17 +112,22 @@ def test_full_fourteen_state_product_to_video_e2e(workflow_env):
     assert locked_pack["status"] == "locked"
     assert "manifest_digest" in locked_pack
     assert locked_pack["manifest_digest"].startswith("sha256:")
+    assert "resource_pack_id" in locked_pack
 
     # 5. State 5: CREATING_BRIEF (Paid call: $5)
     transition_to(ProductVideoWorkflowState.CREATING_BRIEF, version=5)
     ctx_brief = JobContext(workflow_id=wf_id, job_id="job_brief", expected_version=5, idempotency_key="idemp_brief_1")
-    res_brief = handlers.creative_brief_job(ctx_brief, locked_pack["resource_pack_id"], brief_config={"platform": "tiktok"})
+    res_brief = handlers.creative_brief_job(ctx_brief, locked_pack["resource_pack_id"], brief_config={"platform": "tiktok", "pdp_url": pdp_url})
     assert isinstance(res_brief, JobSucceeded)
     brief_art = res_brief.artifact_ref
     assert brief_art["artifact_ref"].startswith("sha256:")
     assert brief_art["digest"].startswith("sha256:")
     assert "payload" in brief_art
+    brief_payload = json.loads(brief_art["payload"]) if isinstance(brief_art["payload"], str) else brief_art["payload"]
+    assert brief_payload.get("owner") == "video_factory"
+    assert brief_payload.get("version") == 1
     assert brief_art["workflow_id"] == wf_id
+    assert brief_art["idempotency_key"] == "idemp_brief_1"
     assert get_allocated_budget("video_factory") == 5
 
     # 6. State 6: AwaitingBriefApproval (HITL Gate 2 - CLI approval)
@@ -132,6 +141,11 @@ def test_full_fourteen_state_product_to_video_e2e(workflow_env):
     res_scene = handlers.scene_plan_job(ctx_scene, brief_art["artifact_ref"])
     assert isinstance(res_scene, JobSucceeded)
     scene_art = res_scene.artifact_ref
+    assert scene_art["artifact_ref"].startswith("sha256:")
+    assert scene_art["digest"].startswith("sha256:")
+    assert "payload" in scene_art
+    assert scene_art["workflow_id"] == wf_id
+    assert scene_art["idempotency_key"] == "idemp_scene_1"
     assert get_allocated_budget("video_factory") == 10  # 5 + 5
 
     # 8. State 8: AwaitingSceneApproval (HITL Gate 3 - Web approval)
@@ -145,6 +159,11 @@ def test_full_fourteen_state_product_to_video_e2e(workflow_env):
     res_story = handlers.storyboard_job(ctx_story, scene_art["artifact_ref"])
     assert isinstance(res_story, JobSucceeded)
     story_art = res_story.artifact_ref
+    assert story_art["artifact_ref"].startswith("sha256:")
+    assert story_art["digest"].startswith("sha256:")
+    assert "payload" in story_art
+    assert story_art["workflow_id"] == wf_id
+    assert story_art["idempotency_key"] == "idemp_story_1"
     assert get_allocated_budget("video_factory") == 20  # 10 + 10
 
     # 10. State 10: AwaitingStoryboardApproval (HITL Gate 4 - Telegram approval)
@@ -158,6 +177,11 @@ def test_full_fourteen_state_product_to_video_e2e(workflow_env):
     res_render = handlers.render_job(ctx_render, story_art["artifact_ref"])
     assert isinstance(res_render, JobSucceeded)
     render_art = res_render.artifact_ref
+    assert render_art["artifact_ref"].startswith("sha256:")
+    assert render_art["digest"].startswith("sha256:")
+    assert "payload" in render_art
+    assert render_art["workflow_id"] == wf_id
+    assert render_art["idempotency_key"] == "idemp_render_1"
     assert get_allocated_budget("video_factory") == 70  # 20 + 50
 
     # 12. State 12: AwaitingFinalApproval (HITL Gate 5 - Telegram final approval)
@@ -171,6 +195,11 @@ def test_full_fourteen_state_product_to_video_e2e(workflow_env):
     res_export = handlers.export_job(ctx_export, render_art["artifact_ref"])
     assert isinstance(res_export, JobSucceeded)
     export_art = res_export.artifact_ref
+    assert export_art["artifact_ref"].startswith("sha256:")
+    assert export_art["digest"].startswith("sha256:")
+    assert "payload" in export_art
+    assert export_art["workflow_id"] == wf_id
+    assert export_art["idempotency_key"] == "idemp_export_1"
     assert get_allocated_budget("video_factory") == 90  # 70 + 20
 
     # 14. State 14: COMPLETED
