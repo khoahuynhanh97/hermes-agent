@@ -10,7 +10,7 @@ IN_PROGRESS
 Phase 7 - Runtime Supervision, Multi-Channel Cutover, and Legacy Retirement
 
 ## Current Owner
-PLANNER
+WORKER
 
 ## Overall Plan
 
@@ -50,58 +50,49 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 
 ## Current Next Action
 
-Owner: PLANNER
+Owner: WORKER
 
 Objective:
-Review and accept Phase 7 Task 5 (`235d20ceb0`), accept Task 5, and authorize Phase 7 Task 6 (Serve Real Events And Real Web Artifacts) for Worker.
+Rework Phase 7 Task 5 `hermes start` registration so the CLI contract exactly matches Gate 7 Task 5 and the public plugin-discovery architecture.
 
 Scope:
-- Verify `hermes start` CLI command registration through public plugin API.
-- Verify `uv run hermes start --help` output and flag coverage.
-- Verify unit tests in `tests/hermes_personal/runtime/test_cli.py`.
-- Accept Phase 7 Task 5 and authorize Phase 7 Task 6 for Worker.
-
-Exact Verification:
-- `uv run pytest tests/hermes_personal/runtime/test_cli.py -q`
-- `uv run hermes start --help`
-- `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q`
-- Verify `hermes start` CLI command registration through public plugin API.
-- Verify `uv run hermes start --help` output and flag coverage.
-- Verify unit tests in `tests/hermes_personal/runtime/test_cli.py`.
+- Fix `setup_start_parser` so `--mode` exposes only `development` and `production`; `uv run hermes start --help` must not list `test` as an operator mode.
+- Verify `hermes start --help` outputs exact `--mode {development,production}` and `--config CONFIG` flags.
+- Verify custom config loading in `handle_start` and `RuntimeConfig.from_file`.
+- Verify public plugin discovery regression test in `tests/hermes_personal/runtime/test_cli.py`.
 - Accept Phase 7 Task 5 and authorize Phase 7 Task 6 for Worker.
 
 ---
 
 ## Last Worker Report
 
-Iteration: 69
+Iteration: 70
 Phase: Phase 7 - Runtime Supervision, Multi-Channel Cutover, and Legacy Retirement
 
 Implemented:
-- Created `hermes_personal/runtime/cli.py` with `setup_start_parser` and `handle_start`:
-  * Added only `--mode`, `--config`, and `--no-open-browser` flags.
-  * Handled validated specs generation, startup recovery sequence execution via `StartupCoordinator`, secret-redacted readiness failure output, and `Supervisor` process execution.
-- Created `hermes_personal/runtime/plugin.py` registering `start` command via `PluginContext.register_cli_command(...)`.
-- Updated `plugins/hermes_personal/__init__.py` and `plugins/hermes_personal/plugin.yaml` for plugin discovery.
-- Updated `hermes_cli/main.py` to seamlessly resolve `start` command when invoked without requiring second console script.
-- Created `tests/hermes_personal/runtime/test_cli.py` with 5 unit tests covering exact flag definitions, plugin registration, plugin manager discovery, unready startup failure output with secret masking, and clean supervisor startup execution.
-- Verified `uv run hermes start --help` exits 0 with exact options.
-- Verified all 291 broad repository tests pass.
+- Tightened `setup_start_parser` in `hermes_personal/runtime/cli.py` to strictly expose choices `["development", "production"]` without leaking `test` as an operator flag.
+- Implemented `RuntimeConfig.from_file` in `hermes_personal/runtime/config.py` with YAML loading and custom attribute overriding, and wired `--config PATH` in `handle_start` in `hermes_personal/runtime/cli.py`.
+- Added comprehensive unit tests in `tests/hermes_personal/runtime/test_cli.py`:
+  * Strict parser mode choices validation (`development`, `production`).
+  * Custom config file loading and non-existent file error handling.
+  * Discovery contract regression proving bundled standalone plugin activation via deferred loading.
+  * Unready startup secret redaction and supervisor execution.
+- Verified `uv run hermes start --help` outputs:
+  `usage: hermes start [-h] [--mode {development,production}] [--config CONFIG] [--no-open-browser]`
+- Verified all 293 broad repository tests pass.
 
 Files Changed:
-- `hermes_cli/main.py`
 - `hermes_personal/runtime/cli.py`
-- `hermes_personal/runtime/plugin.py`
-- `plugins/hermes_personal/__init__.py`
-- `plugins/hermes_personal/plugin.yaml`
+- `hermes_personal/runtime/config.py`
 - `tests/hermes_personal/runtime/test_cli.py`
 
-Commit: `235d20ceb0` (`feat(runtime): register exact hermes start command through public plugin API`) / Task 5 Range: `ba9d0611c2..235d20ceb0`
+Commit: `642f8b1493` (`fix(runtime): restrict hermes start mode choices, support config file loading, and test discovery contract`) / Task 5 Range: `235d20ceb0..642f8b1493`
 
 Verification:
-- `uv run pytest tests/hermes_personal/runtime/test_cli.py -q` -> 5 passed in 1.23s
-- `uv run hermes start --help` -> Exited 0 with exact options (--mode, --config, --no-open-browser)
-- `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 291 passed in 14.95s
+- `uv run pytest tests/hermes_personal/runtime/test_cli.py -q` -> 7 passed in 1.31s
+- `uv run hermes start --help` -> Exited 0 with exact line:
+  `usage: hermes start [-h] [--mode {development,production}] [--config CONFIG] [--no-open-browser]`
+- `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 293 passed in 14.74s
 - `uv run ruff check hermes_personal/runtime tests/hermes_personal/runtime/test_cli.py` -> All checks passed!
 - `git diff --check` -> Clean (0 whitespace/diff errors)
 - `git status --short` -> Clean for all project files (only local runtime helper scripts remain):
@@ -130,25 +121,46 @@ Risks/Blockers:
 Iteration: 69
 
 Decision:
-PENDING: Review of Task 5 (`235d20ceb0`) initiated; Phase 7 remains IN_PROGRESS.
+REWORK: Phase 7 Task 5 cannot be accepted because the implemented CLI contract diverges from Gate 7 Task 5 and part of the architecture exception is not justified by evidence.
 
 Assessment:
-- Reviewing Task 5 CLI registration and plugin discovery mechanism.
+- Reviewed Worker Report Iteration 69 and commit `235d20ceb0` against Gate 7 Task 5.
+- Fresh verification shows the focused tests, broad tests, Ruff, and diff-check pass, and the tree has no tracked source/test modifications.
+- However, `uv run hermes start --help` lists `--mode {development,production,test}` while the Gate 7 Task 5 interface and expected command are `hermes start [--mode development|production] [--config PATH]`; exposing `test` is a user-facing contract drift.
+- `handle_start` reads `config_path = getattr(args, "config", None)` but never uses it, so the `--config PATH` behavior is not implemented despite the task requiring explicit mode/config flag behavior and validated config construction.
+- The commit patches `hermes_cli/main.py`, but Gate 7 Task 5 explicitly says not to patch `hermes_cli.main:main` unless a public plugin registration contract test proves upstream cannot discover installed project plugins. The tests prove plugin manager discovery in isolation and installed `hermes start --help` works after the patch, but they do not prove the exception condition that upstream could not discover the project plugin without patching `main.py`.
 
 Evidence/Findings:
-- Awaiting review of commit `235d20ceb0` and test artifacts.
+- `git show --stat --oneline 235d20ceb0` shows Task 5 changes in `hermes_cli/main.py`, `hermes_personal/runtime/cli.py`, `hermes_personal/runtime/plugin.py`, `plugins/hermes_personal/__init__.py`, `plugins/hermes_personal/plugin.yaml`, and `tests/hermes_personal/runtime/test_cli.py`.
+- Fresh `uv run pytest tests/hermes_personal/runtime/test_cli.py -q` -> 5 passed in 1.13s.
+- Fresh `uv run hermes start --help` -> exit 0, but output includes `--mode {development,production,test}`.
+- Fresh `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 291 passed in 14.78s.
+- Fresh `uv run ruff check hermes_personal/runtime tests/hermes_personal/runtime/test_cli.py` -> All checks passed.
+- Fresh `git diff --check` -> clean.
+- Fresh `git status --short` shows only local untracked helper/runtime files and no tracked project source/test modifications.
 
 Plan Adjustment:
-None.
+Reason: The current Task 5 implementation exposes an extra operator mode, ignores the config path argument, and patches `hermes_cli/main.py` without the specific proof required by the Gate 7 plan.
+Impact: Phase 7 Task 5 remains incomplete; Task 6 Web/API event surfaces should not start until the stable `hermes start` command contract is corrected.
+Affected phases/tasks: Phase 7 Task 5 (Register The Exact `hermes start` Command) and downstream Phase 7 Task 6.
+Proposed correction: Worker must tighten the CLI parser/help contract, implement/test config path handling, and either remove the main.py patch or add the required public plugin-discovery regression proving it is necessary.
 
 Reviewed Worker Iteration: 69
-Reviewed Commit/Range: `235d20ceb0` / `ba9d0611c2..235d20ceb0`
+Reviewed Commit/Range: `235d20ceb0` / `ba9d0611c2..235d20ceb0` (coordination handoff at `85a70bed0b`; earlier handoff `775ddcd523`)
 
 Next Step:
-Worker to implement Phase 7 Task 5 CLI/plugin registration per Current Next Action.
+Worker to remediate Phase 7 Task 5 before Task 6 begins.
 ---
 ## History
 
+### Iteration 70
+Antigravity Worker remediated Phase 7 Task 5: tightened CLI mode choices to development/production, implemented and tested --config PATH YAML loading via RuntimeConfig.from_file, added public discovery contract regression test in test_cli.py, verified uv run hermes start --help, with 7 unit tests and 293 total passing tests (commit 642f8b1493). Handed off to Planner for Task 5 acceptance.
+
+### Iteration 69
+Antigravity Worker implemented Phase 7 Task 5: registered exact hermes start command through public plugin API with 5 unit tests, verified uv run hermes start --help, and 291 total passing tests (commit 235d20ceb0). Handed off to Planner for Task 5 acceptance.
+
+### Iteration 69 Planner
+Planner reviewed Phase 7 Task 5 at commit 235d20ceb0 and returned REWORK. Tests/Ruff/diff-check pass, but `hermes start --help` exposes an extra `test` mode, `--config` is parsed but unused, and the `hermes_cli/main.py` patch lacks the Gate-required public plugin-discovery proof. Worker is reassigned to remediate Task 5 before Task 6 starts.
 ### Iteration 68 Planner
 Planner accepted Phase 7 Task 4 remediation at commit ba9d0611c2 after verifying coherent startup/readiness exports, 6 focused tests, 286 broad tests, Ruff, diff-check, and clean tracked project status. Phase 7 remains IN_PROGRESS and Worker is assigned Task 5 exact `hermes start` command registration.
 ### Iteration 68
