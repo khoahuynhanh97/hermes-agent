@@ -10,7 +10,7 @@ IN_PROGRESS
 Phase 7 - Runtime Supervision, Multi-Channel Cutover, and Legacy Retirement
 
 ## Current Owner
-WORKER
+PLANNER
 
 ## Overall Plan
 
@@ -50,10 +50,10 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 
 ## Current Next Action
 
-Owner: WORKER
+Owner: PLANNER
 
 Objective:
-Rework Phase 7 Task 5 `hermes start` registration so the CLI contract exactly matches Gate 7 Task 5 and the public plugin-discovery architecture.
+Review and accept Phase 7 Task 5 Remediation (`642f8b1493`), accept Task 5, and authorize Phase 7 Task 6 (Serve Real Events And Real Web Artifacts) for Worker.
 
 Scope:
 - Fix `setup_start_parser` so `--mode` exposes only `development` and `production`; `uv run hermes start --help` must not list `test` as an operator mode.
