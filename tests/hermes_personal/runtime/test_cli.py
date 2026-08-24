@@ -7,11 +7,12 @@ import pytest
 
 from hermes_cli.plugins import PluginManager
 from hermes_personal.runtime.cli import handle_start, setup_start_parser
+from hermes_personal.runtime.config import RuntimeConfig
 from hermes_personal.runtime.plugin import register as register_start_plugin
 from hermes_personal.runtime.readiness import StartupReport, StartupStepRecord, StartupStepStatus
 
 
-def test_setup_start_parser_defines_exact_flags():
+def test_setup_start_parser_defines_exact_flags_and_choices():
     parser = argparse.ArgumentParser(prog="hermes")
     subparsers = parser.add_subparsers(dest="command")
     start_parser = subparsers.add_parser("start")
@@ -30,6 +31,9 @@ def test_setup_start_parser_defines_exact_flags():
     assert args2.no_open_browser is True
 
     # Assert only expected flags exist
+    mode_action = next(a for a in start_parser._actions if a.dest == "mode")
+    assert mode_action.choices == ["development", "production"]
+
     actions = [a.dest for a in start_parser._actions if a.dest != "help"]
     assert set(actions) == {"mode", "config", "no_open_browser"}
 
@@ -45,22 +49,77 @@ def test_plugin_registration_registers_exact_start_command():
     assert kwargs["handler_fn"] is handle_start
 
 
-def test_plugin_discovery_discovers_start_command(tmp_path, monkeypatch):
+def test_public_plugin_discovery_and_deferred_loading_contract(tmp_path, monkeypatch):
+    """Proves why bundled project plugin without plugins.enabled requires deferred/targeted loading."""
     home = tmp_path / "home"
     home.mkdir()
-    (home / "config.yaml").write_text(
-        "plugins:\n  enabled:\n    - hermes-personal\n",
-        encoding="utf-8",
-    )
+    # Empty config without plugins.enabled
+    (home / "config.yaml").write_text("model: test-model\n", encoding="utf-8")
     monkeypatch.setenv("HERMES_HOME", str(home))
 
     manager = PluginManager()
     manager.discover_and_load()
+    # Standalone bundled plugin is discovered but disabled by default
+    assert "hermes-personal" in manager._plugins
+    assert manager._plugins["hermes-personal"].enabled is False
+
+    # When resolved for start command, _load_plugin registers start
+    manager._load_plugin(manager._plugins["hermes-personal"].manifest)
     assert "start" in manager._cli_commands
     cmd = manager._cli_commands["start"]
     assert cmd["name"] == "start"
     assert cmd["setup_fn"] is setup_start_parser
     assert cmd["handler_fn"] is handle_start
+
+
+def test_handle_start_with_custom_config_file(tmp_path):
+    custom_cfg = tmp_path / "custom_hermes.yaml"
+    custom_cfg.write_text(
+        """
+runtime:
+  mode: development
+  gateway_port: 9000
+  app_api_port: 9001
+  web_port: 9002
+""",
+        encoding="utf-8",
+    )
+
+    with patch("hermes_personal.runtime.cli.StartupCoordinator") as mock_coord_cls, \
+         patch("hermes_personal.runtime.cli.Supervisor") as mock_sup_cls:
+        mock_coord = MagicMock()
+        mock_coord.prepare.return_value = StartupReport(
+            overall_status=StartupStepStatus.COMPLETED,
+            steps=(),
+            started_at=0.0,
+            completed_at=0.01,
+            total_latency_ms=10.0,
+        )
+        mock_coord_cls.return_value = mock_coord
+        mock_sup = MagicMock()
+        mock_sup.run.return_value = 0
+        mock_sup_cls.return_value = mock_sup
+
+        args = argparse.Namespace(mode="development", config=str(custom_cfg), no_open_browser=True)
+        exit_code = handle_start(args)
+        assert exit_code == 0
+
+        # Verify StartupCoordinator was given config loaded from custom_cfg
+        passed_config: RuntimeConfig = mock_coord_cls.call_args.kwargs["config"]
+        assert passed_config.gateway_port == 9000
+        assert passed_config.app_api_port == 9001
+        assert passed_config.web_port == 9002
+
+
+def test_handle_start_fails_on_missing_config_file(tmp_path, capsys):
+    missing_cfg = tmp_path / "non_existent.yaml"
+    args = argparse.Namespace(mode="development", config=str(missing_cfg), no_open_browser=True)
+    exit_code = handle_start(args)
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "Configuration validation error" in captured.err
+    assert "Config file not found" in captured.err
 
 
 @patch("hermes_personal.runtime.cli.StartupCoordinator")

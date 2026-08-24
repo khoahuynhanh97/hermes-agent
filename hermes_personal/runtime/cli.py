@@ -24,7 +24,7 @@ def setup_start_parser(subparser: argparse.ArgumentParser) -> None:
     """Setup CLI parser arguments for hermes start."""
     subparser.add_argument(
         "--mode",
-        choices=["development", "production", "test"],
+        choices=["development", "production"],
         default="development",
         help="Runtime mode (development|production)",
     )
@@ -48,10 +48,17 @@ def handle_start(args: argparse.Namespace) -> int:
     repo_root = Path.cwd()
 
     try:
-        config = RuntimeConfig(
-            mode=mode,
-            repo_root=repo_root,
-        )
+        if config_path:
+            config = RuntimeConfig.from_file(
+                config_path=config_path,
+                mode=mode,
+                repo_root=repo_root,
+            )
+        else:
+            config = RuntimeConfig(
+                mode=mode,
+                repo_root=repo_root,
+            )
     except RuntimeConfigError as ex:
         print(f"Configuration validation error: {ex}", file=sys.stderr)
         return 1
