@@ -53,49 +53,55 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 Owner: PLANNER
 
 Objective:
-Review and accept Phase 7 Task 6 Web Cutover and Build Remediation (`2a399c5a32`), accept Task 6, and authorize Phase 7 Task 7 (Cut Over Four Channels With Shadow Parity And Guarded Retirement) for Worker.
+Review and accept Phase 7 Task 7 (`f4ed7b158e`), accept Task 7, and authorize Phase 7 Task 8 (Run Full Offline Acceptance And Operational Smoke Tests) for Worker.
 
 Scope:
-- Verify Web Chat real-event cutover and interactive operator approval in `ChatPage.tsx`.
-- Verify Omni real-event stream and approval controls in `OmniChatPage.tsx`.
-- Verify clean Web build and typechecking in `web/` (`npm run typecheck`, `npm run build`).
-- Verify Python FastAPI route tests (`test_application_api.py`) and static guards (`test_no_fake_progress.py`).
-- Accept Phase 7 Task 6 and authorize Phase 7 Task 7 for Worker.
+- Verify entry path inventory and boundary validation (`inventory.py`).
+- Verify semantic parity comparison and ordered reversible cutover coordinator (`parity.py`).
+- Verify guarded legacy component retirement checker (`retirement.py`).
+- Verify cutover runbook (`docs/hermes-personal/cutover-runbook.md`).
+- Verify unit test coverage in `tests/hermes_personal/cutover/`.
+- Accept Phase 7 Task 7 and authorize Phase 7 Task 8 for Worker.
 
 ---
 
 ## Last Worker Report
 
-Iteration: 74
+Iteration: 75
 Phase: Phase 7 - Runtime Supervision, Multi-Channel Cutover, and Legacy Retirement
 
 Implemented:
-- Completed Web Chat real-event cutover in `web/src/pages/ChatPage.tsx`:
-  * Rendered live Hermes Stream status bar reflecting active event stream count.
-  * Rendered interactive operator approval action button dispatching `submitHermesOperatorCommand({command_type: 'approve', target_id: ...})` on pending `approval_required` events.
-  * Cleaned up all unused variables/locals (zero TS6133 errors).
-- Completed Omni interface in `web/src/pages/OmniChatPage.tsx`:
-  * Wired pending approvals card with interactive operator approval buttons, `isSubmitting` state, and `lastCommandId` status indicator.
-- Enhanced `web/src/hooks/useHermesEventStream.ts`:
-  * Implemented real `autoReconnect` handling with reconnect timer and proper cleanup on component unmount.
-- Verified Web build & TypeScript typechecking:
-  * `npm run typecheck` in `web/`: Exited 0 with zero errors (`tsc -p . --noEmit`).
-  * `npm run build` in `web/`: Exited 0 with zero errors (`tsc -b && vite build` built in 9.92s).
-- Verified all 6 unit tests in `test_application_api.py` and `test_no_fake_progress.py`, and 300 broad repository tests pass cleanly.
+- Created `hermes_personal/cutover/inventory.py`:
+  * `RouteClassification`, `RouteEntry`, `RouteInventory`, `RouteInventoryError`.
+  * Production route inventory covering Telegram, CLI, Web, and Omni.
+  * `validate()`: rejects unclassified routes, prohibited direct provider routes, and natural-language paths that do not terminate at `HermesTurnService`.
+- Created `hermes_personal/cutover/parity.py`:
+  * `ExecutionFingerprint`, `ParityMismatch`, `ParityReport`.
+  * `compare_semantic_parity`: evaluates outcome category, clarification requirement, capability IDs, workflow type/state, approval gates, artifact ownership/version/digest, terminal status, bounded cost/latency deltas; does not compare prose text byte-for-byte; redacts sensitive fields.
+  * `OrderedCutoverCoordinator`: manages ordered reversible cutovers (Stage 1: CLI+Omni, Stage 2: Telegram, Stage 3: Web) with rollback restoring ingress flags without dropping durable data.
+- Created `hermes_personal/cutover/retirement.py`:
+  * `RetirementEvidence`, `RetirementAuthorization`, `RetirementChecker`.
+  * Enforces all 7 mandatory gates (zero callers, parity pass, reconciliation pass, rollback artifact, full test suite pass, completed observation window, signed release record) and data store/media retention before legacy retirement.
+- Created `hermes_personal/cutover/__init__.py`: package exports.
+- Created `docs/hermes-personal/cutover-runbook.md`: operational runbook for ordered stages, threshold observation, rollback procedures, and retirement checklist.
+- Created unit tests in `tests/hermes_personal/cutover/test_parity.py` and `tests/hermes_personal/cutover/test_retirement.py` (7 passed in 0.77s).
+- Verified all 7 cutover tests and 300 broad repository tests pass cleanly.
 
 Files Changed:
-- `web/src/hooks/useHermesEventStream.ts`
-- `web/src/pages/ChatPage.tsx`
-- `web/src/pages/OmniChatPage.tsx`
+- `docs/hermes-personal/cutover-runbook.md`
+- `hermes_personal/cutover/__init__.py`
+- `hermes_personal/cutover/inventory.py`
+- `hermes_personal/cutover/parity.py`
+- `hermes_personal/cutover/retirement.py`
+- `tests/hermes_personal/cutover/test_parity.py`
+- `tests/hermes_personal/cutover/test_retirement.py`
 
-Commit: `2a399c5a32` (`fix(web): complete ChatPage and Omni event stream integration, add autoReconnect, and verify clean web build`) / Task 6 Range: `2ae6228824..2a399c5a32`
+Commit: `f4ed7b158e` (`feat(cutover): guard channel cutover, semantic parity, and legacy retirement`) / Task 7 Range: `2a399c5a32..f4ed7b158e`
 
 Verification:
-- `web/` `npm run typecheck` -> Exited 0 (zero errors)
-- `web/` `npm run build` -> Exited 0 (`✓ built in 9.92s`)
-- `uv run pytest tests/hermes_personal/runtime/test_application_api.py tests/hermes_personal/runtime/test_no_fake_progress.py -q` -> 6 passed in 1.20s
-- `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 300 passed in 15.60s
-- `uv run ruff check hermes_personal/application hermes_personal/runtime tests/hermes_personal/runtime/test_application_api.py tests/hermes_personal/runtime/test_no_fake_progress.py` -> All checks passed!
+- `uv run pytest tests/hermes_personal/cutover -q` -> 7 passed in 0.77s
+- `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 300 passed in 15.33s
+- `uv run ruff check hermes_personal/cutover tests/hermes_personal/cutover` -> All checks passed!
 - `git diff --check` -> Clean (0 whitespace/diff errors)
 - `git status --short` -> Clean for all project files (only local runtime helper scripts remain):
   ```
@@ -120,44 +126,45 @@ Risks/Blockers:
 
 ## Last Planner Review
 
-Iteration: 73
+Iteration: 74
 
 Decision:
-REWORK: Phase 7 Task 6 remediation is not accepted yet. Backend route wiring improved and Python verification passes, but Web Chat cutover remains incomplete and Web build verification is still failing/unavailable.
+CONTINUE: Phase 7 Task 6 Web cutover and build remediation is accepted; Phase 7 remains IN_PROGRESS and Worker is authorized for Phase 7 Task 7.
 
 Assessment:
-- Reviewed Worker Report Iteration 73 and commit/range `e5e1d7c2d7..2ae6228824` against the prior REWORK and Gate 7 Task 6.
-- `2ae6228824` adds real FastAPI application/router scaffolding and route-level TestClient coverage for health, replay, SSE, operator command, and artifact metadata. This addresses a major part of the prior backend route gap.
-- However, the `ChatPage.tsx` remediation only imports and calls `useHermesEventStream` / `useHermesOperator`; the returned `hermesEvents` and `submitHermesOperatorCommand` values are never used. That does not constitute a real Web Chat cutover to durable Hermes events/artifacts.
-- The Web TypeScript config has `noUnusedLocals: true`, so the unused hook variables would be compile errors once dependencies are installed. The required Web build still cannot be verified in this environment because `tsc` is unavailable.
-- Worker Report acknowledges local npm dependencies are not installed but still reports no blocker and omits the required Web build evidence from the verification list. Since Task 6 modifies Web files, this is not acceptable for Planner acceptance.
+- Reviewed Worker Report Iteration 74 and commit/range `2ae6228824..2a399c5a32` against prior REWORK and Gate 7 Task 6.
+- The previous Web Chat gap is closed enough for Task 6: `ChatPage.tsx` now renders Hermes stream state and uses the operator command hook for approval-required events instead of leaving unused hook outputs.
+- `OmniChatPage.tsx` now renders pending approvals, operator errors, submit state, and last command ID from the shared event/operator hooks.
+- `useHermesEventStream.ts` implements `autoReconnect` with cleanup, removing the prior unused option gap.
+- Fresh Web typecheck and build now pass in this environment, so the prior `tsc` blocker is resolved.
+- Existing backend FastAPI route/app work from `2ae6228824` plus route-level TestClient tests remain in place, and focused/broad Python verification is clean.
+- Phase 7 still has Task 7 cutover/parity/retirement and Task 8 offline acceptance remaining, so the correct decision is CONTINUE to Task 7.
 
 Evidence/Findings:
-- `git show --stat 2ae6228824` shows targeted backend route/test changes plus `web/src/pages/ChatPage.tsx`.
-- `hermes_personal/application/app.py` creates a FastAPI app and includes health/events routers.
-- `hermes_personal/application/events_api.py` now defines `DurableEventStore`, `InMemoryEventStore`, `/api/events`, `/api/events/replay`, `/api/operator/command`, and `/api/artifacts/{artifact_id}` routes.
-- `tests/hermes_personal/runtime/test_application_api.py` now exercises route-level behavior through `starlette.testclient.TestClient`.
-- `web/src/pages/ChatPage.tsx:38-39` imports the Hermes hooks; `web/src/pages/ChatPage.tsx:210-215` assigns `hermesEvents` and `submitHermesOperatorCommand`; `rg` found no other uses of either symbol.
-- `web/tsconfig.app.json` sets `noUnusedLocals: true` and `noUnusedParameters: true`, making the unused ChatPage hook integration a likely TypeScript compile failure.
-- Fresh focused pytest with approved escalation: `uv run pytest tests/hermes_personal/runtime/test_application_api.py tests/hermes_personal/runtime/test_no_fake_progress.py -q` -> 6 passed in 0.88s.
-- Fresh broad pytest with approved escalation: `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 300 passed in 14.38s.
+- `git show --stat 2a399c5a32` shows targeted changes only in `web/src/hooks/useHermesEventStream.ts`, `web/src/pages/ChatPage.tsx`, and `web/src/pages/OmniChatPage.tsx`.
+- `web/src/pages/ChatPage.tsx` now uses `hermesEvents` in rendered UI and calls `submitHermesOperatorCommand` for `approval_required` events.
+- `web/src/pages/OmniChatPage.tsx` now computes pending approvals from durable events and uses `submitCommand`, `isSubmitting`, `lastCommandId`, and `operatorError` in the UI.
+- `web/src/hooks/useHermesEventStream.ts` now tracks `reconnectTimerRef`, schedules reconnect when `autoReconnect` is enabled, and clears timers on reconnect/unmount.
+- Fresh `npm run typecheck` from `web/` -> exit 0 (`tsc -p . --noEmit`).
+- Fresh `npm run build` from `web/` -> exit 0; Vite built successfully in 4.38s (with a non-fatal Vite native config warning).
+- Fresh focused pytest with approved escalation: `uv run pytest tests/hermes_personal/runtime/test_application_api.py tests/hermes_personal/runtime/test_no_fake_progress.py -q` -> 6 passed in 0.84s.
+- Fresh broad pytest with approved escalation: `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 300 passed in 14.27s.
 - Fresh Ruff with approved escalation: `uv run ruff check hermes_personal/application hermes_personal/runtime tests/hermes_personal/runtime/test_application_api.py tests/hermes_personal/runtime/test_no_fake_progress.py` -> All checks passed.
-- Fresh `npm run build` from `web/` -> failed before TypeScript compile: `tsc` is not recognized.
 - Fresh `git diff --check` -> clean. Fresh `git status --short` shows only local untracked helper/runtime files.
 
 Plan Adjustment:
-Reason: Backend Task 6 remediation is materially improved, but Web Chat integration and Web verification still drift from Gate 7 Task 6 acceptance.
-Impact: Starting Task 7 would cut over channels on a Web surface that has not actually consumed the real durable Hermes event/operator plane and may not compile.
-Affected phases/tasks: Phase 7 Task 6 only; Task 7 remains blocked.
-Proposed correction: Keep the backend route work, finish real ChatPage event/operator integration, resolve Web dependency/build verification, then hand off for re-review.
+None. Task 6 remediation is accepted; proceed to Gate 7 Task 7.
 
-Reviewed Worker Iteration: 73
-Reviewed Commit/Range: `2ae6228824` / `e5e1d7c2d7..2ae6228824` (coordination handoff at `0fc82a3e61`)
+Reviewed Worker Iteration: 74
+Reviewed Commit/Range: `2a399c5a32` / `2ae6228824..2a399c5a32` (coordination handoff at `3fca3599e3`)
 
 Next Step:
-Worker to remediate the Web Chat/Omni cutover and provide Web build evidence before Task 6 can be accepted.
+Worker to implement Phase 7 Task 7 per Current Next Action.
 ---
 ## History
+
+### Iteration 75
+Antigravity Worker implemented Phase 7 Task 7: created route inventory and boundary validation, semantic parity comparison, ordered reversible cutover coordinator, guarded legacy retirement checker (all 7 gates + data retention), cutover runbook, and 7 unit tests (commit f4ed7b158e). Handed off to Planner for Task 7 acceptance.
 
 ### Iteration 74
 Antigravity Worker remediated Phase 7 Task 6 Web cutover and build: rendered live stream status and interactive operator approvals in ChatPage.tsx and OmniChatPage.tsx, added autoReconnect in useHermesEventStream, verified npm run typecheck and npm run build pass cleanly, with 6 Starlette TestClient unit tests and 300 broad passing tests (commit 2a399c5a32). Handed off to Planner for Task 6 acceptance.
