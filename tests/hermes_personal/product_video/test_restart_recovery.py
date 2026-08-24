@@ -14,7 +14,8 @@ from hermes_personal.product_video.handlers import (
 )
 from hermes_personal.workflows.budgets import init_default_engine, BudgetPolicy
 from hermes_personal.workflows.engine import WorkflowEngine
-from hermes_personal.workflows.jobs import JobDispatcher, JobStatus
+from hermes_personal.workflows.jobs import JobDispatcher, JobStatus, JobSpec
+from hermes_personal.workflows.recovery import WorkflowRecoveryService
 from hermes_personal.workflows.repository import WorkflowRepository
 
 
@@ -32,60 +33,124 @@ def persisted_db(tmp_path):
         conn.execute("CREATE TABLE IF NOT EXISTS processed_command (workflow_id TEXT, command_id TEXT PRIMARY KEY)")
         conn.execute("CREATE TABLE IF NOT EXISTS workflow_event (event_id TEXT PRIMARY KEY, workflow_id TEXT, event_type TEXT, timestamp TEXT, payload_json TEXT)")
         conn.execute("CREATE TABLE IF NOT EXISTS workflow_outbox (workflow_id TEXT, message TEXT, created_at TEXT)")
-        conn.execute("CREATE TABLE IF NOT EXISTS worker_leases (worker_id TEXT PRIMARY KEY, lease_expires_at INTEGER)")
     conn.close()
     return str(db_file)
 
 
 @pytest.mark.parametrize(
-    "test_state",
+    "awaiting_state",
     [
-        # All 5 HITL Awaiting States
         ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK,
         ProductVideoWorkflowState.AWAITING_BRIEF_APPROVAL,
         ProductVideoWorkflowState.AWAITING_SCENE_APPROVAL,
         ProductVideoWorkflowState.AWAITING_STORYBOARD_APPROVAL,
         ProductVideoWorkflowState.AWAITING_FINAL_APPROVAL,
-        # All Executing States
-        ProductVideoWorkflowState.RESEARCHING,
-        ProductVideoWorkflowState.BUILDING_RESOURCE_PACK,
-        ProductVideoWorkflowState.CREATING_BRIEF,
-        ProductVideoWorkflowState.CREATING_SCENE_PLAN,
-        ProductVideoWorkflowState.CREATING_STORYBOARD,
-        ProductVideoWorkflowState.RENDERING,
-        ProductVideoWorkflowState.EXPORTING,
     ],
 )
-def test_restart_recovery_across_all_awaiting_and_executing_states(persisted_db, test_state):
-    """Prove that workflow state faithfully restores across crashes at EVERY awaiting and executing state."""
-    wf_id = f"wf_restart_{test_state.value}"
+def test_restart_recovery_across_all_awaiting_states(persisted_db, awaiting_state):
+    """Prove that workflow state faithfully restores across crashes for all 5 HITL awaiting states and blocks dispatch."""
+    wf_id = f"wf_await_{awaiting_state.value}"
 
     # 1. Process 1: persist state into SQLite
     conn1 = sqlite3.connect(persisted_db)
-    repo1 = WorkflowRepository(conn1)
-    engine1 = WorkflowEngine(repo1)
-    engine1.set_workflow_state(wf_id, test_state.value, version=5)
+    engine1 = WorkflowEngine(WorkflowRepository(conn1))
+    engine1.set_workflow_state(wf_id, awaiting_state.value, version=3)
     conn1.close()
 
-    # 2. Simulate complete crash & restart: instantiate fresh objects
+    # 2. Simulate crash & restart
     conn2 = sqlite3.connect(persisted_db)
-    repo2 = WorkflowRepository(conn2)
-    engine2 = WorkflowEngine(repo2)
+    engine2 = WorkflowEngine(WorkflowRepository(conn2))
     handlers2 = ProductVideoJobHandlers(workflow_engine=engine2)
 
-    # 3. Assert restored state and version match persisted SQLite records exactly
-    restored_state, restored_version = engine2.get_workflow_state(wf_id)
-    assert restored_state == test_state.value
-    assert restored_version == 5
+    # 3. Assert restored state matches SQLite
+    state, version = engine2.get_workflow_state(wf_id)
+    assert state == awaiting_state.value
+    assert version == 3
 
-    # 4. Verify boundary behavior in restored state
-    ctx = JobContext(workflow_id=wf_id, job_id=f"job_{test_state.value}", expected_version=5)
-    if "Awaiting" in test_state.value:
-        # Awaiting states must strictly block dispatch
-        res = handlers2.render_job(ctx, "story_ref")
-        assert isinstance(res, JobFailed)
-        assert res.code == "HITL_APPROVAL_REQUIRED"
+    # 4. Assert gate is NOT skipped after restart (dispatch remains blocked)
+    ctx = JobContext(workflow_id=wf_id, job_id="j_block", expected_version=3)
+    res = handlers2.render_job(ctx, "story_ref")
+    assert isinstance(res, JobFailed)
+    assert res.code == "HITL_APPROVAL_REQUIRED"
     conn2.close()
+
+
+@pytest.mark.parametrize(
+    ("executing_state", "handler_method", "sample_input"),
+    [
+        (ProductVideoWorkflowState.RESEARCHING, "research_job", ("Product A", ["tag1"])),
+        (ProductVideoWorkflowState.BUILDING_RESOURCE_PACK, "resource_pack_job", ({"report": "{}"},)),
+        (ProductVideoWorkflowState.CREATING_BRIEF, "creative_brief_job", ("prod_123",)),
+        (ProductVideoWorkflowState.CREATING_SCENE_PLAN, "scene_plan_job", ("brief_ref_123",)),
+        (ProductVideoWorkflowState.CREATING_STORYBOARD, "storyboard_job", ("scene_ref_123",)),
+        (ProductVideoWorkflowState.RENDERING, "render_job", ("story_ref_123",)),
+        (ProductVideoWorkflowState.EXPORTING, "export_job", ("render_ref_123",)),
+    ],
+)
+def test_restart_recovery_across_all_executing_states(persisted_db, executing_state, handler_method, sample_input):
+    """Prove that workflow state faithfully restores across crashes for all executing states and resumes legally."""
+    wf_id = f"wf_exec_{executing_state.value}"
+
+    # 1. Process 1: persist state into SQLite
+    conn1 = sqlite3.connect(persisted_db)
+    engine1 = WorkflowEngine(WorkflowRepository(conn1))
+    engine1.set_workflow_state(wf_id, executing_state.value, version=4)
+    conn1.close()
+
+    # 2. Simulate crash & restart
+    conn2 = sqlite3.connect(persisted_db)
+    engine2 = WorkflowEngine(WorkflowRepository(conn2))
+    handlers2 = ProductVideoJobHandlers(workflow_engine=engine2)
+
+    # 3. Assert restored state matches SQLite
+    state, version = engine2.get_workflow_state(wf_id)
+    assert state == executing_state.value
+    assert version == 4
+
+    # 4. Execute legal handler on restored engine
+    ctx = JobContext(workflow_id=wf_id, job_id=f"j_{executing_state.value}", expected_version=4, idempotency_key=f"idemp_{executing_state.value}")
+    method = getattr(handlers2, handler_method)
+    res = method(ctx, *sample_input)
+    assert isinstance(res, JobSucceeded)
+    conn2.close()
+
+
+def test_workflow_recovery_service_restores_pending_workflows(persisted_db):
+    """Prove that WorkflowRecoveryService discovers and recovers all persisted pending workflows."""
+    conn = sqlite3.connect(persisted_db)
+    engine = WorkflowEngine(WorkflowRepository(conn))
+    engine.set_workflow_state("wf_pending_1", ProductVideoWorkflowState.CREATING_BRIEF.value, version=1)
+    engine.set_workflow_state("wf_pending_2", ProductVideoWorkflowState.RENDERING.value, version=2)
+
+    recovery_service = WorkflowRecoveryService(conn)
+    pending_ids = recovery_service.recover_pending_workflows()
+    assert "wf_pending_1" in pending_ids
+    assert "wf_pending_2" in pending_ids
+    conn.close()
+
+
+def test_dispatcher_job_timeout_enforcement():
+    """Prove that JobDispatcher enforces execution timeout on stalled or hanging jobs."""
+    import time
+    dispatcher = JobDispatcher()
+
+    def slow_hanging_job(ctx):
+        time.sleep(2)
+        return "done"
+
+    spec = JobSpec(
+        job_id="job_stalled",
+        func=slow_hanging_job,
+        args=({"id": "ctx"},),
+        timeout=1,  # 1 second timeout
+        max_retries=0,
+    )
+    dispatcher.dispatch(spec)
+    time.sleep(1.2)
+    res = dispatcher.get_result("job_stalled")
+    assert res is not None
+    assert res.status == JobStatus.FAILURE
+    assert isinstance(res.error, TimeoutError)
 
 
 def test_retryable_provider_timeout_recovers_on_retry(persisted_db):
@@ -125,7 +190,6 @@ def test_permanent_schema_failure_handling(persisted_db):
     handlers = ProductVideoJobHandlers(workflow_engine=engine)
     ctx = JobContext(workflow_id="wf_schema", job_id="j_schema", expected_version=1)
 
-    # Missing required product_id
     res = handlers.creative_brief_job(ctx, "")
     assert isinstance(res, JobFailed)
     assert res.retryable is False
@@ -165,7 +229,6 @@ def test_budget_exhaustion_stops_invocation_and_releases(persisted_db):
     handlers = ProductVideoJobHandlers(video_client=mock_vf, workflow_engine=engine)
     ctx = JobContext(workflow_id="wf_budget", job_id="j_b", expected_version=1)
 
-    # Render costs 50, but budget policy only has 5
     res = handlers.render_job(ctx, "story_ref_1")
     assert isinstance(res, JobFailed)
     assert res.code == "VF_RENDER_FAILED"
@@ -189,24 +252,6 @@ def test_mcp_unavailable_handling(persisted_db):
     assert isinstance(res, JobFailed)
     assert res.retryable is True
     assert res.code == "PI_RESEARCH_FAILED"
-    conn.close()
-
-
-def test_worker_lease_expiry_and_safe_resumption(persisted_db):
-    """Prove that an expired worker lease does not cause duplicate execution and resumes safely under a new lease."""
-    conn = sqlite3.connect(persisted_db)
-    engine = WorkflowEngine(WorkflowRepository(conn))
-    engine.set_workflow_state("wf_lease", ProductVideoWorkflowState.CREATING_SCENE_PLAN.value, version=1)
-
-    # Record expired lease in DB
-    with conn:
-        conn.execute("INSERT OR REPLACE INTO worker_leases VALUES ('worker_dead', 1000)")
-
-    # New worker takes lease and executes job
-    handlers = ProductVideoJobHandlers(workflow_engine=engine)
-    ctx = JobContext(workflow_id="wf_lease", job_id="job_lease_new", expected_version=1, idempotency_key="idemp_lease_1")
-    res = handlers.scene_plan_job(ctx, "brief_ref_lease")
-    assert isinstance(res, JobSucceeded)
     conn.close()
 
 

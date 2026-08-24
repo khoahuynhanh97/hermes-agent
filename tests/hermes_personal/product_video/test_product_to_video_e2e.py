@@ -10,7 +10,8 @@ from hermes_personal.product_video.handlers import (
     ProductVideoJobHandlers,
     register_product_video_job_handlers,
 )
-from hermes_personal.workflows.budgets import init_default_engine, BudgetPolicy
+from hermes_personal.workflows.approvals import ApprovalService, ApprovalStatus
+from hermes_personal.workflows.budgets import init_default_engine, BudgetPolicy, get_allocated_budget
 from hermes_personal.workflows.engine import WorkflowEngine
 from hermes_personal.workflows.jobs import JobDispatcher
 from hermes_personal.workflows.repository import WorkflowRepository
@@ -25,6 +26,7 @@ def setup_budget():
 def workflow_env():
     conn = sqlite3.connect(":memory:")
     repo = WorkflowRepository(conn)
+    approval_service = ApprovalService(conn)
     with conn:
         conn.execute("CREATE TABLE IF NOT EXISTS workflow (workflow_id TEXT PRIMARY KEY, aggregate_json TEXT, version INTEGER)")
         conn.execute("CREATE TABLE IF NOT EXISTS processed_command (workflow_id TEXT, command_id TEXT PRIMARY KEY)")
@@ -33,33 +35,40 @@ def workflow_env():
     engine = WorkflowEngine(repo)
     dispatcher = JobDispatcher()
     handlers = register_product_video_job_handlers(dispatcher, workflow_engine=engine)
-    return repo, engine, dispatcher, handlers
+    return conn, repo, approval_service, engine, dispatcher, handlers
 
 
 def test_full_fourteen_state_product_to_video_e2e(workflow_env):
     """Prove the complete 14-state product-to-video workflow from a TikTok Shop PDP request across 5 HITL gates.
 
     Asserts:
-    1. Exact 14 state sequence traversed in order.
-    2. All 5 Human-In-The-Loop approval gates pause and require explicit approval records.
-    3. Artifact refs preserve owner, schema, version, and SHA-256 digest.
-    4. One cost ledger entry per paid call with exact amounts.
+    1. Exact 14 state sequence traversed in order from TikTok Shop PDP link.
+    2. Real ApprovalService handles all 5 Human-In-The-Loop approval gates (pending -> approved).
+    3. Artifact refs preserve owner, version, digest, payload, and PDP correlation.
+    4. Real BudgetEngine records exactly $90 committed across the 5 paid pipeline stages ($5 + $5 + $10 + $50 + $20).
     """
-    _, engine, dispatcher, handlers = workflow_env
+    conn, _, approval_service, engine, dispatcher, handlers = workflow_env
     wf_id = "wf_tiktok_pdp_12345"
+    pdp_url = "https://shop.tiktok.com/view/product/17294829104"
 
     state_history: list[str] = []
-    approvals_ledger: list[dict] = []
-    cost_ledger: list[dict] = []
+    approval_ids: list[str] = []
 
-    def record_approval(gate_name: str, channel: str, approver: str, version: int):
-        approvals_ledger.append({
+    def handle_hitl_gate(gate_name: str, channel: str, version: int):
+        req_id = approval_service.submit_request({
+            "workflow_id": wf_id,
             "gate": gate_name,
             "channel": channel,
-            "approver": approver,
             "workflow_version": version,
-            "status": "APPROVED",
+            "pdp_url": pdp_url,
         })
+        approval_ids.append(req_id)
+        # Verify request is pending in SQLite
+        req = approval_service.get_request(req_id)
+        assert req.status == ApprovalStatus.PENDING
+        # Operator approves request
+        approval_service.approve(req_id)
+        assert approval_service.get_request(req_id).status == ApprovalStatus.APPROVED
 
     def transition_to(state: ProductVideoWorkflowState, version: int):
         engine.set_workflow_state(wf_id, state.value, version=version)
@@ -67,7 +76,6 @@ def test_full_fourteen_state_product_to_video_e2e(workflow_env):
         state_history.append(current_state)
 
     # 1. State 1: IDLE - Initial request from TikTok Shop PDP
-    pdp_url = "https://shop.tiktok.com/view/product/17294829104"
     transition_to(ProductVideoWorkflowState.IDLE, version=1)
 
     # 2. State 2: RESEARCHING - Market research on PDP
@@ -78,12 +86,13 @@ def test_full_fourteen_state_product_to_video_e2e(workflow_env):
     research_art = res_res.artifact_ref
     assert "report" in research_art
     assert research_art["workflow_id"] == wf_id
+    assert research_art["idempotency_key"] == "idemp_res_1"
 
     # 3. State 3: AwaitingProductLock (HITL Gate 1 - Web approval)
     transition_to(ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK, version=3)
-    # Assert HITL gate blocks dispatch
+    # Assert HITL gate strictly blocks dispatch before human approval
     assert handlers.resource_pack_job(ctx_res, research_art).code == "HITL_APPROVAL_REQUIRED"
-    record_approval("AwaitingProductLock", channel="web", approver="user_admin", version=3)
+    handle_hitl_gate("AwaitingProductLock", channel="web", version=3)
 
     # 4. State 4: BUILDING_RESOURCE_PACK
     transition_to(ProductVideoWorkflowState.BUILDING_RESOURCE_PACK, version=4)
@@ -106,15 +115,16 @@ def test_full_fourteen_state_product_to_video_e2e(workflow_env):
     res_brief = handlers.creative_brief_job(ctx_brief, locked_pack["resource_pack_id"], brief_config={"platform": "tiktok"})
     assert isinstance(res_brief, JobSucceeded)
     brief_art = res_brief.artifact_ref
-    assert "artifact_ref" in brief_art
     assert brief_art["artifact_ref"].startswith("sha256:")
     assert brief_art["digest"].startswith("sha256:")
-    cost_ledger.append({"stage": "creative_brief", "amount": 5, "channel": "video_factory"})
+    assert "payload" in brief_art
+    assert brief_art["workflow_id"] == wf_id
+    assert get_allocated_budget("video_factory") == 5
 
     # 6. State 6: AwaitingBriefApproval (HITL Gate 2 - CLI approval)
     transition_to(ProductVideoWorkflowState.AWAITING_BRIEF_APPROVAL, version=6)
     assert handlers.scene_plan_job(ctx_brief, brief_art["artifact_ref"]).code == "HITL_APPROVAL_REQUIRED"
-    record_approval("AwaitingBriefApproval", channel="cli", approver="operator_cli", version=6)
+    handle_hitl_gate("AwaitingBriefApproval", channel="cli", version=6)
 
     # 7. State 7: CREATING_SCENE_PLAN (Paid call: $5)
     transition_to(ProductVideoWorkflowState.CREATING_SCENE_PLAN, version=7)
@@ -122,12 +132,12 @@ def test_full_fourteen_state_product_to_video_e2e(workflow_env):
     res_scene = handlers.scene_plan_job(ctx_scene, brief_art["artifact_ref"])
     assert isinstance(res_scene, JobSucceeded)
     scene_art = res_scene.artifact_ref
-    cost_ledger.append({"stage": "scene_plan", "amount": 5, "channel": "video_factory"})
+    assert get_allocated_budget("video_factory") == 10  # 5 + 5
 
     # 8. State 8: AwaitingSceneApproval (HITL Gate 3 - Web approval)
     transition_to(ProductVideoWorkflowState.AWAITING_SCENE_APPROVAL, version=8)
     assert handlers.storyboard_job(ctx_scene, scene_art["artifact_ref"]).code == "HITL_APPROVAL_REQUIRED"
-    record_approval("AwaitingSceneApproval", channel="web", approver="creator_web", version=8)
+    handle_hitl_gate("AwaitingSceneApproval", channel="web", version=8)
 
     # 9. State 9: CREATING_STORYBOARD (Paid call: $10)
     transition_to(ProductVideoWorkflowState.CREATING_STORYBOARD, version=9)
@@ -135,12 +145,12 @@ def test_full_fourteen_state_product_to_video_e2e(workflow_env):
     res_story = handlers.storyboard_job(ctx_story, scene_art["artifact_ref"])
     assert isinstance(res_story, JobSucceeded)
     story_art = res_story.artifact_ref
-    cost_ledger.append({"stage": "storyboard", "amount": 10, "channel": "video_factory"})
+    assert get_allocated_budget("video_factory") == 20  # 10 + 10
 
     # 10. State 10: AwaitingStoryboardApproval (HITL Gate 4 - Telegram approval)
     transition_to(ProductVideoWorkflowState.AWAITING_STORYBOARD_APPROVAL, version=10)
     assert handlers.render_job(ctx_story, story_art["artifact_ref"]).code == "HITL_APPROVAL_REQUIRED"
-    record_approval("AwaitingStoryboardApproval", channel="telegram", approver="tg_reviewer_99", version=10)
+    handle_hitl_gate("AwaitingStoryboardApproval", channel="telegram", version=10)
 
     # 11. State 11: RENDERING (Paid call: $50)
     transition_to(ProductVideoWorkflowState.RENDERING, version=11)
@@ -148,12 +158,12 @@ def test_full_fourteen_state_product_to_video_e2e(workflow_env):
     res_render = handlers.render_job(ctx_render, story_art["artifact_ref"])
     assert isinstance(res_render, JobSucceeded)
     render_art = res_render.artifact_ref
-    cost_ledger.append({"stage": "render", "amount": 50, "channel": "video_factory"})
+    assert get_allocated_budget("video_factory") == 70  # 20 + 50
 
     # 12. State 12: AwaitingFinalApproval (HITL Gate 5 - Telegram final approval)
     transition_to(ProductVideoWorkflowState.AWAITING_FINAL_APPROVAL, version=12)
     assert handlers.export_job(ctx_render, render_art["artifact_ref"]).code == "HITL_APPROVAL_REQUIRED"
-    record_approval("AwaitingFinalApproval", channel="telegram", approver="tg_client_owner", version=12)
+    handle_hitl_gate("AwaitingFinalApproval", channel="telegram", version=12)
 
     # 13. State 13: EXPORTING (Paid call: $20)
     transition_to(ProductVideoWorkflowState.EXPORTING, version=13)
@@ -161,7 +171,7 @@ def test_full_fourteen_state_product_to_video_e2e(workflow_env):
     res_export = handlers.export_job(ctx_export, render_art["artifact_ref"])
     assert isinstance(res_export, JobSucceeded)
     export_art = res_export.artifact_ref
-    cost_ledger.append({"stage": "export", "amount": 20, "channel": "video_factory"})
+    assert get_allocated_budget("video_factory") == 90  # 70 + 20
 
     # 14. State 14: COMPLETED
     transition_to(ProductVideoWorkflowState.COMPLETED, version=14)
@@ -185,17 +195,10 @@ def test_full_fourteen_state_product_to_video_e2e(workflow_env):
     ]
     assert state_history == expected_states
 
-    # Assert 2: Exactly 5 approvals recorded (one per HITL gate)
-    assert len(approvals_ledger) == 5
-    assert [a["gate"] for a in approvals_ledger] == [
-        "AwaitingProductLock",
-        "AwaitingBriefApproval",
-        "AwaitingSceneApproval",
-        "AwaitingStoryboardApproval",
-        "AwaitingFinalApproval",
-    ]
+    # Assert 2: Exactly 5 approval requests submitted and approved in ApprovalService
+    assert len(approval_ids) == 5
+    for aid in approval_ids:
+        assert approval_service.get_request(aid).status == ApprovalStatus.APPROVED
 
-    # Assert 3: Exactly 5 cost ledger entries recorded for paid operations
-    assert len(cost_ledger) == 5
-    total_cost = sum(c["amount"] for c in cost_ledger)
-    assert total_cost == 90  # 5 + 5 + 10 + 50 + 20 = 90
+    # Assert 3: Exactly $90 committed in BudgetEngine
+    assert get_allocated_budget("video_factory") == 90

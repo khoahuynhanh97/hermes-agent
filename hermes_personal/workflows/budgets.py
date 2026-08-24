@@ -64,6 +64,11 @@ class BudgetEngine:
             raise BudgetError("allocation not pending")
         self._pending.remove(allocation)
 
+    def get_allocated(self, channel: str | None = None) -> dict[str, int] | int:
+        if channel:
+            return self._allocated.get(channel, 0)
+        return dict(self._allocated)
+
 # Convenience functions operating on a default engine (optional)
 _default_engine: BudgetEngine | None = None
 
@@ -91,3 +96,8 @@ def release_budget(allocation: BudgetAllocation) -> None:
     if _default_engine is None:
         raise BudgetError("default engine not initialized")
     _default_engine.release_budget(allocation)
+
+def get_allocated_budget(channel: str | None = None) -> dict[str, int] | int:
+    if _default_engine is None:
+        return 0 if channel else {}
+    return _default_engine.get_allocated(channel)
