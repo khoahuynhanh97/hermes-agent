@@ -228,7 +228,7 @@ def _migrate_schema(connection: sqlite3.Connection) -> None:
 
 
 def connect(database_path: str | Path) -> sqlite3.Connection:
-    connection = sqlite3.connect(database_path)
+    connection = sqlite3.connect(database_path, check_same_thread=False)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.executescript(SCHEMA)
