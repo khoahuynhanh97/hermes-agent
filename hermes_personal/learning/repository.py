@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Sequence
 
 from hermes_personal.learning.models import (
+    CandidateEvaluation,
     CandidateStatus,
     EvidenceRef,
     InvalidCandidate,
@@ -21,16 +22,26 @@ from hermes_personal.learning.models import (
 
 
 class LearningRepository:
-    """Repository for governed learning candidates, versions, evidence, outcomes, and audit events."""
+    """Repository for governed learning candidates, versions, evidence, outcomes, evaluations, and audit events."""
 
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._conn = connection
 
     def record_task_outcome(self, outcome: TaskOutcome) -> None:
+        existing = self.get_task_outcome(outcome.outcome_id)
+        if existing:
+            if (
+                existing.source_type == outcome.source_type
+                and existing.source_id == outcome.source_id
+                and existing.status == outcome.status
+                and existing.details == outcome.details
+            ):
+                return
+            raise LearningRepositoryError(f"Task outcome '{outcome.outcome_id}' already recorded and is immutable")
         with self._conn:
             self._conn.execute(
                 """
-                INSERT OR REPLACE INTO task_outcome (outcome_id, source_type, source_id, status, details_json, created_at)
+                INSERT INTO task_outcome (outcome_id, source_type, source_id, status, details_json, created_at)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
@@ -62,27 +73,23 @@ class LearningRepository:
         )
 
     def create_candidate(self, candidate: LearningCandidate) -> LearningCandidate:
-        # Validation rules:
         if not candidate.owner_user_id:
             raise InvalidCandidate("Candidate must specify owner_user_id")
         if not candidate.evidence:
             raise InvalidCandidate("Candidate requires at least one evidence ref")
 
-        # Validate evidence against task outcome
         for ev in candidate.evidence:
             if candidate.source_outcome_id:
                 outcome = self.get_task_outcome(candidate.source_outcome_id)
                 if outcome and outcome.status == "failure" and ev.polarity == "positive":
                     raise InvalidCandidate("Failed task outcome cannot be cited as positive evidence; requires successful outcome")
 
-        # Knowledge/procedure can never be created as auto-approved
         status = candidate.status
         if candidate.kind in ("knowledge", "procedure") and status == "approved":
             status = "draft"
 
         digest = candidate.digest or candidate.compute_digest()
 
-        # Idempotent lookup by (owner_user_id, kind, digest)
         cur = self._conn.execute(
             "SELECT candidate_id, owner_user_id, kind, title, content, digest, source_outcome_id, status, created_at FROM learning_candidate WHERE owner_user_id = ? AND kind = ? AND digest = ?",
             (candidate.owner_user_id, candidate.kind, digest),
@@ -138,7 +145,6 @@ class LearningRepository:
                         ev.created_at,
                     ),
                 )
-            # Record audit event
             self._conn.execute(
                 """
                 INSERT INTO learning_event (event_id, candidate_id, version_id, event_type, payload_json, created_at)
@@ -228,12 +234,91 @@ class LearningRepository:
             for r in cur.fetchall()
         ]
 
+    def record_evaluation(self, evaluation: CandidateEvaluation) -> CandidateEvaluation:
+        cand = self.get_candidate(evaluation.candidate_id)
+        if not cand:
+            raise InvalidCandidate(f"Candidate '{evaluation.candidate_id}' not found for evaluation")
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO candidate_evaluation (evaluation_id, candidate_id, evaluator_name, decision, score, reason, evidence_summary, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    evaluation.evaluation_id,
+                    evaluation.candidate_id,
+                    evaluation.evaluator_name,
+                    evaluation.decision,
+                    evaluation.score,
+                    evaluation.reason,
+                    evaluation.evidence_summary,
+                    evaluation.created_at,
+                ),
+            )
+            self._conn.execute(
+                """
+                INSERT INTO learning_event (event_id, candidate_id, version_id, event_type, payload_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"evt_{uuid.uuid4().hex[:12]}",
+                    evaluation.candidate_id,
+                    None,
+                    "evaluation_recorded",
+                    json.dumps({
+                        "evaluator": evaluation.evaluator_name,
+                        "decision": evaluation.decision,
+                        "score": evaluation.score,
+                        "reason": evaluation.reason,
+                    }),
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+        return evaluation
+
+    def get_evaluations_for_candidate(self, candidate_id: str) -> list[CandidateEvaluation]:
+        cur = self._conn.execute(
+            "SELECT evaluation_id, candidate_id, evaluator_name, decision, score, reason, evidence_summary, created_at FROM candidate_evaluation WHERE candidate_id = ? ORDER BY created_at ASC",
+            (candidate_id,),
+        )
+        return [
+            CandidateEvaluation(
+                evaluation_id=r["evaluation_id"],
+                candidate_id=r["candidate_id"],
+                evaluator_name=r["evaluator_name"],
+                decision=r["decision"],
+                score=r["score"],
+                reason=r["reason"],
+                evidence_summary=r["evidence_summary"],
+                created_at=r["created_at"],
+            )
+            for r in cur.fetchall()
+        ]
+
+    def get_evaluation(self, evaluation_id: str) -> CandidateEvaluation | None:
+        cur = self._conn.execute(
+            "SELECT evaluation_id, candidate_id, evaluator_name, decision, score, reason, evidence_summary, created_at FROM candidate_evaluation WHERE evaluation_id = ?",
+            (evaluation_id,),
+        )
+        r = cur.fetchone()
+        if not r:
+            return None
+        return CandidateEvaluation(
+            evaluation_id=r["evaluation_id"],
+            candidate_id=r["candidate_id"],
+            evaluator_name=r["evaluator_name"],
+            decision=r["decision"],
+            score=r["score"],
+            reason=r["reason"],
+            evidence_summary=r["evidence_summary"],
+            created_at=r["created_at"],
+        )
+
     def create_version(self, candidate_id: str, content: str) -> LearningVersion:
         cand = self.get_candidate(candidate_id)
         if not cand:
             raise InvalidVersion(f"Candidate '{candidate_id}' not found")
 
-        # Determine next append-only version number
         cur = self._conn.execute(
             "SELECT MAX(version) as max_v FROM learning_version WHERE candidate_id = ?",
             (candidate_id,),

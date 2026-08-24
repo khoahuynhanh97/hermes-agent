@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -10,6 +9,7 @@ LearningKind = Literal["preference", "knowledge", "procedure"]
 CandidateStatus = Literal["draft", "evaluated", "pending_approval", "approved", "rejected"]
 VersionStatus = Literal["active", "revoked", "superseded"]
 TaskOutcomeStatus = Literal["success", "failure", "cancelled"]
+EvaluationDecision = Literal["approved", "rejected", "needs_human_review", "promoted"]
 
 
 class LearningError(Exception):
@@ -65,6 +65,18 @@ class LearningCandidate:
     def compute_digest(self) -> str:
         payload = f"{self.kind}:{self.title}:{self.content}".encode("utf-8")
         return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+@dataclass(frozen=True)
+class CandidateEvaluation:
+    evaluation_id: str
+    candidate_id: str
+    evaluator_name: str
+    decision: EvaluationDecision
+    score: float
+    reason: str
+    evidence_summary: str = ""
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 @dataclass(frozen=True)

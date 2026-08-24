@@ -154,14 +154,35 @@ CREATE TABLE IF NOT EXISTS learning_version (
   UNIQUE(candidate_id, version)
 );
 
-CREATE TABLE IF NOT EXISTS learning_event (
-  event_id TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS candidate_evaluation (
+  evaluation_id TEXT PRIMARY KEY,
   candidate_id TEXT NOT NULL REFERENCES learning_candidate(candidate_id) ON DELETE CASCADE,
-  version_id TEXT REFERENCES learning_version(version_id) ON DELETE SET NULL,
-  event_type TEXT NOT NULL,
-  payload_json TEXT NOT NULL,
+  evaluator_name TEXT NOT NULL,
+  decision TEXT NOT NULL,
+  score REAL NOT NULL,
+  reason TEXT NOT NULL,
+  evidence_summary TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS learning_event (
+    event_id TEXT PRIMARY KEY,
+    candidate_id TEXT NOT NULL REFERENCES learning_candidate(candidate_id) ON DELETE CASCADE,
+    version_id TEXT REFERENCES learning_version(version_id) ON DELETE SET NULL,
+    event_type TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS candidate_evaluation (
+    evaluation_id TEXT PRIMARY KEY,
+    candidate_id TEXT NOT NULL REFERENCES learning_candidate(candidate_id) ON DELETE CASCADE,
+    outcome_id TEXT REFERENCES task_outcome(outcome_id) ON DELETE SET NULL,
+    score REAL NOT NULL,
+    details_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 """
 
 def _migrate_schema(connection: sqlite3.Connection) -> None:

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from .models import (
+    CandidateEvaluation,
     CandidateStatus,
+    EvaluationDecision,
     EvidenceRef,
     InvalidCandidate,
     InvalidVersion,
@@ -17,7 +19,9 @@ from .models import (
 from .repository import LearningRepository
 
 __all__ = [
+    "CandidateEvaluation",
     "CandidateStatus",
+    "EvaluationDecision",
     "EvidenceRef",
     "InvalidCandidate",
     "InvalidVersion",

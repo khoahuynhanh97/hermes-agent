@@ -4,12 +4,14 @@ import sqlite3
 import pytest
 
 from hermes_personal.learning.models import (
+    CandidateEvaluation,
     CandidateStatus,
     EvidenceRef,
     InvalidCandidate,
     InvalidVersion,
     LearningCandidate,
     LearningKind,
+    LearningRepositoryError,
     LearningVersion,
     TaskOutcome,
     VersionStatus,
@@ -60,6 +62,16 @@ def db_conn(tmp_path):
             created_at TEXT NOT NULL,
             FOREIGN KEY (candidate_id) REFERENCES learning_candidate(candidate_id) ON DELETE CASCADE
         );
+        CREATE TABLE IF NOT EXISTS candidate_evaluation (
+            evaluation_id TEXT PRIMARY KEY,
+            candidate_id TEXT NOT NULL REFERENCES learning_candidate(candidate_id) ON DELETE CASCADE,
+            evaluator_name TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            score REAL NOT NULL,
+            reason TEXT NOT NULL,
+            evidence_summary TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS learning_version (
             version_id TEXT PRIMARY KEY,
             candidate_id TEXT NOT NULL,
@@ -105,7 +117,6 @@ def sample_evidence(source_id: str = "wf_1", polarity: str = "positive") -> Evid
 
 def test_candidate_requires_owner_source_and_evidence(repository):
     """Prove that creating a candidate requires valid owner and at least one evidence ref."""
-    # Missing evidence
     cand_no_evidence = LearningCandidate(
         candidate_id="cand_1",
         owner_user_id="user1",
@@ -117,7 +128,6 @@ def test_candidate_requires_owner_source_and_evidence(repository):
     with pytest.raises(InvalidCandidate, match="evidence"):
         repository.create_candidate(cand_no_evidence)
 
-    # Missing owner
     cand_no_owner = LearningCandidate(
         candidate_id="cand_2",
         owner_user_id="",
@@ -152,6 +162,78 @@ def test_failed_workflow_cannot_be_positive_evidence(repository):
     )
     with pytest.raises(InvalidCandidate, match="successful outcome"):
         repository.create_candidate(cand)
+
+
+def test_task_outcome_immutability(repository):
+    """Prove that task outcomes are immutable and cannot be silently overwritten with modified data."""
+    outcome = TaskOutcome(
+        outcome_id="out_immut_1",
+        source_type="workflow",
+        source_id="wf_immut",
+        status="success",
+        details="Original success outcome",
+    )
+    repository.record_task_outcome(outcome)
+
+    # Identical replay is idempotent
+    repository.record_task_outcome(outcome)
+    fetched = repository.get_task_outcome("out_immut_1")
+    assert fetched is not None
+    assert fetched.details == "Original success outcome"
+
+    # Conflicting replay raises error without mutating existing record
+    modified_outcome = TaskOutcome(
+        outcome_id="out_immut_1",
+        source_type="workflow",
+        source_id="wf_immut",
+        status="failure",
+        details="Conflicting failure outcome",
+    )
+    with pytest.raises(LearningRepositoryError, match="immutable"):
+        repository.record_task_outcome(modified_outcome)
+
+    assert repository.get_task_outcome("out_immut_1").status == "success"
+
+
+def test_candidate_evaluation_persistence(repository):
+    """Prove that CandidateEvaluation records persist, link to candidates, and log audit events."""
+    cand = LearningCandidate(
+        candidate_id="cand_eval_1",
+        owner_user_id="user1",
+        kind="knowledge",
+        title="Hook optimization",
+        content="Start with visual hook",
+        evidence=(sample_evidence(),),
+    )
+    repository.create_candidate(cand)
+
+    eval_record = CandidateEvaluation(
+        evaluation_id="eval_101",
+        candidate_id="cand_eval_1",
+        evaluator_name="heuristic_outcome_evaluator",
+        decision="approved",
+        score=0.92,
+        reason="Supported by high-engagement workflow trace and positive user feedback",
+        evidence_summary="1 workflow trace + 1 explicit feedback",
+    )
+    saved = repository.record_evaluation(eval_record)
+    assert saved.evaluation_id == "eval_101"
+
+    # Fetch by evaluation_id
+    fetched = repository.get_evaluation("eval_101")
+    assert fetched is not None
+    assert fetched.candidate_id == "cand_eval_1"
+    assert fetched.score == 0.92
+    assert fetched.decision == "approved"
+
+    # Fetch all for candidate
+    evals = repository.get_evaluations_for_candidate("cand_eval_1")
+    assert len(evals) == 1
+    assert evals[0].evaluation_id == "eval_101"
+
+    # Check audit events recorded
+    events = repository.get_events("cand_eval_1")
+    assert any(e.event_type == "evaluation_recorded" for e in events)
 
 
 def test_versions_are_append_only(repository):
@@ -218,10 +300,9 @@ def test_knowledge_and_procedure_never_auto_approved(repository):
         title="Video hook pattern",
         content="Use dynamic zooming in frame 1",
         evidence=(sample_evidence(),),
-        status="approved",  # attempted auto-approval
+        status="approved",
     )
     created = repository.create_candidate(cand_know)
-    # Repository forces draft/pending status for knowledge/procedure
     assert created.status != "approved"
     assert created.status == "draft"
 
