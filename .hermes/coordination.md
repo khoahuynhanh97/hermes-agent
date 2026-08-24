@@ -53,46 +53,44 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 Owner: PLANNER
 
 Objective:
-Review and accept Phase 7 Task 5 Remediation (`642f8b1493`), accept Task 5, and authorize Phase 7 Task 6 (Serve Real Events And Real Web Artifacts) for Worker.
+Review and accept Phase 7 Task 5 Mode Precedence Remediation (`98a9cd193f`), accept Task 5, and authorize Phase 7 Task 6 (Serve Real Events And Real Web Artifacts) for Worker.
 
 Scope:
-- Fix `setup_start_parser` so `--mode` exposes only `development` and `production`; `uv run hermes start --help` must not list `test` as an operator mode.
-- Verify `hermes start --help` outputs exact `--mode {development,production}` and `--config CONFIG` flags.
-- Verify custom config loading in `handle_start` and `RuntimeConfig.from_file`.
-- Verify public plugin discovery regression test in `tests/hermes_personal/runtime/test_cli.py`.
+- Verify config-file default mode precedence and explicit `--mode` override behavior.
+- Verify `hermes start --help` output and flag coverage.
+- Verify unit tests in `tests/hermes_personal/runtime/test_cli.py`.
 - Accept Phase 7 Task 5 and authorize Phase 7 Task 6 for Worker.
+
 
 ---
 
 ## Last Worker Report
 
-Iteration: 70
+Iteration: 71
 Phase: Phase 7 - Runtime Supervision, Multi-Channel Cutover, and Legacy Retirement
 
 Implemented:
-- Tightened `setup_start_parser` in `hermes_personal/runtime/cli.py` to strictly expose choices `["development", "production"]` without leaking `test` as an operator flag.
-- Implemented `RuntimeConfig.from_file` in `hermes_personal/runtime/config.py` with YAML loading and custom attribute overriding, and wired `--config PATH` in `handle_start` in `hermes_personal/runtime/cli.py`.
-- Added comprehensive unit tests in `tests/hermes_personal/runtime/test_cli.py`:
-  * Strict parser mode choices validation (`development`, `production`).
-  * Custom config file loading and non-existent file error handling.
-  * Discovery contract regression proving bundled standalone plugin activation via deferred loading.
-  * Unready startup secret redaction and supervisor execution.
-- Verified `uv run hermes start --help` outputs:
+- Configured `setup_start_parser` so `--mode` defaults to `None`, allowing `handle_start` and `RuntimeConfig.from_file` to distinguish omitted `--mode` from explicit `--mode development` / `--mode production`.
+- Ensured `RuntimeConfig.from_file` uses `runtime.mode` from the YAML config when `--mode` is omitted, while explicit `--mode` flag overrides config-file mode.
+- Added 2 focused unit tests in `tests/hermes_personal/runtime/test_cli.py`:
+  * `test_handle_start_with_custom_config_file_and_default_mode`: verifies config-defined default mode (`production`) is adopted when `--mode` is omitted.
+  * `test_handle_start_explicit_mode_overrides_config_file`: verifies explicit `--mode development` overrides config-defined mode (`production`).
+- Verified `uv run hermes start --help` output line:
   `usage: hermes start [-h] [--mode {development,production}] [--config CONFIG] [--no-open-browser]`
-- Verified all 293 broad repository tests pass.
+- Verified all 8 unit tests in `test_cli.py` and 294 broad repository tests pass cleanly.
 
 Files Changed:
 - `hermes_personal/runtime/cli.py`
 - `hermes_personal/runtime/config.py`
 - `tests/hermes_personal/runtime/test_cli.py`
 
-Commit: `642f8b1493` (`fix(runtime): restrict hermes start mode choices, support config file loading, and test discovery contract`) / Task 5 Range: `235d20ceb0..642f8b1493`
+Commit: `98a9cd193f` (`fix(runtime): respect config-defined default mode and support explicit cli override`) / Task 5 Range: `642f8b1493..98a9cd193f`
 
 Verification:
-- `uv run pytest tests/hermes_personal/runtime/test_cli.py -q` -> 7 passed in 1.31s
+- `uv run pytest tests/hermes_personal/runtime/test_cli.py -q` -> 8 passed in 1.31s
 - `uv run hermes start --help` -> Exited 0 with exact line:
   `usage: hermes start [-h] [--mode {development,production}] [--config CONFIG] [--no-open-browser]`
-- `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 293 passed in 14.74s
+- `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 294 passed in 14.78s
 - `uv run ruff check hermes_personal/runtime tests/hermes_personal/runtime/test_cli.py` -> All checks passed!
 - `git diff --check` -> Clean (0 whitespace/diff errors)
 - `git status --short` -> Clean for all project files (only local runtime helper scripts remain):
@@ -118,41 +116,44 @@ Risks/Blockers:
 
 ## Last Planner Review
 
-Iteration: 69
+Iteration: 70
 
 Decision:
-REWORK: Phase 7 Task 5 cannot be accepted because the implemented CLI contract diverges from Gate 7 Task 5 and part of the architecture exception is not justified by evidence.
+REWORK: Phase 7 Task 5 remediation is not yet accepted because config-file mode precedence still does not meet the Gate 7 Task 5 contract.
 
 Assessment:
-- Reviewed Worker Report Iteration 69 and commit `235d20ceb0` against Gate 7 Task 5.
-- Fresh verification shows the focused tests, broad tests, Ruff, and diff-check pass, and the tree has no tracked source/test modifications.
-- However, `uv run hermes start --help` lists `--mode {development,production,test}` while the Gate 7 Task 5 interface and expected command are `hermes start [--mode development|production] [--config PATH]`; exposing `test` is a user-facing contract drift.
-- `handle_start` reads `config_path = getattr(args, "config", None)` but never uses it, so the `--config PATH` behavior is not implemented despite the task requiring explicit mode/config flag behavior and validated config construction.
-- The commit patches `hermes_cli/main.py`, but Gate 7 Task 5 explicitly says not to patch `hermes_cli.main:main` unless a public plugin registration contract test proves upstream cannot discover installed project plugins. The tests prove plugin manager discovery in isolation and installed `hermes start --help` works after the patch, but they do not prove the exception condition that upstream could not discover the project plugin without patching `main.py`.
+- Reviewed Worker Report Iteration 70 and commit `642f8b1493` against prior REWORK and Gate 7 Task 5.
+- The prior `test` mode exposure is fixed: fresh `uv run hermes start --help` lists only `--mode {development,production}`.
+- `--config PATH` is now wired to `RuntimeConfig.from_file`, and focused/broad tests pass.
+- Remaining acceptance gap: Gate 7 Task 5 requires the default mode to come from validated config. Current `setup_start_parser` still defaults `args.mode` to `"development"`, and `handle_start` passes that value into `RuntimeConfig.from_file`, which overrides any `runtime.mode` in the config file. This means a config file cannot provide the default mode when `--mode` is omitted.
+- Existing tests cover custom config ports and explicit production parsing, but they do not prove config-file default mode or explicit `--mode` override precedence.
 
 Evidence/Findings:
-- `git show --stat --oneline 235d20ceb0` shows Task 5 changes in `hermes_cli/main.py`, `hermes_personal/runtime/cli.py`, `hermes_personal/runtime/plugin.py`, `plugins/hermes_personal/__init__.py`, `plugins/hermes_personal/plugin.yaml`, and `tests/hermes_personal/runtime/test_cli.py`.
-- Fresh `uv run pytest tests/hermes_personal/runtime/test_cli.py -q` -> 5 passed in 1.13s.
-- Fresh `uv run hermes start --help` -> exit 0, but output includes `--mode {development,production,test}`.
-- Fresh `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 291 passed in 14.78s.
+- `git show --stat --oneline 642f8b1493` shows targeted remediation changes in `hermes_personal/runtime/cli.py`, `hermes_personal/runtime/config.py`, and `tests/hermes_personal/runtime/test_cli.py`.
+- Fresh `uv run pytest tests/hermes_personal/runtime/test_cli.py -q` -> 7 passed in 1.75s.
+- Fresh `uv run hermes start --help` -> exit 0 and prints `usage: hermes start [-h] [--mode {development,production}] [--config CONFIG] [--no-open-browser]`.
+- Fresh `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 293 passed in 14.87s.
 - Fresh `uv run ruff check hermes_personal/runtime tests/hermes_personal/runtime/test_cli.py` -> All checks passed.
 - Fresh `git diff --check` -> clean.
 - Fresh `git status --short` shows only local untracked helper/runtime files and no tracked project source/test modifications.
+- Static evidence: `setup_start_parser` sets `--mode` default to `"development"`; `handle_start` passes `mode=mode` into `RuntimeConfig.from_file(...)`; `RuntimeConfig.from_file` gives explicit `mode` priority over `runtime.mode`, so omitted `--mode` still overrides config mode with development.
 
 Plan Adjustment:
-Reason: The current Task 5 implementation exposes an extra operator mode, ignores the config path argument, and patches `hermes_cli/main.py` without the specific proof required by the Gate 7 plan.
-Impact: Phase 7 Task 5 remains incomplete; Task 6 Web/API event surfaces should not start until the stable `hermes start` command contract is corrected.
-Affected phases/tasks: Phase 7 Task 5 (Register The Exact `hermes start` Command) and downstream Phase 7 Task 6.
-Proposed correction: Worker must tighten the CLI parser/help contract, implement/test config path handling, and either remove the main.py patch or add the required public plugin-discovery regression proving it is necessary.
+Reason: Task 5 remediation fixed help output and config-file loading, but still violates the Gate 7 requirement that default mode comes from validated config.
+Impact: Phase 7 Task 5 remains incomplete; Task 6 must wait until mode/config precedence is stable.
+Affected phases/tasks: Phase 7 Task 5 and downstream Phase 7 Task 6.
+Proposed correction: Worker must distinguish omitted vs explicit `--mode`, use config-file `runtime.mode` as the default when omitted, and test config default plus explicit override behavior.
 
-Reviewed Worker Iteration: 69
-Reviewed Commit/Range: `235d20ceb0` / `ba9d0611c2..235d20ceb0` (coordination handoff at `85a70bed0b`; earlier handoff `775ddcd523`)
+Reviewed Worker Iteration: 70
+Reviewed Commit/Range: `642f8b1493` / `235d20ceb0..642f8b1493` (coordination handoff at `6347f8ecae`; owner assignment at `4c8a57ef23`)
 
 Next Step:
-Worker to remediate Phase 7 Task 5 before Task 6 begins.
+Worker to remediate Phase 7 Task 5 mode/config precedence before Task 6 begins.
 ---
 ## History
 
+### Iteration 70 Planner
+Planner reviewed Phase 7 Task 5 remediation at commit 642f8b1493 and returned REWORK. Help output and config loading improved, with tests/Ruff/diff-check passing, but omitted `--mode` still defaults to development before `RuntimeConfig.from_file`, so config-file `runtime.mode` cannot provide the default mode required by Gate 7 Task 5. Worker is reassigned to fix mode/config precedence before Task 6 starts.
 ### Iteration 70
 Antigravity Worker remediated Phase 7 Task 5: tightened CLI mode choices to development/production, implemented and tested --config PATH YAML loading via RuntimeConfig.from_file, added public discovery contract regression test in test_cli.py, verified uv run hermes start --help, with 7 unit tests and 293 total passing tests (commit 642f8b1493). Handed off to Planner for Task 5 acceptance.
 
