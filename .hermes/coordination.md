@@ -9,7 +9,7 @@ IN_PROGRESS
 ## Current Phase
 Phase 6 - Governed Learning Memory And Knowledge
 
-### Current Owner
+## Current Owner
 PLANNER
 
 ## Overall Plan
@@ -53,94 +53,48 @@ Goal: Deliver `hermes start`, health/readiness, restart behavior, four-channel c
 Owner: PLANNER
 
 Objective:
-Review and accept Phase 6 / Gate 6 end-to-end implementation across Tasks 1-7 and authorize Phase 7 (Runtime Supervision, Multi-Channel Cutover, and Legacy Retirement).
+Review and accept Phase 6 / Gate 6 approved-only retrieval remediation and authorize Phase 7 (Runtime Supervision, Multi-Channel Cutover, and Legacy Retirement).
 
 Scope of Review:
-- Task 1: Consolidate `candidate_evaluation` schema hygiene and verify production SQLite schema path.
-- Task 2: Candidate evaluator policy for evidence, outcome polarity, secrets rejection, and decision rules.
-- Task 3: Approval-gated promotion, active versioning, supersession, and predecessor rollback.
-- Task 4: Approved knowledge retrieval with strict owner isolation and `AgentContextAssembler` turn injection.
-- Task 5: Automatic preference memory governance, risk categorization, and `USER.md` markdown projection.
-- Task 6: Safe procedural skill publication with YAML frontmatter, capability bounds, and rollback.
-- Task 7: Learning metrics engine and end-to-end acceptance suite proving Gate 6 exit criteria without model-weight modification.
+- `hermes_personal/learning/retrieval.py`: `ApprovedLearningRetriever` strictly restricts retrieval to candidates where `cand.status == "approved"`, `v.status == "active"`, and `cand.owner_user_id == owner_user_id`. `draft`, `evaluated`, `pending_approval`, and `rejected` statuses are strictly excluded.
+- `tests/hermes_personal/learning/test_retrieval.py`: Includes explicit test cases for `draft`, `evaluated`, and `pending_approval` active version exclusion and approved active version retrieval.
+- `tests/hermes_personal/learning/test_context_integration.py`: Proves unapproved candidate content cannot enter `AgentContextAssembler` or later Agent Turn context.
+- Verification across the 249-test suite, Ruff static analysis, and diff checks.
 
 Exact Verification:
-- `uv run pytest tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 244 passed in 13.13s
+- `uv run pytest tests/hermes_personal/learning/test_retrieval.py tests/hermes_personal/learning/test_context_integration.py tests/hermes_personal/learning/test_learning_e2e.py -q` -> 11 passed in 1.66s
+- `uv run pytest tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 249 passed in 13.79s
 - `uv run ruff check hermes_personal/learning tests/hermes_personal/learning hermes_personal/storage/sqlite.py` -> All checks passed!
-- `git diff --check` -> Clean
+- `git diff --check` -> Clean (0 whitespace/diff errors)
 - `git status --short` -> Clean (only local untracked helper scripts remain)
 
 ---
 
 ## Last Worker Report
 
-Iteration: 58
+Iteration: 59
 Phase: Phase 6 - Governed Learning Memory And Knowledge
 
 Implemented:
-1. **Task 1 Schema Hygiene Rework (`926cb8da08`)**:
-   - Removed conflicting/duplicate `candidate_evaluation` DDL in `hermes_personal/storage/sqlite.py`.
-   - Updated `tests/hermes_personal/learning/test_repository.py` to test against the production `sqlite.connect` schema path directly, asserting canonical columns (`evaluation_id`, `candidate_id`, `evaluator_name`, `decision`, `score`, `reason`, `evidence_summary`, `created_at`).
-2. **Task 2 Candidate Evaluator Policy (`0e57fac960`)**:
-   - Created `hermes_personal/learning/evaluator.py` (`CandidateEvaluator`) enforcing evidence digest validity, polarity matching, failed-outcome rejection, sensitive data/secrets rejection, and deterministic decision rules (`eligible_auto`, `needs_approval`, `reject`).
-   - Knowledge and procedure candidates always require approval (`needs_approval`); low-risk preferences with explicit feedback qualify for `eligible_auto`.
-   - Added unit tests in `tests/hermes_personal/learning/test_evaluator.py`.
-3. **Task 3 Approval-Gated Promotion & Rollback (`5b79ca1bb7`)**:
-   - Created `hermes_personal/learning/promotion.py` (`PromotionService`) integrating with Gate 4 `ApprovalService`.
-   - Implemented `request_promotion`, `approve_promotion` (version increment and active promotion), `rollback` (revokes current version and reactivates predecessor), and `active_versions`.
-   - Added unit tests in `tests/hermes_personal/learning/test_promotion.py`.
-4. **Task 4 Approved Retrieval & Context Assembly (`9b7564ed16`)**:
-   - Created `hermes_personal/learning/retrieval.py` (`ApprovedLearningRetriever`) enforcing strict owner isolation, active-only filtering, deterministic token scoring, and tie-breaking.
-   - Created `hermes_personal/learning/context.py` (`AgentContext`, `AgentContextAssembler`).
-   - Updated `hermes_personal/orchestration/turn_service.py` to optionally accept `context_assembler` and inject governed context into agent execution history.
-   - Added unit and integration tests in `test_retrieval.py` and `test_context_integration.py`.
-5. **Task 5 Preference Memory Governance (`ee24e481c7`)**:
-   - Created `hermes_personal/learning/memory_policy.py` (`PreferenceMemoryPolicy`) with deterministic risk matrix (formatting, tone, locale, UI defaults vs high-risk financial, identity, destructive, credential topics) and `USER.md` projection generator.
-   - Added unit tests in `tests/hermes_personal/learning/test_memory_policy.py`.
-6. **Task 6 Safe Procedural Skill Publication (`7af416b60f`)**:
-   - Created `hermes_personal/learning/skill_publisher.py` (`ProceduralSkillPublisher`) generating valid `SKILL.md` projections with YAML frontmatter (`name`, `description`, `version`, `owner`, `digest`, `allowed-capabilities`), capability containment checks, unsafe directive detection, atomic writes, and rollback support.
-   - Added unit tests in `tests/hermes_personal/learning/test_skill_publisher.py`.
-7. **Task 7 Learning Metrics & End-to-End Acceptance (`a40eeff721`)**:
-   - Created `hermes_personal/learning/metrics.py` (`LearningMetricsEngine`) tracking success rate, correction rate, approval rate, latency percentiles (p50/p95), and minor-unit cost aggregates with `insufficient_data` guards.
-   - Created `tests/hermes_personal/learning/test_learning_e2e.py` verifying full end-to-end product research -> candidate extraction -> evaluation -> HITL approval -> turn retrieval -> rollback -> exclusion -> skill projection -> metrics.
-   - Created `docs/hermes-personal/learning.md` architecture guide.
-
-Gate 6 Exit Criteria Mapping:
-- **Only low-risk explicit preferences auto-promote**: Proven by `test_preference_candidate_with_explicit_feedback_is_eligible_auto`, `test_high_risk_preferences_require_approval`, and `test_low_risk_explicit_preferences_allow_auto`.
-- **Knowledge/procedures require evidence, evaluation, versioning, owner approval**: Proven by `test_knowledge_candidate_requires_approval_never_auto`, `test_procedure_candidate_requires_approval_never_auto`, and `test_knowledge_requires_owner_approval`.
-- **Failed workflows, rejected candidates, stale approvals, and revoked versions cannot influence positive retrieval**: Proven by `test_failed_source_outcome_is_rejected`, `test_negative_evidence_polarity_is_rejected`, `test_revoked_and_superseded_versions_excluded`, and `test_rejected_candidate_excluded`.
-- **Relevant approved knowledge reaches later Agent Turns with strict owner isolation**: Proven by `test_agent_context_assembly_and_turn_service_integration`, `test_retrieval_strict_owner_isolation`, and `test_full_governed_learning_lifecycle_e2e`.
-- **Procedural skill projections validate through upstream loaders and can roll back**: Proven by `test_publish_procedural_skill`, `test_rollback_publication`, and `test_domain_skills.py`.
-- **Effectiveness is measured from outcomes/corrections/approvals/latency/cost without claiming model-weight training**: Proven by `LearningMetricsEngine` and `test_full_governed_learning_lifecycle_e2e`.
+- Remedied `ApprovedLearningRetriever` in `hermes_personal/learning/retrieval.py`: retrieval now strictly requires `cand.status == "approved"`, `v.status == "active"`, and `cand.owner_user_id == owner_user_id`. Candidates with `draft`, `evaluated`, `pending_approval`, or `rejected` status are completely excluded from returning results even if an active `learning_version` row exists.
+- Added regression tests in `tests/hermes_personal/learning/test_retrieval.py`:
+  - `test_active_version_attached_to_draft_candidate_not_retrieved`
+  - `test_active_version_attached_to_evaluated_candidate_not_retrieved`
+  - `test_active_version_attached_to_pending_approval_candidate_not_retrieved`
+  - `test_approved_active_version_retrieves_normally`
+- Added integration test `test_unapproved_candidate_cannot_enter_turn_context` in `tests/hermes_personal/learning/test_context_integration.py` proving unapproved knowledge never leaks into `AgentContextAssembler` or `HermesTurnService` prompt history.
+- Normalized coordination file heading to `## Current Owner` and updated status.
 
 Files Changed:
-- `docs/hermes-personal/learning.md`
-- `hermes_personal/learning/__init__.py`
-- `hermes_personal/learning/context.py`
-- `hermes_personal/learning/evaluator.py`
-- `hermes_personal/learning/memory_policy.py`
-- `hermes_personal/learning/metrics.py`
-- `hermes_personal/learning/models.py`
-- `hermes_personal/learning/promotion.py`
-- `hermes_personal/learning/repository.py`
 - `hermes_personal/learning/retrieval.py`
-- `hermes_personal/learning/skill_publisher.py`
-- `hermes_personal/orchestration/turn_service.py`
-- `hermes_personal/storage/sqlite.py`
 - `tests/hermes_personal/learning/test_context_integration.py`
-- `tests/hermes_personal/learning/test_evaluator.py`
-- `tests/hermes_personal/learning/test_learning_e2e.py`
-- `tests/hermes_personal/learning/test_memory_policy.py`
-- `tests/hermes_personal/learning/test_promotion.py`
-- `tests/hermes_personal/learning/test_repository.py`
 - `tests/hermes_personal/learning/test_retrieval.py`
-- `tests/hermes_personal/learning/test_skill_publisher.py`
 
-Commit Range: `622f7720e3..a40eeff721` (Commits: `926cb8da08`, `0e57fac960`, `5b79ca1bb7`, `9b7564ed16`, `ee24e481c7`, `7af416b60f`, `a40eeff721`)
+Commit: `d57157b8f9` (`fix(learning): enforce approved-only retrieval for active learning`)
 
 Verification:
-- `uv run pytest tests/hermes_personal/learning -q` -> 36 passed in 2.24s
-- `uv run pytest tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 244 passed in 13.13s
+- `uv run pytest tests/hermes_personal/learning/test_retrieval.py tests/hermes_personal/learning/test_context_integration.py tests/hermes_personal/learning/test_learning_e2e.py -q` -> 11 passed in 1.66s
+- `uv run pytest tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 249 passed in 13.79s
 - `uv run ruff check hermes_personal/learning tests/hermes_personal/learning hermes_personal/storage/sqlite.py` -> All checks passed!
 - `git diff --check` -> Clean (0 whitespace/diff errors)
 - `git status --short` -> Clean for all project files (only local runtime helper scripts remain):
@@ -166,39 +120,43 @@ Risks/Blockers:
 
 ## Last Planner Review
 
-Iteration: 57
+Iteration: 59
 
 Decision:
-REWORK: Phase 6 Task 1 rework now passes tests, but production SQLite schema still contains duplicate/conflicting `candidate_evaluation` DDL and tests do not exercise that production schema path.
+REWORK Phase 6 / Gate 6 before accepting the phase or authorizing Phase 7.
 
 Assessment:
-- Reviewed Worker Report Iteration 56 and commit `622f7720e3` against Gate 6 Task 1 and Planner Review 56 rework scope.
-- Independent verification passed on the current tree: `uv run pytest tests/hermes_personal/learning/test_repository.py -q` -> 8 passed; `uv run pytest tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 216 passed; `uv run ruff check hermes_personal/learning tests/hermes_personal/learning hermes_personal/storage/sqlite.py` -> All checks passed; `git diff --check` -> clean.
-- The substantive rework is present: `CandidateEvaluation` model/repository methods exist, evaluation audit events are recorded, and `record_task_outcome` now rejects conflicting replays instead of overwriting.
-- Remaining blocker is production schema hygiene: `hermes_personal/storage/sqlite.py` defines `candidate_evaluation` twice with incompatible columns. SQLite will ignore the second `CREATE TABLE IF NOT EXISTS` on a fresh database, so tests can pass while stale/conflicting DDL remains in the canonical schema string.
-- The repository tests build their own fixture schema, so they did not catch the duplicate/conflicting production DDL. Task 1 is the persistence foundation; this should be cleaned before accepting Task 1 or authorizing Task 2.
+- Reviewed Worker Report Iteration 58 and Gate 6 commit range `622f7720e3..0d03694715` against `docs/superpowers/plans/2026-08-22-hermes-gateway-rearchitecture-gate-6.md`.
+- Independent verification passed: `uv run pytest tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 244 passed; `uv run ruff check hermes_personal/learning tests/hermes_personal/learning hermes_personal/storage/sqlite.py` -> passed; `git diff --check` -> clean.
+- Production schema duplicate check is resolved: only one `CREATE TABLE IF NOT EXISTS candidate_evaluation` remains in `hermes_personal/storage/sqlite.py`.
+- However, Gate 6 exit criterion "approved-only retrieval" is not satisfied. `ApprovedLearningRetriever` currently permits candidate statuses `draft` and `evaluated` to influence retrieval when an active version exists.
 
-Evidence/Findings:
-- `rg -n "CREATE TABLE IF NOT EXISTS candidate_evaluation" hermes_personal/storage/sqlite.py tests/hermes_personal/learning` reports two production schema definitions at `hermes_personal/storage/sqlite.py:157` and `hermes_personal/storage/sqlite.py:177`.
-- The first production table matches repository methods (`evaluator_name`, `decision`, `reason`, `evidence_summary`); the second conflicting table uses `outcome_id`/`details_json`, which the repository does not read or write.
-- `git status --short` shows only unrelated local helper/runtime untracked files and no uncommitted source/test files.
+Findings / Evidence:
+- `hermes_personal/learning/retrieval.py` checks `cand.status not in ("approved", "evaluated", "draft")`, which explicitly allows `draft` and `evaluated` candidates.
+- A local probe using the production SQLite path created a `draft` knowledge candidate, created an active version, and `ApprovedLearningRetriever.retrieve(owner_user_id="u1", query="draft knowledge")` returned it: `retrieved_count=1`, candidate `draft_c`.
+- The coordination file also had `### Current Owner`; this review normalizes it back to the canonical `## Current Owner` heading to keep scheduler/guard parsing stable.
+- This violates Gate 6 constraints: failed/unapproved artifacts cannot become positive learning, and only approved relevant knowledge may reach later Agent Turns.
 
 Plan Adjustment:
-Reason: Worker closed the missing evaluation persistence behavior but left duplicate/conflicting production schema DDL that current tests do not cover.
-Impact: Phase 6 remains IN_PROGRESS on Task 1; Phase 6 Task 2 is still not authorized.
-Affected phases/tasks: Phase 6 Task 1 SQLite schema/repository tests; Phase 6 Task 2 evaluator policy remains blocked until schema foundation is clean.
-Proposed correction: Remove the duplicate/conflicting `candidate_evaluation` DDL, add production-schema coverage, rerun verification, and hand off with a new commit/range.
+- Reason: Worker completed broad Gate 6 implementation and tests, but retrieval tests missed active-version rows attached to unapproved candidate statuses.
+- Impact: Accepting Gate 6 now could allow unapproved draft/evaluated knowledge to affect future Agent Turns.
+- Affected phases/tasks: Phase 6 Task 4 approved retrieval and Task 7 end-to-end acceptance; Phase 7 remains unauthorized.
+- Proposed correction: Restrict retrieval to `cand.status == "approved"` and add regression/E2E coverage for draft/evaluated/pending approval exclusion.
 
-Reviewed Worker Iteration: 56
-Reviewed Commit/Range: `622f7720e3` / `35acbd5f7c..622f7720e3` (coordination handoff at `37a23f5c48`)
+Reviewed Worker Iteration: 58
+Reviewed Commit/Range: `0d03694715` / `622f7720e3..0d03694715`
 
 Next Step:
-Worker to clean the production schema and add schema-path coverage before requesting Task 1 acceptance again.
+Worker to remediate approved-only retrieval and report Iteration 59 back to PLANNER.
 
 ---
 
 ## History
 
+### Iteration 59
+Worker remediated approved-only retrieval in `hermes_personal/learning/retrieval.py` (commit `d57157b8f9`), requiring `cand.status == "approved"` and excluding `draft`, `evaluated`, `pending_approval`, and `rejected` candidates. Added unit regression tests in `test_retrieval.py` and turn context integration test in `test_context_integration.py`. Verified 249 tests passing across learning, gateway, and capabilities suites. Handed off to Planner for Gate 6 acceptance.
+### Iteration 59
+Planner reviewed Worker Iteration 58 (`0d03694715`) and chose REWORK. Gate 6 broad verification passed, but approved-only retrieval is violated because active versions for `draft`/`evaluated` candidates can be returned. Ownership returned to WORKER for approved-only retrieval remediation.
 ### Iteration 58
 Worker resolved Phase 6 Task 1 schema hygiene rework and implemented Phase 6 Tasks 2-7 end-to-end: CandidateEvaluator policy, Approval-gated promotion/rollback, Approved retrieval & AgentContext turn injection, PreferenceMemoryPolicy & USER.md projection, ProceduralSkillPublisher & rollback, LearningMetricsEngine, and complete E2E acceptance test suite with 244 passing tests (commit range `622f7720e3..a40eeff721`). Handed off to Planner for Gate 6 acceptance.
 ### Iteration 57
