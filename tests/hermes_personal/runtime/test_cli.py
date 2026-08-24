@@ -18,9 +18,9 @@ def test_setup_start_parser_defines_exact_flags_and_choices():
     start_parser = subparsers.add_parser("start")
     setup_start_parser(start_parser)
 
-    # Verify default parsing
+    # Verify default parsing (omitted mode is None so config file can supply default)
     args = parser.parse_args(["start"])
-    assert args.mode == "development"
+    assert args.mode is None
     assert args.config is None
     assert args.no_open_browser is False
 
@@ -53,7 +53,6 @@ def test_public_plugin_discovery_and_deferred_loading_contract(tmp_path, monkeyp
     """Proves why bundled project plugin without plugins.enabled requires deferred/targeted loading."""
     home = tmp_path / "home"
     home.mkdir()
-    # Empty config without plugins.enabled
     (home / "config.yaml").write_text("model: test-model\n", encoding="utf-8")
     monkeypatch.setenv("HERMES_HOME", str(home))
 
@@ -72,15 +71,18 @@ def test_public_plugin_discovery_and_deferred_loading_contract(tmp_path, monkeyp
     assert cmd["handler_fn"] is handle_start
 
 
-def test_handle_start_with_custom_config_file(tmp_path):
+def test_handle_start_with_custom_config_file_and_default_mode(tmp_path):
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
     custom_cfg = tmp_path / "custom_hermes.yaml"
     custom_cfg.write_text(
-        """
+        f"""
 runtime:
-  mode: development
+  mode: production
+  web_static_dir: "{static_dir.as_posix()}"
+  web_static_digest: "digest123"
   gateway_port: 9000
   app_api_port: 9001
-  web_port: 9002
 """,
         encoding="utf-8",
     )
@@ -100,15 +102,54 @@ runtime:
         mock_sup.run.return_value = 0
         mock_sup_cls.return_value = mock_sup
 
+        # Omitted mode -> should default to mode in custom_cfg ("production")
+        args = argparse.Namespace(mode=None, config=str(custom_cfg), no_open_browser=True)
+        exit_code = handle_start(args)
+        assert exit_code == 0
+
+        passed_config: RuntimeConfig = mock_coord_cls.call_args.kwargs["config"]
+        assert passed_config.mode == "production"
+        assert passed_config.gateway_port == 9000
+        assert passed_config.app_api_port == 9001
+
+
+def test_handle_start_explicit_mode_overrides_config_file(tmp_path):
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    custom_cfg = tmp_path / "custom_hermes.yaml"
+    custom_cfg.write_text(
+        f"""
+runtime:
+  mode: production
+  web_static_dir: "{static_dir.as_posix()}"
+  web_static_digest: "digest123"
+  gateway_port: 9000
+""",
+        encoding="utf-8",
+    )
+
+    with patch("hermes_personal.runtime.cli.StartupCoordinator") as mock_coord_cls, \
+         patch("hermes_personal.runtime.cli.Supervisor") as mock_sup_cls:
+        mock_coord = MagicMock()
+        mock_coord.prepare.return_value = StartupReport(
+            overall_status=StartupStepStatus.COMPLETED,
+            steps=(),
+            started_at=0.0,
+            completed_at=0.01,
+            total_latency_ms=10.0,
+        )
+        mock_coord_cls.return_value = mock_coord
+        mock_sup = MagicMock()
+        mock_sup.run.return_value = 0
+        mock_sup_cls.return_value = mock_sup
+
+        # Explicit mode -> overrides config file mode
         args = argparse.Namespace(mode="development", config=str(custom_cfg), no_open_browser=True)
         exit_code = handle_start(args)
         assert exit_code == 0
 
-        # Verify StartupCoordinator was given config loaded from custom_cfg
         passed_config: RuntimeConfig = mock_coord_cls.call_args.kwargs["config"]
-        assert passed_config.gateway_port == 9000
-        assert passed_config.app_api_port == 9001
-        assert passed_config.web_port == 9002
+        assert passed_config.mode == "development"
 
 
 def test_handle_start_fails_on_missing_config_file(tmp_path, capsys):

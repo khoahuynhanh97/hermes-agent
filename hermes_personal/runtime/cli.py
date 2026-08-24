@@ -25,7 +25,7 @@ def setup_start_parser(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument(
         "--mode",
         choices=["development", "production"],
-        default="development",
+        default=None,
         help="Runtime mode (development|production)",
     )
     subparser.add_argument(
@@ -43,7 +43,7 @@ def setup_start_parser(subparser: argparse.ArgumentParser) -> None:
 
 def handle_start(args: argparse.Namespace) -> int:
     """Execute hermes start command: validate config, run startup sequence, and supervise processes."""
-    mode = getattr(args, "mode", "development")
+    mode = getattr(args, "mode", None)
     config_path = getattr(args, "config", None)
     repo_root = Path.cwd()
 
@@ -56,7 +56,7 @@ def handle_start(args: argparse.Namespace) -> int:
             )
         else:
             config = RuntimeConfig(
-                mode=mode,
+                mode=mode or "development",
                 repo_root=repo_root,
             )
     except RuntimeConfigError as ex:

@@ -72,7 +72,11 @@ class RuntimeConfig:
         mode: RuntimeMode | None = None,
         repo_root: Path | None = None,
     ) -> RuntimeConfig:
-        """Load runtime configuration from YAML config file."""
+        """Load runtime configuration from YAML config file.
+
+        If mode is not explicitly passed, defaults to runtime.mode from the config file,
+        or 'development' if unspecified.
+        """
         p = Path(config_path)
         if not p.is_file():
             raise RuntimeConfigError(f"Config file not found: {p}")
@@ -95,6 +99,8 @@ class RuntimeConfig:
             kwargs["mode"] = mode
         elif "mode" in runtime_data:
             kwargs["mode"] = runtime_data["mode"]
+        else:
+            kwargs["mode"] = "development"
 
         if repo_root is not None:
             kwargs["repo_root"] = repo_root
