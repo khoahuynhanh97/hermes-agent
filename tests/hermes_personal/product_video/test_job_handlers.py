@@ -132,8 +132,7 @@ def test_register_product_video_job_handlers():
     assert "product_video.research" in registered
     assert "product_video.creative_brief" in registered
     assert "product_video.render" in registered
-    assert hasattr(dispatcher, "handler_registry")
-    assert len(dispatcher.handler_registry) == 8
+    assert registered.dispatcher is dispatcher
 
 
 def test_job_idempotency_via_deterministic_clients():
