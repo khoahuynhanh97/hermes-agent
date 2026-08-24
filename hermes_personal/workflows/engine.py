@@ -104,12 +104,13 @@ class WorkflowEngine:
         """Helper to register/update workflow state directly for tests or execution."""
         self._cache[workflow_id] = {"state": state, "version": version}
         try:
-            self.repo.commit_workflow(
-                workflow_id=workflow_id,
-                aggregate_json=json.dumps({"state": state}),
-                events=[],
-                expected_version=None,
-            )
+            with self.repo.conn:
+                cur = self.repo.conn.cursor()
+                cur.execute(
+                    "INSERT INTO workflow (workflow_id, aggregate_json, version) VALUES (?, ?, ?) "
+                    "ON CONFLICT(workflow_id) DO UPDATE SET aggregate_json=excluded.aggregate_json, version=excluded.version",
+                    (workflow_id, json.dumps({"state": state}), version),
+                )
         except Exception:
             pass
 
