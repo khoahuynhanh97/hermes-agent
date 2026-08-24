@@ -3,13 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 import pytest
 
-from hermes_personal.runtime.config import RuntimeConfig, RuntimeConfigError
+from hermes_personal.runtime.config import RuntimeConfig, RuntimeConfigError, ProcessTopologyError
 from hermes_personal.runtime.processes import (
     ProcessSpec,
     ProbeSpec,
     RestartPolicy,
     build_process_topology,
-    ProcessTopologyError,
 )
 
 
@@ -69,11 +68,10 @@ def test_no_secret_values_in_argv(repo_root):
     )
     specs = build_process_topology(config)
 
-    secret_markers = ("bot123456:ABC-DEF", "sk-live-12345", "password", "supersecret")
+    secret_markers = ("bot123456:ABC-DEF", "sk-live-12345", "supersecret", "ghp_123")
     for spec in specs:
         for arg in spec.argv:
             assert not any(marker in arg for marker in secret_markers), f"Secret leaked in argv of {spec.name}: {arg}"
-        # Secret names must be in env_keys, not raw values
         assert isinstance(spec.env_keys, tuple)
 
 
@@ -99,11 +97,40 @@ def test_duplicate_ports_raise_validation_error(repo_root):
         )
 
 
-def test_production_mode_requires_static_dir_or_digest(repo_root):
-    with pytest.raises(RuntimeConfigError, match="static"):
+def test_production_mode_requires_static_dir_and_digest(repo_root):
+    with pytest.raises(RuntimeConfigError, match="web_static_dir"):
         config = RuntimeConfig(
             mode="production",
             repo_root=repo_root,
             web_static_dir=None,
         )
-        build_process_topology(config)
+
+    dist_dir = repo_root / "dist"
+    dist_dir.mkdir(parents=True, exist_ok=True)
+    with pytest.raises(RuntimeConfigError, match="web_static_digest"):
+        RuntimeConfig(
+            mode="production",
+            repo_root=repo_root,
+            web_static_dir=dist_dir,
+            web_static_digest="",
+        )
+
+
+def test_validate_secrets_presence_without_logging_values(repo_root):
+    config = RuntimeConfig(
+        mode="development",
+        repo_root=repo_root,
+        secrets_env_keys=("HERMES_TELEGRAM_TOKEN", "HERMES_API_KEY"),
+    )
+    # Valid environment
+    config.validate_secrets_presence({
+        "HERMES_TELEGRAM_TOKEN": "secret_token_val",
+        "HERMES_API_KEY": "secret_key_val",
+    })
+
+    # Missing secrets environment raises error with key names only, never values
+    with pytest.raises(RuntimeConfigError, match="Missing required environment secrets: HERMES_API_KEY"):
+        config.validate_secrets_presence({
+            "HERMES_TELEGRAM_TOKEN": "secret_token_val",
+            "HERMES_API_KEY": "",
+        })

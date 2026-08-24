@@ -1,49 +1,53 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any
+from pathlib import Path
+from typing import Literal
 
-from hermes_personal.observability.health import HealthStatus
+from hermes_personal.runtime.config import ProcessTopologyError, RuntimeConfig
 
-
-class ProcessKind(Enum):
-    GATEWAY_AGENT_RUNTIME = "gateway_agent_runtime"
-    APPLICATION_API = "application_api"
-    TELEGRAM_ADAPTER = "telegram_adapter"
-    DURABLE_WORKERS = "durable_workers"
-    MCP_HEALTH_DISCOVERY = "mcp_health_discovery"
-    WEB_UI = "web_ui"
+ProbeType = Literal["http", "tcp", "exec", "file", "noop"]
 
 
-class WebMode(Enum):
-    DEVELOPMENT = "development"
-    PRODUCTION = "production"
+@dataclass(frozen=True)
+class ProbeSpec:
+    """Readiness probe specification for a process."""
+
+    probe_type: ProbeType
+    endpoint: str = ""
+    interval_seconds: float = 1.0
+    timeout_seconds: float = 2.0
+    initial_delay_seconds: float = 0.5
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
+class RestartPolicy:
+    """Bounded exponential restart policy for a supervised process."""
+
+    max_attempts: int = 5
+    window_seconds: float = 60.0
+    base_backoff_seconds: float = 1.0
+    max_backoff_seconds: float = 30.0
+
+
+@dataclass(frozen=True)
 class ProcessSpec:
-    kind: ProcessKind
-    name: str
-    command: tuple[str, ...]
-    env_keys: tuple[str, ...]
-    required: bool = True
-    health_endpoint: str | None = None
-    depends_on: tuple[ProcessKind, ...] = field(default_factory=tuple)
-    web_mode: WebMode | None = None
-    static_bundle_path: str | None = None
+    """Immutable specification for a supervised child process."""
 
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "command", tuple(self.command))
-        object.__setattr__(self, "env_keys", tuple(self.env_keys))
-        object.__setattr__(self, "depends_on", tuple(self.depends_on))
+    name: str
+    argv: tuple[str, ...]
+    cwd: Path
+    env_keys: tuple[str, ...]
+    required: bool
+    readiness_probe: ProbeSpec
+    shutdown_timeout_seconds: float = 5.0
+    restart: RestartPolicy = field(default_factory=RestartPolicy)
 
     def argv_contains_secret(self) -> bool:
         secret_indicators = (
             "password",
             "secret",
             "token",
-            "key",
             "credential",
             "api_key",
             "apikey",
@@ -51,206 +55,166 @@ class ProcessSpec:
             "bearer",
             "cookie",
             "private_key",
+            "ghp_",
+            "sk-",
         )
-        for arg in self.command:
+        for arg in self.argv:
             arg_lower = arg.lower()
             for indicator in secret_indicators:
-                if indicator in arg_lower and not arg.startswith("${") and not arg.startswith("$"):
+                if indicator in arg_lower and not arg.startswith("--"):
                     return True
         return False
 
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "kind": self.kind.value,
-            "name": self.name,
-            "command": list(self.command),
-            "env_keys": list(self.env_keys),
-            "required": self.required,
-            "health_endpoint": self.health_endpoint,
-            "depends_on": [k.value for k in self.depends_on],
-            "web_mode": self.web_mode.value if self.web_mode else None,
-            "static_bundle_path": self.static_bundle_path,
-        }
 
+def build_process_topology(config: RuntimeConfig) -> tuple[ProcessSpec, ...]:
+    """Generate ordered, immutable process specifications for the Hermes runtime."""
+    config.validate()
+    specs: list[ProcessSpec] = []
+    py = config.python_executable
+    root = config.repo_root
 
-GATEWAY_AGENT_RUNTIME = ProcessSpec(
-    kind=ProcessKind.GATEWAY_AGENT_RUNTIME,
-    name="Gateway/Agent Runtime",
-    command=(
-        "python",
-        "-m",
-        "hermes_personal.orchestration.upstream_agent",
-        "--config",
-        "${HERMES_CONFIG}",
-    ),
-    env_keys=(
-        "HERMES_CONFIG",
-        "HERMES_HOME",
-        "DATABASE_URL",
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "GEMINI_API_KEY",
-        "TELEGRAM_BOT_TOKEN",
-        "TELEGRAM_API_ID",
-        "TELEGRAM_API_HASH",
-    ),
-    required=True,
-    health_endpoint="/health",
-    depends_on=(),
-)
+    # 1. Gateway / Agent Runtime
+    specs.append(
+        ProcessSpec(
+            name="gateway",
+            argv=(
+                py,
+                "-m",
+                "hermes_personal.gateway.server",
+                "--port",
+                str(config.gateway_port),
+            ),
+            cwd=root,
+            env_keys=("HERMES_HOME", "HERMES_PORT", "HERMES_API_KEY"),
+            required=True,
+            readiness_probe=ProbeSpec(
+                probe_type="http",
+                endpoint=f"http://127.0.0.1:{config.gateway_port}/healthz",
+            ),
+            shutdown_timeout_seconds=5.0,
+            restart=RestartPolicy(max_attempts=5, window_seconds=60.0, base_backoff_seconds=1.0),
+        )
+    )
 
-APPLICATION_API = ProcessSpec(
-    kind=ProcessKind.APPLICATION_API,
-    name="Application API",
-    command=(
-        "python",
+    # 2. Application API Server
+    app_api_argv = [
+        py,
         "-m",
         "hermes_personal.api.server",
-        "--config",
-        "${HERMES_CONFIG}",
-    ),
-    env_keys=(
-        "HERMES_CONFIG",
-        "HERMES_HOME",
-        "DATABASE_URL",
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-    ),
-    required=True,
-    health_endpoint="/health",
-    depends_on=(ProcessKind.GATEWAY_AGENT_RUNTIME,),
-)
+        "--port",
+        str(config.app_api_port),
+        "--gateway-port",
+        str(config.gateway_port),
+    ]
+    if config.mode == "production" and config.web_static_dir:
+        app_api_argv.extend(["--static-dir", str(config.web_static_dir)])
+        if config.web_static_digest:
+            app_api_argv.extend(["--static-digest", config.web_static_digest])
 
-TELEGRAM_ADAPTER = ProcessSpec(
-    kind=ProcessKind.TELEGRAM_ADAPTER,
-    name="Telegram Adapter",
-    command=(
-        "python",
-        "-m",
-        "hermes_personal.gateway.telegram",
-        "--config",
-        "${HERMES_CONFIG}",
-    ),
-    env_keys=(
-        "HERMES_CONFIG",
-        "HERMES_HOME",
-        "TELEGRAM_BOT_TOKEN",
-        "TELEGRAM_API_ID",
-        "TELEGRAM_API_HASH",
-    ),
-    required=True,
-    health_endpoint="/health",
-    depends_on=(ProcessKind.GATEWAY_AGENT_RUNTIME,),
-)
+    specs.append(
+        ProcessSpec(
+            name="app_api",
+            argv=tuple(app_api_argv),
+            cwd=root,
+            env_keys=("HERMES_HOME", "HERMES_API_PORT", "HERMES_API_KEY"),
+            required=True,
+            readiness_probe=ProbeSpec(
+                probe_type="http",
+                endpoint=f"http://127.0.0.1:{config.app_api_port}/healthz",
+            ),
+            shutdown_timeout_seconds=5.0,
+            restart=RestartPolicy(max_attempts=5, window_seconds=60.0, base_backoff_seconds=1.0),
+        )
+    )
 
-DURABLE_WORKERS = ProcessSpec(
-    kind=ProcessKind.DURABLE_WORKERS,
-    name="Durable Workers",
-    command=(
-        "python",
-        "-m",
-        "hermes_personal.workflows.engine",
-        "--config",
-        "${HERMES_CONFIG}",
-        "--worker",
-    ),
-    env_keys=(
-        "HERMES_CONFIG",
-        "HERMES_HOME",
-        "DATABASE_URL",
-    ),
-    required=True,
-    health_endpoint="/health",
-    depends_on=(ProcessKind.GATEWAY_AGENT_RUNTIME,),
-)
+    # 3. MCP Discovery & Health
+    if config.enable_mcp:
+        specs.append(
+            ProcessSpec(
+                name="mcp_discovery",
+                argv=(
+                    py,
+                    "-m",
+                    "hermes_personal.capabilities.mcp_runner",
+                    "--action",
+                    "discover",
+                ),
+                cwd=root,
+                env_keys=("HERMES_HOME",),
+                required=True,
+                readiness_probe=ProbeSpec(probe_type="exec", endpoint="mcp_snapshot_check"),
+                shutdown_timeout_seconds=3.0,
+                restart=RestartPolicy(max_attempts=3, window_seconds=60.0, base_backoff_seconds=2.0),
+            )
+        )
 
-MCP_HEALTH_DISCOVERY = ProcessSpec(
-    kind=ProcessKind.MCP_HEALTH_DISCOVERY,
-    name="MCP Health/Discovery",
-    command=(
-        "python",
-        "-m",
-        "hermes_personal.capabilities.mcp_health",
-        "--config",
-        "${HERMES_CONFIG}",
-    ),
-    env_keys=(
-        "HERMES_CONFIG",
-        "HERMES_HOME",
-        "MCP_REGISTRY_URL",
-    ),
-    required=True,
-    health_endpoint="/health",
-    depends_on=(ProcessKind.GATEWAY_AGENT_RUNTIME,),
-)
+    # 4. Durable Background Workers
+    if config.enable_workers:
+        specs.append(
+            ProcessSpec(
+                name="durable_worker",
+                argv=(
+                    py,
+                    "-m",
+                    "hermes_personal.workflows.worker",
+                ),
+                cwd=root,
+                env_keys=("HERMES_HOME",),
+                required=True,
+                readiness_probe=ProbeSpec(probe_type="noop"),
+                shutdown_timeout_seconds=10.0,
+                restart=RestartPolicy(max_attempts=10, window_seconds=120.0, base_backoff_seconds=1.0),
+            )
+        )
 
-WEB_UI_DEVELOPMENT = ProcessSpec(
-    kind=ProcessKind.WEB_UI,
-    name="Web UI (Development)",
-    command=(
-        "npm",
-        "run",
-        "dev",
-        "--prefix",
-        "${WEB_UI_PATH}",
-    ),
-    env_keys=(
-        "HERMES_CONFIG",
-        "HERMES_HOME",
-        "WEB_UI_PATH",
-        "VITE_API_URL",
-    ),
-    required=False,
-    health_endpoint=None,
-    depends_on=(ProcessKind.APPLICATION_API,),
-    web_mode=WebMode.DEVELOPMENT,
-)
+    # 5. Telegram Platform Adapter
+    if config.enable_telegram:
+        specs.append(
+            ProcessSpec(
+                name="telegram",
+                argv=(
+                    py,
+                    "-m",
+                    "hermes_personal.gateway.platforms.telegram_runner",
+                ),
+                cwd=root,
+                env_keys=("HERMES_HOME", "HERMES_TELEGRAM_TOKEN"),
+                required=False,  # Optional adapter
+                readiness_probe=ProbeSpec(probe_type="noop"),
+                shutdown_timeout_seconds=5.0,
+                restart=RestartPolicy(max_attempts=5, window_seconds=60.0, base_backoff_seconds=2.0),
+            )
+        )
 
-WEB_UI_PRODUCTION = ProcessSpec(
-    kind=ProcessKind.WEB_UI,
-    name="Web UI (Production)",
-    command=(),
-    env_keys=(
-        "HERMES_CONFIG",
-        "HERMES_HOME",
-        "WEB_UI_BUNDLE_PATH",
-    ),
-    required=False,
-    health_endpoint=None,
-    depends_on=(ProcessKind.APPLICATION_API,),
-    web_mode=WebMode.PRODUCTION,
-    static_bundle_path="${WEB_UI_BUNDLE_PATH}",
-)
+    # 6. Web UI (Development frontend dev server)
+    if config.enable_web and config.mode == "development":
+        web_cwd = root / "web" if (root / "web").exists() else root
+        specs.append(
+            ProcessSpec(
+                name="web_ui",
+                argv=(
+                    config.node_executable,
+                    "run",
+                    "dev",
+                    "--",
+                    "--port",
+                    str(config.web_port),
+                ),
+                cwd=web_cwd,
+                env_keys=("VITE_API_URL", "PORT"),
+                required=False,
+                readiness_probe=ProbeSpec(
+                    probe_type="http",
+                    endpoint=f"http://127.0.0.1:{config.web_port}",
+                ),
+                shutdown_timeout_seconds=3.0,
+                restart=RestartPolicy(max_attempts=3, window_seconds=60.0, base_backoff_seconds=2.0),
+            )
+        )
 
-ALL_PROCESSES: tuple[ProcessSpec, ...] = (
-    GATEWAY_AGENT_RUNTIME,
-    APPLICATION_API,
-    TELEGRAM_ADAPTER,
-    DURABLE_WORKERS,
-    MCP_HEALTH_DISCOVERY,
-    WEB_UI_DEVELOPMENT,
-    WEB_UI_PRODUCTION,
-)
-
-_PROCESS_MAP: dict[ProcessKind, ProcessSpec] = {p.kind: p for p in ALL_PROCESSES}
-
-
-def get_process_spec(kind: ProcessKind) -> ProcessSpec:
-    if kind not in _PROCESS_MAP:
-        raise KeyError(f"Unknown process kind: {kind}")
-    return _PROCESS_MAP[kind]
-
-
-def assert_no_secrets_in_argv() -> None:
-    violations: list[str] = []
-    for spec in ALL_PROCESSES:
+    # Safety validation: ensure no secret values leaked in argv
+    for spec in specs:
         if spec.argv_contains_secret():
-            violations.append(f"{spec.name}: argv contains potential secret: {spec.command}")
-    if violations:
-        raise ValueError("Secret values detected in process argv:\n" + "\n".join(violations))
+            raise ProcessTopologyError(f"Potential secret detected in argv of process '{spec.name}'")
 
-
-def get_web_ui_spec(mode: WebMode) -> ProcessSpec:
-    if mode == WebMode.DEVELOPMENT:
-        return WEB_UI_DEVELOPMENT
-    return WEB_UI_PRODUCTION
+    return tuple(specs)

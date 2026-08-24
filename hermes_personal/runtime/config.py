@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -10,6 +11,10 @@ RuntimeMode = Literal["development", "production", "test"]
 
 class RuntimeConfigError(Exception):
     """Raised when runtime configuration is invalid."""
+
+
+class ProcessTopologyError(Exception):
+    """Raised when process topology specification is invalid."""
 
 
 @dataclass(frozen=True)
@@ -45,3 +50,15 @@ class RuntimeConfig:
         if self.mode == "production" and self.enable_web:
             if self.web_static_dir is None:
                 raise RuntimeConfigError("Production mode requires web_static_dir to be specified for Web surface")
+            if not self.web_static_digest:
+                raise RuntimeConfigError("Production mode requires web_static_digest for static bundle verification")
+
+    def validate_secrets_presence(self, env: dict[str, str] | None = None) -> None:
+        """Check required secrets are present in environment without leaking their values in logs/errors."""
+        active_env = os.environ if env is None else env
+        missing: list[str] = []
+        for key in self.secrets_env_keys:
+            if not active_env.get(key):
+                missing.append(key)
+        if missing:
+            raise RuntimeConfigError(f"Missing required environment secrets: {', '.join(missing)}")
