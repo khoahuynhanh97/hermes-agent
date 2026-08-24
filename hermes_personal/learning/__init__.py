@@ -32,11 +32,13 @@ from .promotion import (
 )
 from .repository import LearningRepository
 from .retrieval import ApprovedLearningRetriever, RetrievedLearning
+from .skill_publisher import ProceduralSkillPublisher
 
 __all__ = [
     "AgentContext",
     "AgentContextAssembler",
     "ApprovedLearningRetriever",
+
     "CandidateEvaluation",
     "CandidateEvaluator",
     "CandidateStatus",
@@ -54,7 +56,9 @@ __all__ = [
     "PreferenceMemoryPolicy",
     "PreferencePolicyResult",
     "PreferenceRiskLevel",
+    "ProceduralSkillPublisher",
     "PromotionRequestResult",
+
 
     "PromotionService",
     "RetrievedLearning",
