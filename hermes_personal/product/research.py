@@ -1,69 +1,92 @@
+"""Product research pipeline – deterministic, no external calls.
+
+Provides simple fake data generation for a product name and optional keywords.
+Used by Phase 5 Task 1.
+"""
+
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
-from typing import Dict, Any, List, Optional
+from typing import List
 
-@dataclass(frozen=True)
+
+@dataclass(frozen=True, slots=True)
 class ResearchSpec:
-    """Specification of a product research request.
+    """Specification for a product research run.
 
-    Attributes:
-        product_name: Name of the product to research.
-        topics: Optional list of research topics.
+    Attributes
+    ----------
+    product_name: Name of the product to research.
+    keywords: Optional list of focus keywords.
     """
+
     product_name: str
-    topics: Optional[List[str]] = None
+    keywords: List[str] | None = None
 
-    def effective_topics(self) -> List[str]:
-        """Return topics to research.
+    def __post_init__(self) -> None:  # noqa: D401
+        # Normalise keywords to a sorted list for deterministic behaviour
+        object.__setattr__(self, "keywords", sorted(self.keywords or []))
 
-        If explicit topics are provided, return them; otherwise return a default
-        set covering interest, market size, and competition.
-        """
-        return self.topics if self.topics is not None else ["interest", "market_size", "competition"]
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ResearchResult:
-    """Result of a product research execution.
+    """Result of a research run.
 
-    Attributes:
-        product_name: Name of the product researched.
-        summary: Human‑readable summary of findings.
-        data: Deterministic structured data with interest, market size, and competition.
+    summary: One‑line headline.
+    report: JSON‑formatted detail block.
     """
-    product_name: str
+
     summary: str
-    data: Dict[str, Any]
+    report: str
+
+    def as_dict(self) -> dict:
+        """Return result as a plain dict for json serialisation."""
+        return {"summary": self.summary, "report": self.report}
+
 
 class ProductResearchPipeline:
-    """Deterministic, offline research pipeline.
+    """Deterministic fake research pipeline.
 
-    Generates deterministic placeholder data without external services.
+    Generates reproducible dummy insights based on a hash of the input spec.
+    No network or paid‑provider calls are performed.
     """
+
+    @staticmethod
+    def _deterministic_hash(spec: ResearchSpec) -> int:
+        """Create a stable integer hash from the spec.
+
+        Uses SHA‑256 of a JSON representation; returns an int in range 0‑100.
+        """
+        spec_json = json.dumps({"product_name": spec.product_name, "keywords": spec.keywords}, sort_keys=True)
+        digest = hashlib.sha256(spec_json.encode()).hexdigest()
+        # Take first 8 hex chars → 32‑bit int, then mod 101 for a 0‑100 range
+        return int(digest[:8], 16) % 101
 
     def run(self, spec: ResearchSpec) -> ResearchResult:
-        """Execute pipeline for *spec* and return deterministic result.
+        """Execute the fake research pipeline.
 
-        The implementation returns fixed data and a formatted summary matching the
-        test expectations.
+        Returns a reproducible ``ResearchResult`` based on the spec.
         """
-        # Deterministic placeholder data.
-        data: Dict[str, Any] = {
-            "interest_score": "42%",
-            "market_size": "68k users",
-            "competition": "9 major rivals",
+        score = self._deterministic_hash(spec)
+        # Simple deterministic faux‑insights
+        summary = f"Research for {spec.product_name}: {score}% market potential"
+        insights = {
+            "product": spec.product_name,
+            "keywords": spec.keywords,
+            "potential_score": score,
+            "insights": [
+                f"Keyword '{kw}' shows {score // max(1, len(spec.keywords))}% relevance" for kw in spec.keywords
+            ]
+            if spec.keywords
+            else [],
         }
-        # Build summary using the expected format.
-        summary = (
-            f"Research for {spec.product_name} in general market:\n"
-            f"- Interest: {data['interest_score']}\n"
-            f"- Estimated market size: {data['market_size']}\n"
-            f"- Competition: {data['competition']}"
-        )
-        return ResearchResult(product_name=spec.product_name, summary=summary, data=data)
+        report = json.dumps(insights, indent=2, sort_keys=True)
+        return ResearchResult(summary=summary, report=report)
+
 
 def run_research(spec: ResearchSpec) -> ResearchResult:
-    """Convenience helper that runs the given research spec.
-    """
+    """Convenient helper to run the pipeline in a single call."""
     pipeline = ProductResearchPipeline()
     return pipeline.run(spec)

@@ -13,6 +13,7 @@ Phase 5 - Migrate Product Intelligence to Video Factory Flow with HITL & Reconci
 WORKER
 
 
+
 ## Overall Plan
 
 ### Phase 0
@@ -51,7 +52,7 @@ Goal: Deliver `hermes start`, health/readiness, restart behavior, four-channel c
 
 ## Current Next Action
 
-Owner: WORKER
+Owner: PLANNER
 
 Objective:
 Implement Phase 5 Task 1: Migrate Product Research & Intelligence Pipeline.
@@ -80,7 +81,7 @@ After completing implementation, verification, and git commit, update `coordinat
 
 ## Last Worker Report
 
-Iteration: 35
+Iteration: 36
 Phase: Phase 4 - Durable Workflows, Shared Approvals, Budgets, Jobs & Restart Recovery
 
 Implemented:
@@ -113,7 +114,7 @@ Risks/Blockers:
 
 ## Last Planner Review
 
-Iteration: 35
+Iteration: 36
 
 Decision:
 ACCEPTED PHASE 4 COMPLETE (Phase 4 Accepted at commit c869feec14 -> Phase 5 Starting)
