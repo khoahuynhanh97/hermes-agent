@@ -8,7 +8,13 @@ from .memory_policy import (
     PreferencePolicyResult,
     PreferenceRiskLevel,
 )
+from .metrics import (
+    LearningExecutionMetric,
+    LearningMetricsEngine,
+    VersionEffectivenessSummary,
+)
 from .models import (
+
 
     CandidateEvaluation,
     CandidateStatus,
@@ -48,10 +54,13 @@ __all__ = [
     "InvalidVersion",
     "LearningCandidate",
     "LearningEvent",
+    "LearningExecutionMetric",
     "LearningKind",
+    "LearningMetricsEngine",
     "LearningRepository",
     "LearningRepositoryError",
     "LearningVersion",
+
     "PreferenceCategory",
     "PreferenceMemoryPolicy",
     "PreferencePolicyResult",
@@ -65,7 +74,6 @@ __all__ = [
     "RollbackResult",
     "TaskOutcome",
     "TaskOutcomeStatus",
+    "VersionEffectivenessSummary",
     "VersionStatus",
 ]
-
-
