@@ -50,9 +50,10 @@ def test_retrieval_strict_owner_isolation(repository, retriever):
         title="TikTok Hook Formula",
         content="Begin with high contrast motion",
         evidence=(sample_evidence(),),
-        status="approved",
+        status="draft",
     )
     repository.create_candidate(c1)
+    repository.update_candidate_status("c_u1", "approved")
     repository.create_version("c_u1", "Begin with high contrast motion")
 
     # User1 retrieves
@@ -73,9 +74,10 @@ def test_revoked_and_superseded_versions_excluded(repository, retriever):
         title="Video Scaling Pattern",
         content="Scale via fast cuts",
         evidence=(sample_evidence(),),
-        status="approved",
+        status="draft",
     )
     repository.create_candidate(cand)
+    repository.update_candidate_status("c_ver", "approved")
     v1 = repository.create_version("c_ver", "Scale via fast cuts v1")
     repository.update_version_status(v1.version_id, "superseded")
 
@@ -112,10 +114,85 @@ def test_unrelated_query_returns_empty_for_knowledge(repository, retriever):
         title="E-commerce Pricing",
         content="Price below 29 dollars for impulse purchase",
         evidence=(sample_evidence(),),
-        status="approved",
+        status="draft",
     )
     repository.create_candidate(cand)
+    repository.update_candidate_status("c_spec", "approved")
     repository.create_version("c_spec", "Price below 29 dollars for impulse purchase")
 
     results = retriever.retrieve(owner_user_id="user1", query="Quantum physics simulation")
     assert len(results) == 0
+
+
+def test_active_version_attached_to_draft_candidate_not_retrieved(repository, retriever):
+    cand = LearningCandidate(
+        candidate_id="c_draft",
+        owner_user_id="user1",
+        kind="knowledge",
+        title="Draft Strategy",
+        content="Unvetted draft advice",
+        evidence=(sample_evidence(),),
+        status="draft",
+    )
+    repository.create_candidate(cand)
+    # Even if an active version row exists, draft candidate must be excluded
+    repository.create_version("c_draft", "Unvetted draft advice")
+
+    results = retriever.retrieve(owner_user_id="user1", query="Draft Strategy advice")
+    assert len(results) == 0
+
+
+def test_active_version_attached_to_evaluated_candidate_not_retrieved(repository, retriever):
+    cand = LearningCandidate(
+        candidate_id="c_eval",
+        owner_user_id="user1",
+        kind="knowledge",
+        title="Evaluated Strategy",
+        content="Evaluated but not yet approved advice",
+        evidence=(sample_evidence(),),
+        status="draft",
+    )
+    repository.create_candidate(cand)
+    repository.update_candidate_status("c_eval", "evaluated")
+    repository.create_version("c_eval", "Evaluated but not yet approved advice")
+
+    results = retriever.retrieve(owner_user_id="user1", query="Evaluated Strategy advice")
+    assert len(results) == 0
+
+
+def test_active_version_attached_to_pending_approval_candidate_not_retrieved(repository, retriever):
+    cand = LearningCandidate(
+        candidate_id="c_pending",
+        owner_user_id="user1",
+        kind="knowledge",
+        title="Pending Strategy",
+        content="Pending owner approval advice",
+        evidence=(sample_evidence(),),
+        status="draft",
+    )
+    repository.create_candidate(cand)
+    repository.update_candidate_status("c_pending", "pending_approval")
+    repository.create_version("c_pending", "Pending owner approval advice")
+
+    results = retriever.retrieve(owner_user_id="user1", query="Pending Strategy advice")
+    assert len(results) == 0
+
+
+def test_approved_active_version_retrieves_normally(repository, retriever):
+    cand = LearningCandidate(
+        candidate_id="c_appr",
+        owner_user_id="user1",
+        kind="knowledge",
+        title="Approved Strategy",
+        content="Approved actionable advice",
+        evidence=(sample_evidence(),),
+        status="draft",
+    )
+    repository.create_candidate(cand)
+    repository.update_candidate_status("c_appr", "approved")
+    repository.create_version("c_appr", "Approved actionable advice")
+
+    results = retriever.retrieve(owner_user_id="user1", query="Approved Strategy advice")
+    assert len(results) == 1
+    assert results[0].candidate_id == "c_appr"
+    assert results[0].title == "Approved Strategy"

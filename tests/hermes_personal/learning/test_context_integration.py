@@ -122,10 +122,12 @@ def test_agent_context_assembly_and_turn_service_integration(db_conn, repository
         title="Video Product Hook",
         content="Show the unboxing before the product benefit.",
         evidence=(sample_evidence(),),
-        status="approved",
+        status="draft",
     )
     repository.create_candidate(cand_know)
+    repository.update_candidate_status("c_k1", "approved")
     repository.create_version("c_k1", "Show the unboxing before the product benefit.")
+
 
     # Setup TurnService with context_assembler
     identity_repo = IdentityRepository(db_conn)
@@ -174,3 +176,54 @@ def test_agent_context_assembly_and_turn_service_integration(db_conn, repository
     assert "Concise Style" in system_msg["content"]
     assert "Video Product Hook" in system_msg["content"]
     assert "Show the unboxing before the product benefit." in system_msg["content"]
+
+
+def test_unapproved_candidate_cannot_enter_turn_context(db_conn, repository, assembler):
+    """Prove that draft/pending/evaluated candidates never enter AgentContextAssembler or TurnService context."""
+    cand_draft = LearningCandidate(
+        candidate_id="c_unappr_draft",
+        owner_user_id="user1",
+        kind="knowledge",
+        title="Unapproved Secret Hack",
+        content="Secret draft formula that must not leak",
+        evidence=(sample_evidence(),),
+        status="draft",
+    )
+    repository.create_candidate(cand_draft)
+    repository.create_version("c_unappr_draft", "Secret draft formula that must not leak")
+
+    identity_repo = IdentityRepository(db_conn)
+    session_repo = SessionRepository(db_conn)
+    event_repo = EventRepository(db_conn)
+    transcript_factory = FakeTranscriptFactory()
+    spy_agent = SpyAgent()
+
+    turn_service = HermesTurnService(
+        identity_repository=identity_repo,
+        session_repository=session_repo,
+        event_repository=event_repo,
+        transcript_factory=transcript_factory,
+        agent=spy_agent,
+        context_assembler=assembler,
+    )
+
+    request = AgentTurnRequest(
+        principal=PrincipalContext(actor_id="user1", owner_user_id="user1", channel="cli", session_id="sess_1"),
+        turn_id="turn_ctx_unappr",
+        message="Tell me the Secret draft formula",
+    )
+
+    async def _run():
+        events = []
+        async for event in turn_service.handle(request):
+            events.append(event)
+        return events
+
+    asyncio.run(_run())
+    assert len(spy_agent.received_histories) == 1
+    passed_history = spy_agent.received_histories[0]
+    # No system context or if any, the unapproved knowledge is absent
+    for msg in passed_history:
+        if msg.get("role") == "system":
+            assert "Unapproved Secret Hack" not in msg.get("content", "")
+            assert "Secret draft formula that must not leak" not in msg.get("content", "")

@@ -46,20 +46,18 @@ class ApprovedLearningRetriever:
         scored_items: list[tuple[float, str, RetrievedLearning]] = []
 
         for v in active_versions:
-            # Enforce strict owner isolation
-            if v.owner_user_id != owner_user_id:
+            # Enforce strict owner isolation and active status
+            if v.owner_user_id != owner_user_id or v.status != "active":
                 continue
 
             cand = self.repository.get_candidate(v.candidate_id)
-            if not cand or cand.status not in ("approved", "evaluated", "draft"):
-                continue
-
-            # Extra check: unapproved or rejected candidates cannot be retrieved
-            if cand.status == "rejected":
+            # Strict approved-only check: draft, evaluated, pending_approval, rejected are excluded
+            if not cand or cand.status != "approved" or cand.owner_user_id != owner_user_id:
                 continue
 
             title_tokens = _tokenize(cand.title)
             content_tokens = _tokenize(v.content)
+
 
             score = 0.0
             if query_tokens:
