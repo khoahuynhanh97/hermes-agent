@@ -9,7 +9,17 @@ LearningKind = Literal["preference", "knowledge", "procedure"]
 CandidateStatus = Literal["draft", "evaluated", "pending_approval", "approved", "rejected"]
 VersionStatus = Literal["active", "revoked", "superseded"]
 TaskOutcomeStatus = Literal["success", "failure", "cancelled"]
-EvaluationDecision = Literal["approved", "rejected", "needs_human_review", "promoted"]
+EvaluationDecision = Literal[
+    "eligible_auto",
+    "needs_approval",
+    "reject",
+    "approved",
+    "rejected",
+    "needs_human_review",
+    "promoted",
+]
+
+
 
 
 class LearningError(Exception):
