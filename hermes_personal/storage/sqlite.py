@@ -107,8 +107,62 @@ CREATE TABLE IF NOT EXISTS workflow_outbox (
   message TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
-"""
 
+-- Governed learning tables
+CREATE TABLE IF NOT EXISTS task_outcome (
+  outcome_id TEXT PRIMARY KEY,
+  source_type TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  details_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS learning_candidate (
+  candidate_id TEXT PRIMARY KEY,
+  owner_user_id TEXT NOT NULL REFERENCES global_user_identity(owner_user_id) ON DELETE RESTRICT,
+  kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  digest TEXT NOT NULL,
+  source_outcome_id TEXT REFERENCES task_outcome(outcome_id) ON DELETE SET NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(owner_user_id, kind, digest)
+);
+
+CREATE TABLE IF NOT EXISTS evidence_ref (
+  evidence_id TEXT PRIMARY KEY,
+  candidate_id TEXT NOT NULL REFERENCES learning_candidate(candidate_id) ON DELETE CASCADE,
+  source_type TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  digest TEXT NOT NULL,
+  excerpt TEXT NOT NULL,
+  polarity TEXT NOT NULL DEFAULT 'positive',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS learning_version (
+  version_id TEXT PRIMARY KEY,
+  candidate_id TEXT NOT NULL REFERENCES learning_candidate(candidate_id) ON DELETE CASCADE,
+  owner_user_id TEXT NOT NULL REFERENCES global_user_identity(owner_user_id) ON DELETE RESTRICT,
+  version INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  digest TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(candidate_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS learning_event (
+  event_id TEXT PRIMARY KEY,
+  candidate_id TEXT NOT NULL REFERENCES learning_candidate(candidate_id) ON DELETE CASCADE,
+  version_id TEXT REFERENCES learning_version(version_id) ON DELETE SET NULL,
+  event_type TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+"""
 
 def _migrate_schema(connection: sqlite3.Connection) -> None:
     with connection:
