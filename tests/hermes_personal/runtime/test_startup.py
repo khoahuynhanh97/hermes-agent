@@ -2,8 +2,21 @@ from __future__ import annotations
 
 import pytest
 
-from hermes_personal.runtime.readiness import ReadinessState, StartupReport, StartupStepRecord
-from hermes_personal.runtime.startup import StartupCoordinator, StartupErrorCode
+from hermes_personal.observability.health import ComponentHealth, HealthReport
+from hermes_personal.runtime.config import RuntimeConfig
+from hermes_personal.runtime.readiness import (
+    ReadinessProbe,
+    ReadinessState,
+    create_readiness_probe,
+)
+from hermes_personal.runtime.startup import (
+    StartupCoordinator,
+    StartupErrorCode,
+    StartupReport,
+    StartupStep,
+    StartupStepRecord,
+    StartupStepStatus,
+)
 
 
 class FakeClock:
@@ -17,7 +30,7 @@ class FakeClock:
         self.now += seconds
 
 
-def test_successful_startup_order_and_readiness():
+def test_successful_startup_order_and_readiness(tmp_path):
     clock = FakeClock()
     execution_order: list[str] = []
 
@@ -37,7 +50,7 @@ def test_successful_startup_order_and_readiness():
     def workflow_step():
         execution_order.append("workflow_approval_recovery")
         clock.advance(0.01)
-        return 2  # recovered 2 workflows
+        return (2, 5)  # 2 workflows recovered, 5 pending approvals left intact
 
     def mcp_step():
         execution_order.append("mcp_discovery")
@@ -53,6 +66,8 @@ def test_successful_startup_order_and_readiness():
         return True
 
     coordinator = StartupCoordinator(
+        config=RuntimeConfig(mode="development", repo_root=tmp_path),
+        env={"HERMES_TELEGRAM_TOKEN": "token_val", "HERMES_API_KEY": "key_val"},
         config_validator=config_step,
         migration_runner=migration_step,
         lease_recovery=lease_step,
@@ -76,11 +91,12 @@ def test_successful_startup_order_and_readiness():
     ]
     assert execution_order == expected_order
     assert report.is_ready is True
-    assert report.status == "ready"
+    assert report.overall_status == StartupStepStatus.COMPLETED
     assert report.failure_code is None
-    assert len(report.steps) == 8  # 7 steps + ingress_ready
+    assert len(report.steps) == 8
     assert report.steps[-1].name == "ingress_ready"
-    assert report.steps[-1].status == "succeeded"
+    assert report.steps[-1].status == StartupStepStatus.COMPLETED
+    assert report.total_latency_ms > 0
 
 
 def test_mandatory_step_failure_stops_before_ready():
@@ -108,10 +124,10 @@ def test_mandatory_step_failure_stops_before_ready():
 
     assert execution_order == ["config_validation", "db_migration"]
     assert report.is_ready is False
-    assert report.status == "failed"
+    assert report.overall_status == StartupStepStatus.FAILED
     assert report.failure_code == StartupErrorCode.DB_MIGRATION_FAILED
     failed_step = next(s for s in report.steps if s.name == "db_migration")
-    assert failed_step.status == "failed"
+    assert failed_step.status == StartupStepStatus.FAILED
     assert "database unreachable" in (failed_step.error_message or "")
 
 
@@ -126,7 +142,7 @@ def test_dependency_probe_failure_blocks_readiness():
     report = coordinator.prepare()
 
     assert report.is_ready is False
-    assert report.status == "failed"
+    assert report.overall_status == StartupStepStatus.FAILED
     assert report.failure_code == StartupErrorCode.DEPENDENCY_PROBE_FAILED
 
 
@@ -149,10 +165,10 @@ def test_rerun_after_partial_success_is_idempotent():
     assert report1.is_ready is False
     assert report1.failure_code == StartupErrorCode.DB_MIGRATION_FAILED
 
-    # Second run succeeds
+    # Second run succeeds and skips already completed steps
     report2 = coordinator.prepare()
     assert report2.is_ready is True
-    assert report2.status == "ready"
+    assert report2.overall_status == StartupStepStatus.COMPLETED
 
 
 def test_recovery_contract_requeues_leases_and_preserves_approvals():
@@ -160,14 +176,12 @@ def test_recovery_contract_requeues_leases_and_preserves_approvals():
     preserved_approvals = []
 
     def custom_lease_recovery():
-        # Only expired leases are requeued
         requeued_leases.append("lease_exp_1")
         return len(requeued_leases)
 
     def custom_workflow_recovery():
-        # Pending approvals are kept intact
         preserved_approvals.append("appr_pending_1")
-        return len(preserved_approvals)
+        return (1, len(preserved_approvals))
 
     coordinator = StartupCoordinator(
         lease_recovery=custom_lease_recovery,
@@ -178,3 +192,31 @@ def test_recovery_contract_requeues_leases_and_preserves_approvals():
     assert report.is_ready is True
     assert requeued_leases == ["lease_exp_1"]
     assert preserved_approvals == ["appr_pending_1"]
+
+
+def test_readiness_probe_integration():
+    clock = FakeClock()
+    coordinator = StartupCoordinator(clock=clock.time)
+    report = coordinator.prepare()
+
+    health_report = HealthReport.from_components(
+        components=(
+            ComponentHealth(name="gateway", required=True, status="healthy"),
+            ComponentHealth(name="telegram", required=False, status="degraded"),
+        ),
+        checked_at=clock.time(),
+    )
+
+    probe = create_readiness_probe(
+        startup_report=report,
+        get_health_report=lambda: health_report,
+        check_capability_snapshot=lambda: True,
+        check_dependency_probes=lambda: True,
+    )
+
+    state = probe.evaluate()
+    assert state.is_ready is True
+    assert state.is_live is True
+    assert state.as_dict()["ready"] is True
+    assert probe.evaluate_component("gateway") == "healthy"
+    assert probe.evaluate_component("telegram") == "degraded"

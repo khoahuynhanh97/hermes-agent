@@ -10,14 +10,19 @@ from .processes import (
     build_process_topology,
 )
 from .readiness import (
+    ReadinessProbe,
     ReadinessState,
-    StartupReport,
-    StartupStepRecord,
-    StepStatus,
+    create_readiness_probe,
 )
 from .startup import (
     StartupCoordinator,
     StartupErrorCode,
+    StartupFailure,
+    StartupReport,
+    StartupStep,
+    StartupStepRecord,
+    StartupStepResult,
+    StartupStepStatus,
 )
 from .supervisor import (
     ChildProcess,
@@ -35,6 +40,7 @@ __all__ = [
     "ProcessRunner",
     "ProcessSpec",
     "ProcessTopologyError",
+    "ReadinessProbe",
     "ReadinessState",
     "RestartPolicy",
     "RuntimeConfig",
@@ -42,10 +48,14 @@ __all__ = [
     "RuntimeMode",
     "StartupCoordinator",
     "StartupErrorCode",
+    "StartupFailure",
     "StartupReport",
+    "StartupStep",
     "StartupStepRecord",
-    "StepStatus",
+    "StartupStepResult",
+    "StartupStepStatus",
     "Supervisor",
     "SupervisorEvent",
     "build_process_topology",
+    "create_readiness_probe",
 ]
