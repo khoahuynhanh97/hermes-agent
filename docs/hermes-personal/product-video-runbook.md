@@ -11,20 +11,20 @@ The pipeline traverses a deterministic **14-state workflow** protected by **5 Hu
 
 | Step | Workflow State | State Type | Action / Trigger | Human In The Loop (HITL) Gate |
 |---|---|---|---|---|
-| 1 | `idle` | Initial | Pipeline initialized | - |
+| 1 | `idle` | Initial | Pipeline initialized via PDP URL | - |
 | 2 | `researching` | Automated | Market & PDP research | - |
 | 3 | `AwaitingProductLock` | HITL Gate 1 | Pauses for product attributes lock | **Web Portal Approval** |
 | 4 | `building_resource_pack` | Automated | Compiles assets & scenes | - |
-| 5 | `creating_brief` | Automated | Generates creative brief | - |
+| 5 | `creating_brief` | Automated | Generates creative brief ($5 budget) | - |
 | 6 | `AwaitingBriefApproval` | HITL Gate 2 | Pauses for script & angle approval | **CLI / Chat Approval** |
-| 7 | `creating_scene_plan` | Automated | Decomposes script into scenes | - |
+| 7 | `creating_scene_plan` | Automated | Decomposes script into scenes ($5 budget) | - |
 | 8 | `AwaitingSceneApproval` | HITL Gate 3 | Pauses for scene layout review | **Web Portal Approval** |
-| 9 | `creating_storyboard` | Automated | Generates storyboard frames | - |
+| 9 | `creating_storyboard` | Automated | Generates storyboard frames ($10 budget) | - |
 | 10 | `AwaitingStoryboardApproval` | HITL Gate 4 | Pauses for frame approval | **Telegram Channel Approval** |
-| 11 | `rendering` | Automated | GPU-accelerated video rendering | - |
+| 11 | `rendering` | Automated | GPU video rendering ($50 budget) | - |
 | 12 | `AwaitingFinalApproval` | HITL Gate 5 | Pauses for final video review | **Telegram Channel Approval** |
-| 13 | `exporting` | Automated | Encoding to MP4 / TikTok specs | - |
-| 14 | `completed` | Terminal | Artifact delivered | - |
+| 13 | `exporting` | Automated | Encoding to MP4 specs ($20 budget) | - |
+| 14 | `completed` | Terminal | Artifact delivered (Total cost: $90) | - |
 
 ---
 
@@ -39,28 +39,18 @@ The pipeline traverses a deterministic **14-state workflow** protected by **5 Hu
 4. **Budget Reservation & Failure Release**:
    - Budgets are reserved prior to any paid GPU/generation calls and committed upon success. If a provider fails, the allocated budget is safely released back to the channel pool.
 5. **Durable Crash-Restart Recovery**:
-   - Workflow state and command execution history are persisted in SQLite. When workers crash, restart, or failover, pipelines resume exactly from the persisted state without duplicate paid side-effects.
+   - Workflow state and command execution history are persisted in SQLite. When workers crash, restart, or failover, pipelines resume exactly from the persisted state without duplicate paid side-effects across all 12 awaiting and executing states.
 
 ---
 
-## 4. Operator Commands & Troubleshooting
+## 4. Verification Path Reconciliation
+The current Gate 5 test suites are organized as follows:
+- **Product Video E2E & Recovery**: `tests/hermes_personal/product_video/test_product_to_video_e2e.py`, `test_restart_recovery.py`, `test_handlers.py`, `test_job_handlers.py`, `test_capabilities.py`, `test_binding.py`.
+- **Legacy Migration & Reconciliation**: `tests/hermes_personal/migration/test_reconciliation.py`.
+- **Gate 4 Workflow & Job Engines**: `tests/hermes_personal/workflows/test_workflow_engine.py`, `test_repository.py`, `test_budgets.py`, `test_jobs.py`, `test_approvals.py`, `test_recovery.py`.
+- **Capability Catalog & Policy**: `tests/hermes_personal/capabilities/`.
 
-### Resuming a Stalled Workflow
-```python
-from hermes_personal.product_video.handlers import ProductVideoJobHandlers, JobContext
-from hermes_personal.workflows.engine import WorkflowEngine
-
-# Load engine and check current state
-state, version = engine.get_workflow_state("wf_12345")
-print(f"Current State: {state}, Version: {version}")
-
-# Replay job safely with idempotency key
-ctx = JobContext(workflow_id="wf_12345", job_id="job_retry", expected_version=version, idempotency_key="idemp_retry_1")
-handlers = ProductVideoJobHandlers(workflow_engine=engine)
-result = handlers.render_job(ctx, "story_ref_current")
-```
-
-### Checking Legacy Data Reconciliation
+### Complete Verification Command:
 ```bash
-uv run pytest tests/hermes_personal/migration/test_reconciliation.py -v
+uv run pytest tests/hermes_personal/product_video tests/hermes_personal/migration tests/hermes_personal/workflows tests/hermes_personal/capabilities -q
 ```

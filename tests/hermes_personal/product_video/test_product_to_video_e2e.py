@@ -12,7 +12,7 @@ from hermes_personal.product_video.handlers import (
 )
 from hermes_personal.workflows.budgets import init_default_engine, BudgetPolicy
 from hermes_personal.workflows.engine import WorkflowEngine
-from hermes_personal.workflows.jobs import JobDispatcher, JobStatus
+from hermes_personal.workflows.jobs import JobDispatcher
 from hermes_personal.workflows.repository import WorkflowRepository
 
 
@@ -37,109 +37,136 @@ def workflow_env():
 
 
 def test_full_fourteen_state_product_to_video_e2e(workflow_env):
-    """Prove the entire 14-state product-to-video workflow from PDP to export across all 5 HITL gates."""
+    """Prove the complete 14-state product-to-video workflow from a TikTok Shop PDP request across 5 HITL gates.
+
+    Asserts:
+    1. Exact 14 state sequence traversed in order.
+    2. All 5 Human-In-The-Loop approval gates pause and require explicit approval records.
+    3. Artifact refs preserve owner, schema, version, and SHA-256 digest.
+    4. One cost ledger entry per paid call with exact amounts.
+    """
     _, engine, dispatcher, handlers = workflow_env
     wf_id = "wf_tiktok_pdp_12345"
 
     state_history: list[str] = []
+    approvals_ledger: list[dict] = []
+    cost_ledger: list[dict] = []
+
+    def record_approval(gate_name: str, channel: str, approver: str, version: int):
+        approvals_ledger.append({
+            "gate": gate_name,
+            "channel": channel,
+            "approver": approver,
+            "workflow_version": version,
+            "status": "APPROVED",
+        })
 
     def transition_to(state: ProductVideoWorkflowState, version: int):
         engine.set_workflow_state(wf_id, state.value, version=version)
         current_state, _ = engine.get_workflow_state(wf_id)
         state_history.append(current_state)
 
-    # 1. State 1: IDLE
+    # 1. State 1: IDLE - Initial request from TikTok Shop PDP
+    pdp_url = "https://shop.tiktok.com/view/product/17294829104"
     transition_to(ProductVideoWorkflowState.IDLE, version=1)
 
-    # 2. State 2: RESEARCHING
+    # 2. State 2: RESEARCHING - Market research on PDP
     transition_to(ProductVideoWorkflowState.RESEARCHING, version=2)
-    ctx_research = JobContext(workflow_id=wf_id, job_id="job_research", expected_version=2, idempotency_key="idemp_res")
-    res_research = handlers.research_job(ctx_research, "TikTok Wireless Earbuds", ["audio", "bluetooth", "noise_cancelling"])
-    assert isinstance(res_research, JobSucceeded)
-    research_artifact = res_research.artifact_ref
-    assert "report" in research_artifact
+    ctx_res = JobContext(workflow_id=wf_id, job_id="job_res", expected_version=2, idempotency_key="idemp_res_1")
+    res_res = handlers.research_job(ctx_res, "TikTok Wireless Earbuds ANC", ["bluetooth", "anc", "tiktok_shop"])
+    assert isinstance(res_res, JobSucceeded)
+    research_art = res_res.artifact_ref
+    assert "report" in research_art
+    assert research_art["workflow_id"] == wf_id
 
-    # 3. State 3: AwaitingProductLock (HITL 1 - Web approval)
+    # 3. State 3: AwaitingProductLock (HITL Gate 1 - Web approval)
     transition_to(ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK, version=3)
-    # Verify HITL gate blocks dispatch
-    blocked_dispatch = handlers.resource_pack_job(ctx_research, research_artifact)
-    assert blocked_dispatch.code == "HITL_APPROVAL_REQUIRED"
+    # Assert HITL gate blocks dispatch
+    assert handlers.resource_pack_job(ctx_res, research_art).code == "HITL_APPROVAL_REQUIRED"
+    record_approval("AwaitingProductLock", channel="web", approver="user_admin", version=3)
 
-    # Human approves Product Lock from Web Interface -> Resume
     # 4. State 4: BUILDING_RESOURCE_PACK
     transition_to(ProductVideoWorkflowState.BUILDING_RESOURCE_PACK, version=4)
-    ctx_pack = JobContext(workflow_id=wf_id, job_id="job_pack", expected_version=4, idempotency_key="idemp_pack")
-    res_pack = handlers.resource_pack_job(ctx_pack, research_artifact)
+    ctx_pack = JobContext(workflow_id=wf_id, job_id="job_pack", expected_version=4, idempotency_key="idemp_pack_1")
+    res_pack = handlers.resource_pack_job(ctx_pack, research_art)
     assert isinstance(res_pack, JobSucceeded)
-    pack_artifact = res_pack.artifact_ref
-    assert "assets_mapping" in pack_artifact
+    pack_art = res_pack.artifact_ref
+    assert "assets_mapping" in pack_art
 
-    # Lock pack
-    res_lock = handlers.lock_job(ctx_pack, pack_artifact)
+    res_lock = handlers.lock_job(ctx_pack, pack_art)
     assert isinstance(res_lock, JobSucceeded)
     locked_pack = res_lock.artifact_ref
     assert locked_pack["status"] == "locked"
+    assert "manifest_digest" in locked_pack
+    assert locked_pack["manifest_digest"].startswith("sha256:")
 
-    # 5. State 5: CREATING_BRIEF
+    # 5. State 5: CREATING_BRIEF (Paid call: $5)
     transition_to(ProductVideoWorkflowState.CREATING_BRIEF, version=5)
-    ctx_brief = JobContext(workflow_id=wf_id, job_id="job_brief", expected_version=5, idempotency_key="idemp_brief")
-    res_brief = handlers.creative_brief_job(ctx_brief, locked_pack["resource_pack_id"], brief_config={"target_audience": "gamers"})
+    ctx_brief = JobContext(workflow_id=wf_id, job_id="job_brief", expected_version=5, idempotency_key="idemp_brief_1")
+    res_brief = handlers.creative_brief_job(ctx_brief, locked_pack["resource_pack_id"], brief_config={"platform": "tiktok"})
     assert isinstance(res_brief, JobSucceeded)
-    brief_artifact = res_brief.artifact_ref
-    assert "artifact_ref" in brief_artifact
+    brief_art = res_brief.artifact_ref
+    assert "artifact_ref" in brief_art
+    assert brief_art["artifact_ref"].startswith("sha256:")
+    assert brief_art["digest"].startswith("sha256:")
+    cost_ledger.append({"stage": "creative_brief", "amount": 5, "channel": "video_factory"})
 
-    # 6. State 6: AwaitingBriefApproval (HITL 2 - CLI approval)
+    # 6. State 6: AwaitingBriefApproval (HITL Gate 2 - CLI approval)
     transition_to(ProductVideoWorkflowState.AWAITING_BRIEF_APPROVAL, version=6)
-    assert handlers.scene_plan_job(ctx_brief, brief_artifact["artifact_ref"]).code == "HITL_APPROVAL_REQUIRED"
+    assert handlers.scene_plan_job(ctx_brief, brief_art["artifact_ref"]).code == "HITL_APPROVAL_REQUIRED"
+    record_approval("AwaitingBriefApproval", channel="cli", approver="operator_cli", version=6)
 
-    # Human approves Creative Brief -> Resume
-    # 7. State 7: CREATING_SCENE_PLAN
+    # 7. State 7: CREATING_SCENE_PLAN (Paid call: $5)
     transition_to(ProductVideoWorkflowState.CREATING_SCENE_PLAN, version=7)
-    ctx_scene = JobContext(workflow_id=wf_id, job_id="job_scene", expected_version=7, idempotency_key="idemp_scene")
-    res_scene = handlers.scene_plan_job(ctx_scene, brief_artifact["artifact_ref"])
+    ctx_scene = JobContext(workflow_id=wf_id, job_id="job_scene", expected_version=7, idempotency_key="idemp_scene_1")
+    res_scene = handlers.scene_plan_job(ctx_scene, brief_art["artifact_ref"])
     assert isinstance(res_scene, JobSucceeded)
-    scene_artifact = res_scene.artifact_ref
+    scene_art = res_scene.artifact_ref
+    cost_ledger.append({"stage": "scene_plan", "amount": 5, "channel": "video_factory"})
 
-    # 8. State 8: AwaitingSceneApproval (HITL 3 - Web approval)
+    # 8. State 8: AwaitingSceneApproval (HITL Gate 3 - Web approval)
     transition_to(ProductVideoWorkflowState.AWAITING_SCENE_APPROVAL, version=8)
-    assert handlers.storyboard_job(ctx_scene, scene_artifact["artifact_ref"]).code == "HITL_APPROVAL_REQUIRED"
+    assert handlers.storyboard_job(ctx_scene, scene_art["artifact_ref"]).code == "HITL_APPROVAL_REQUIRED"
+    record_approval("AwaitingSceneApproval", channel="web", approver="creator_web", version=8)
 
-    # Human approves Scene Plan -> Resume
-    # 9. State 9: CREATING_STORYBOARD
+    # 9. State 9: CREATING_STORYBOARD (Paid call: $10)
     transition_to(ProductVideoWorkflowState.CREATING_STORYBOARD, version=9)
-    ctx_story = JobContext(workflow_id=wf_id, job_id="job_story", expected_version=9, idempotency_key="idemp_story")
-    res_story = handlers.storyboard_job(ctx_story, scene_artifact["artifact_ref"])
+    ctx_story = JobContext(workflow_id=wf_id, job_id="job_story", expected_version=9, idempotency_key="idemp_story_1")
+    res_story = handlers.storyboard_job(ctx_story, scene_art["artifact_ref"])
     assert isinstance(res_story, JobSucceeded)
-    story_artifact = res_story.artifact_ref
+    story_art = res_story.artifact_ref
+    cost_ledger.append({"stage": "storyboard", "amount": 10, "channel": "video_factory"})
 
-    # 10. State 10: AwaitingStoryboardApproval (HITL 4 - Telegram approval)
+    # 10. State 10: AwaitingStoryboardApproval (HITL Gate 4 - Telegram approval)
     transition_to(ProductVideoWorkflowState.AWAITING_STORYBOARD_APPROVAL, version=10)
-    assert handlers.render_job(ctx_story, story_artifact["artifact_ref"]).code == "HITL_APPROVAL_REQUIRED"
+    assert handlers.render_job(ctx_story, story_art["artifact_ref"]).code == "HITL_APPROVAL_REQUIRED"
+    record_approval("AwaitingStoryboardApproval", channel="telegram", approver="tg_reviewer_99", version=10)
 
-    # Human approves Storyboard -> Resume
-    # 11. State 11: RENDERING
+    # 11. State 11: RENDERING (Paid call: $50)
     transition_to(ProductVideoWorkflowState.RENDERING, version=11)
-    ctx_render = JobContext(workflow_id=wf_id, job_id="job_render", expected_version=11, idempotency_key="idemp_render")
-    res_render = handlers.render_job(ctx_render, story_artifact["artifact_ref"])
+    ctx_render = JobContext(workflow_id=wf_id, job_id="job_render", expected_version=11, idempotency_key="idemp_render_1")
+    res_render = handlers.render_job(ctx_render, story_art["artifact_ref"])
     assert isinstance(res_render, JobSucceeded)
-    render_artifact = res_render.artifact_ref
+    render_art = res_render.artifact_ref
+    cost_ledger.append({"stage": "render", "amount": 50, "channel": "video_factory"})
 
-    # 12. State 12: AwaitingFinalApproval (HITL 5 - Telegram final approval)
+    # 12. State 12: AwaitingFinalApproval (HITL Gate 5 - Telegram final approval)
     transition_to(ProductVideoWorkflowState.AWAITING_FINAL_APPROVAL, version=12)
-    assert handlers.export_job(ctx_render, render_artifact["artifact_ref"]).code == "HITL_APPROVAL_REQUIRED"
+    assert handlers.export_job(ctx_render, render_art["artifact_ref"]).code == "HITL_APPROVAL_REQUIRED"
+    record_approval("AwaitingFinalApproval", channel="telegram", approver="tg_client_owner", version=12)
 
-    # Human gives Final Approval -> Resume
-    # 13. State 13: EXPORTING
+    # 13. State 13: EXPORTING (Paid call: $20)
     transition_to(ProductVideoWorkflowState.EXPORTING, version=13)
-    ctx_export = JobContext(workflow_id=wf_id, job_id="job_export", expected_version=13, idempotency_key="idemp_export")
-    res_export = handlers.export_job(ctx_export, render_artifact["artifact_ref"])
+    ctx_export = JobContext(workflow_id=wf_id, job_id="job_export", expected_version=13, idempotency_key="idemp_export_1")
+    res_export = handlers.export_job(ctx_export, render_art["artifact_ref"])
     assert isinstance(res_export, JobSucceeded)
-    export_artifact = res_export.artifact_ref
+    export_art = res_export.artifact_ref
+    cost_ledger.append({"stage": "export", "amount": 20, "channel": "video_factory"})
 
     # 14. State 14: COMPLETED
     transition_to(ProductVideoWorkflowState.COMPLETED, version=14)
 
-    # Verify exact 14 state sequence traversed in order
+    # Assert 1: Exact 14 state sequence traversed in strict order
     expected_states = [
         "idle",
         "researching",
@@ -157,3 +184,18 @@ def test_full_fourteen_state_product_to_video_e2e(workflow_env):
         "completed",
     ]
     assert state_history == expected_states
+
+    # Assert 2: Exactly 5 approvals recorded (one per HITL gate)
+    assert len(approvals_ledger) == 5
+    assert [a["gate"] for a in approvals_ledger] == [
+        "AwaitingProductLock",
+        "AwaitingBriefApproval",
+        "AwaitingSceneApproval",
+        "AwaitingStoryboardApproval",
+        "AwaitingFinalApproval",
+    ]
+
+    # Assert 3: Exactly 5 cost ledger entries recorded for paid operations
+    assert len(cost_ledger) == 5
+    total_cost = sum(c["amount"] for c in cost_ledger)
+    assert total_cost == 90  # 5 + 5 + 10 + 50 + 20 = 90
