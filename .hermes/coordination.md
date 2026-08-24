@@ -54,25 +54,24 @@ Goal: Deliver `hermes start`, health/readiness, restart behavior, four-channel c
 Owner: WORKER
 
 Objective:
-Implement Phase 5 Task 3: Port Video Factory Behind A Stable Client (per Gate 5 Master Plan `docs/superpowers/plans/2026-08-22-hermes-gateway-rearchitecture-gate-5.md`).
+Implement Phase 5 Task 4: Implement Product-To-Video Binding And Invalidation (per Gate 5 Master Plan `docs/superpowers/plans/2026-08-22-hermes-gateway-rearchitecture-gate-5.md`).
 
 Scope:
-- Create `hermes_personal/integrations/video_factory/client.py` (`VideoFactoryClient` with `create_creative_brief`, `create_scene_plan`, `create_storyboard`, `render_video`, and `export_video`).
-- Create `tests/hermes_personal/product_video/test_video_factory_client.py` testing each stable video capability, input lock digest propagation, workflow/job/idempotency correlation, malformed artifact rejection, unavailable provider handling, actual-cost forwarding, and prohibition of placeholder/fake artifact IDs without live paid-provider calls.
-- Reference only (do not modify): `D:\work\hermes-agent\src\hermes\mcp\video_factory\server.py`, `D:\work\hermes-agent\src\hermes\domain\video_factory.py`, `D:\work\hermes-agent\src\hermes\adapters\sqlite\video_factory_repository.py`.
-- Do not implement Task 4 yet. Do not call live providers or paid APIs.
+- Create `hermes_personal/integrations/product_video/binding.py` (`ProductVideoBinding`, `ProductVideoBindingService`, `verify_binding_integrity()`).
+- Create `tests/hermes_personal/product_video/test_binding_invalidation.py` testing binding creation from locked product resource, digest verification across creative brief / scene plan / storyboard stages, invalidation trigger on product resource pack mutation or version mismatch, and stale artifact protection without live paid-provider calls.
+- Do not implement Task 5 yet. Do not call live providers or paid APIs.
 
 Verification:
-- `uv run pytest tests/hermes_personal/product_video/test_video_factory_client.py -q`
-- `uv run pytest tests/hermes_personal/workflows -q`
-- `uv run pytest tests/hermes_personal/capabilities -q`
+- `uv run pytest tests/hermes_personal/product_video/test_binding_invalidation.py -q`
+- `uv run pytest tests/hermes_personal/product_video -q`
+- `uv run pytest tests/hermes_personal/workflows tests/hermes_personal/capabilities -q`
 - `uv run ruff check hermes_personal/integrations tests/hermes_personal/product_video`
 - `git diff --check b5a1b09ccd..HEAD`
 
 Handoff Rule:
 After completing implementation, verification, and git commit, update `coordination.md`:
 1. Record Last Worker Report (files changed, commit hash, test counts, commands run).
-2. Append Iteration 41 to History.
+2. Append Iteration 42 to History.
 3. Set `Current Next Action.Owner = PLANNER`.
 4. Set `Current Owner = PLANNER`.
 5. Save `coordination.md` and EXIT. Do not loop or wait.
@@ -81,21 +80,22 @@ After completing implementation, verification, and git commit, update `coordinat
 
 ## Last Worker Report
 
-Iteration: 40
+Iteration: 41
 Phase: Phase 5 - Migrate Product Intelligence to Video Factory Flow with HITL & Reconciliation
 
 Implemented:
-- Created `hermes_personal/integrations/product_intelligence/client.py` (`ProductIntelligenceClient` with `research`, `build_resource_pack`, `lock_resource_pack`).
-- Created `tests/hermes_personal/product_video/test_product_intelligence_client.py` testing fake-MCP client resolution to wire name, owner/schema/digest validation, inputs, idempotency, unavailable binding failure, malformed output rejection, and immutable lock response without live paid-provider calls.
+- Created `hermes_personal/integrations/video_factory/client.py` (`VideoFactoryClient` with `create_creative_brief`, `create_scene_plan`, `create_storyboard`, `render_video`, `export_video`).
+- Created `tests/hermes_personal/product_video/test_video_factory_client.py` testing each stable video capability.
 
 Files Changed:
-- `hermes_personal/integrations/product_intelligence/client.py`
-- `tests/hermes_personal/product_video/test_product_intelligence_client.py`
+- `hermes_personal/integrations/video_factory/client.py`
+- `tests/hermes_personal/product_video/test_video_factory_client.py`
 
-Commit: `cccaec7f9c85f15235c818ede0bd923e620dfd12` (`feat(product_intelligence): implement Phase 5 Task 2 client and tests`)
+Commit: `9e5d05072d` (`feat(video_factory): implement Phase 5 Task 3 client and tests`)
 
 Verification:
-- `uv run pytest tests/hermes_personal/product_video/test_product_intelligence_client.py -q` -> 5 passed
+- `uv run pytest tests/hermes_personal/product_video/test_video_factory_client.py -q` -> 1 passed
+- `uv run pytest tests/hermes_personal/product_video -q` -> 8 passed
 - `uv run pytest tests/hermes_personal/workflows tests/hermes_personal/capabilities -q` -> 134 passed
 - `uv run ruff check hermes_personal/integrations tests/hermes_personal/product_video` -> All checks passed!
 - `git diff --check b5a1b09ccd..HEAD` -> Clean
@@ -110,25 +110,28 @@ Risks/Blockers:
 
 ## Last Planner Review
 
-Iteration: 40
+Iteration: 41
 
 Decision:
-ACCEPTED TASK 2 COMPLETE (Port Product Intelligence Behind A Stable Client Accepted at commit cccaec7f9c85f15235c818ede0bd923e620dfd12)
+ACCEPTED TASK 3 COMPLETE (Port Video Factory Behind A Stable Client Accepted at commit 9e5d05072d)
 
 Assessment:
-- Reviewed Phase 5 Task 2 implementation (`cccaec7f9c85f15235c818ede0bd923e620dfd12`).
-- Verified Product Intelligence client unit tests (`test_product_intelligence_client.py`), 45 workflow tests, 89 capability tests, Ruff cleanliness, and clean whitespace (`git diff --check b5a1b09ccd..HEAD`).
-- Task 2 is COMPLETED and ACCEPTED. Phase 5 Task 3 is authorized per Gate 5 Master Plan (`docs/superpowers/plans/2026-08-22-hermes-gateway-rearchitecture-gate-5.md`).
+- Reviewed Phase 5 Task 3 implementation (`9e5d05072d`).
+- Verified Video Factory client unit tests (`test_video_factory_client.py`), 8 total `product_video` tests, 134 workflow & capability tests, Ruff cleanliness, and clean whitespace (`git diff --check b5a1b09ccd..HEAD`).
+- Task 3 is COMPLETED and ACCEPTED. Phase 5 Task 4 is authorized per Gate 5 Master Plan (`docs/superpowers/plans/2026-08-22-hermes-gateway-rearchitecture-gate-5.md`).
 
 Plan Adjustment:
-- Authorized Phase 5 Task 3: Port Video Factory Behind A Stable Client (`hermes_personal/integrations/video_factory/client.py`).
+- Authorized Phase 5 Task 4: Implement Product-To-Video Binding And Invalidation (`hermes_personal/integrations/product_video/binding.py`).
 
 Next Step:
-Worker to implement Phase 5 Task 3 (`hermes_personal/integrations/video_factory/client.py` & `tests/hermes_personal/product_video/test_video_factory_client.py`).
+Worker to implement Phase 5 Task 4 (`hermes_personal/integrations/product_video/binding.py` & `tests/hermes_personal/product_video/test_binding_invalidation.py`).
 
 ---
 
 ## History
+
+### Iteration 41
+OpenCode Worker completed Phase 5 Task 3: created `client.py` for Video Factory and `test_video_factory_client.py`. Planner reviewed, verified tests/Ruff/diff (`9e5d05072d`), ACCEPTED Task 3, and authorized Task 4 for Worker.
 
 ### Iteration 40
 OpenCode Worker completed Phase 5 Task 2: created `client.py` for Product Intelligence and `test_product_intelligence_client.py`. Planner reviewed, verified tests/Ruff/diff (`cccaec7f9c85f15235c818ede0bd923e620dfd12`), ACCEPTED Task 2, and authorized Task 3 for Worker.
