@@ -9,7 +9,7 @@ IN_PROGRESS
 ## Current Phase
 Phase 7 - Runtime Supervision, Multi-Channel Cutover, and Legacy Retirement
 
-## Current Owner
+#### Current Owner
 PLANNER
 
 ## Overall Plan
@@ -53,47 +53,36 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 Owner: PLANNER
 
 Objective:
-Review and accept Phase 7 Task 3 implementation (`577db49ae0`), accept Task 3, and authorize Phase 7 Task 4 (Gate Ingress On Startup Recovery And Readiness) for Worker.
+Review and accept Phase 7 Task 3 Remediation (`f3b29b9008`), accept Task 3, and authorize Phase 7 Task 4 (Gate Ingress On Startup Recovery And Readiness) for Worker.
 
 Scope:
-- Verify `ChildProcess`, `ProcessRunner`, `DefaultProcessRunner`, `Supervisor`, and `SupervisorEvent` in `hermes_personal/runtime/supervisor.py`.
-- Verify bounded exponential backoff calculation and sliding attempt window logic.
-- Verify required child exhaustion exit behavior vs optional child degraded non-blocking behavior.
-- Verify reverse-order graceful stop and forced kill timeout handling.
-- Verify unit tests in `tests/hermes_personal/runtime/test_supervisor.py`.
+- Verify restart attempt window reset behavior in `test_restart_attempt_window_reset`.
+- Verify forced kill after timeout in `test_forced_kill_after_shutdown_timeout`.
+- Verify exponential backoff sequence assertions in `test_unexpected_child_exit_triggers_bounded_exponential_backoff`.
 - Accept Phase 7 Task 3 and authorize Phase 7 Task 4 for Worker.
 
 ---
 
 ## Last Worker Report
 
-Iteration: 65
+Iteration: 66
 Phase: Phase 7 - Runtime Supervision, Multi-Channel Cutover, and Legacy Retirement
 
 Implemented:
-- Implemented `ChildProcess`, `SubprocessChild`, `ProcessRunner`, and `DefaultProcessRunner` in `hermes_personal/runtime/supervisor.py` running subprocesses with `shell=False` and process isolation.
-- Implemented `Supervisor` with:
-  * Forward-order process startup (`start_all()`).
-  * Step-based process polling and crash detection (`step()`).
-  * Bounded exponential backoff restart: `min(base * (2 ** attempts), max)` within sliding attempt window (`window_seconds`).
-  * Required child exhaustion leading to graceful supervisor shutdown and non-zero exit code.
-  * Optional child failure degrading to `degraded`/`unavailable` without terminating the global runtime.
-  * Reverse-order graceful shutdown (`stop_all()`) with SIGINT/terminate, shutdown timeout wait, forced kill fallback, and zero orphan children.
-  * Redacted event emission (`SupervisorEvent`) and aggregate health reporting (`HealthReport`).
-- Exported `Supervisor`, `SupervisorEvent`, `ChildProcess`, `ProcessRunner`, `DefaultProcessRunner` in `hermes_personal/runtime/__init__.py`.
-- Added 5 unit tests in `tests/hermes_personal/runtime/test_supervisor.py`.
-- Verified all 278 tests across runtime, learning, gateway, and capabilities suites.
+- Updated `tests/hermes_personal/runtime/test_supervisor.py` to cover all explicit Gate 7 Step 1 lifecycle contracts:
+  * `test_restart_attempt_window_reset`: verifies attempts aging beyond `RestartPolicy.window_seconds` are pruned and the attempt counter is reset, preventing premature exhaustion.
+  * `test_forced_kill_after_shutdown_timeout`: uses `FakeChildProcess` with stubborn terminate behavior, asserting that when `wait()` exceeds `shutdown_timeout_seconds`, the supervisor emits `killing`, executes `kill()`, and leaves no orphan children.
+  * `test_unexpected_child_exit_triggers_bounded_exponential_backoff`: explicitly asserts sequential backoff multiplier progression (`base * (2 ** attempt)`).
+- Verified all 7 supervisor unit tests and 280 broad repository tests pass cleanly.
 
 Files Changed:
-- `hermes_personal/runtime/__init__.py`
-- `hermes_personal/runtime/supervisor.py`
 - `tests/hermes_personal/runtime/test_supervisor.py`
 
-Commit: `577db49ae0` (`feat(runtime): implement supervisor lifecycle, bounded restart, and graceful shutdown`) / Task 3 Range: `578a056781..577db49ae0`
+Commit: `f3b29b9008` (`test(runtime): add supervisor restart window reset and forced kill timeout regressions`) / Task 3 Range: `577db49ae0..f3b29b9008`
 
 Verification:
-- `uv run pytest tests/hermes_personal/runtime/test_supervisor.py -q` -> 5 passed in 0.40s
-- `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 278 passed in 14.01s
+- `uv run pytest tests/hermes_personal/runtime/test_supervisor.py -q` -> 7 passed in 0.42s
+- `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 280 passed in 14.58s
 - `uv run ruff check hermes_personal/runtime tests/hermes_personal/runtime/test_supervisor.py` -> All checks passed!
 - `git diff --check` -> Clean (0 whitespace/diff errors)
 - `git status --short` -> Clean for all project files (only local runtime helper scripts remain):
@@ -119,39 +108,49 @@ Risks/Blockers:
 
 ## Last Planner Review
 
-Iteration: 64
+Iteration: 65
 
 Decision:
-CONTINUE: Phase 7 Task 2 remediation is accepted; Phase 7 remains IN_PROGRESS and Worker is authorized for Phase 7 Task 3.
+REWORK: Phase 7 Task 3 is not accepted. Current tests pass, but the implementation/test evidence does not cover two explicit Gate 7 Task 3 acceptance requirements: restart attempt-window reset and forced kill after shutdown timeout.
 
 Assessment:
-- Reviewed Worker Report Iteration 64 and commit `578a056781` against Gate 7 Task 2 and the prior Planner REWORK.
-- The prior worktree/API drift is closed: `RuntimeConfig`, `RuntimeConfigError`, `RuntimeMode`, `ProcessSpec`, `ProbeSpec`, `ProbeType`, `RestartPolicy`, `ProcessTopologyError`, and `build_process_topology` import consistently through the runtime package.
-- Task 2 now provides immutable process specs, production static bundle validation, port uniqueness validation, and required secret presence validation without printing secret values.
-- Development and production Web behavior is covered: dev includes `web_ui`, production serves Web via `app_api` with static dir/digest requirements.
-- Phase 7 still has supervisor/startup/cutover/acceptance work, so the correct decision is CONTINUE to Task 3.
+- Reviewed Worker Report Iteration 65 and commit `577db49ae0` against Gate 7 Task 3.
+- The supervisor has useful baseline behavior: ordered start, process polling, restart attempts, required child exhaustion, optional child degradation, reverse-order stop, event redaction, and health reporting.
+- Focused and broad tests pass on the current tree, and tracked status is clean.
+- Acceptance gap: Gate 7 Task 3 explicitly requires tests for attempt-window reset and forced kill after timeout. `tests/hermes_personal/runtime/test_supervisor.py` currently has 5 tests and does not simulate attempts aging beyond `RestartPolicy.window_seconds`; it also does not simulate a child that remains alive after terminate/wait timeout and therefore requires `kill()`.
+- Because later startup/recovery and final supervisor recovery E2E depend on restart-window and no-orphan semantics, Task 3 should not be accepted without those regressions.
 
 Evidence/Findings:
-- `git show --stat --oneline 578a056781` shows targeted remediation in `hermes_personal/runtime/config.py`, `hermes_personal/runtime/processes.py`, and `tests/hermes_personal/runtime/test_processes.py`.
-- `tests/hermes_personal/runtime/test_processes.py` covers topology membership, production Web handling, no raw secret markers in argv, immutability, duplicate port rejection, static dir/digest requirement, and secret presence validation with key names only.
-- Fresh verification: `uv run pytest tests/hermes_personal/runtime/test_processes.py -q` -> 7 passed in 0.42s.
-- Fresh verification: `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 273 passed in 13.92s.
-- Fresh verification: `uv run ruff check hermes_personal/runtime tests/hermes_personal/runtime/test_processes.py` -> All checks passed.
+- `git show --stat --oneline 577db49ae0` shows Task 3 changes in `hermes_personal/runtime/__init__.py`, `hermes_personal/runtime/supervisor.py`, and `tests/hermes_personal/runtime/test_supervisor.py`.
+- `test_supervisor.py` covers ordered start, one restart event, required exhaustion, optional degradation, and normal reverse-order stop/no orphan. It does not cover attempt-window reset or forced kill after timeout.
+- `Supervisor.stop_all()` has a forced-kill branch, but current fake child `terminate()` immediately sets exit code and `wait()` never times out, so the branch is not exercised.
+- Fresh verification: `uv run pytest tests/hermes_personal/runtime/test_supervisor.py -q` -> 5 passed in 0.41s.
+- Fresh verification: `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 278 passed in 14.12s.
+- Fresh verification: `uv run ruff check hermes_personal/runtime tests/hermes_personal/runtime/test_supervisor.py` -> All checks passed.
 - Fresh verification: `git diff --check` -> clean.
-- `git status --short` shows only local untracked helper/runtime files (`build/`, `coord.txt`, `create_shortcut.vbs`, `launch_gui.vbs`, `run_worker.bat`, `update_coord.py`, `worker-prompt.txt`, `worker-scheduler.ps1`, `worker.ps1`).
+- `git status --short` shows only local untracked helper/runtime files.
 
 Plan Adjustment:
-None. The prior Task 2 worktree/API drift is closed, and execution returns to the Gate 7 task sequence with Task 3 next.
+Reason: Missing explicit regression coverage for attempt-window reset and forced-kill shutdown timeout required by Gate 7 Task 3.
+Impact: Phase 7 Task 3 remains IN_PROGRESS for focused test/lifecycle additions; Task 4 startup recovery is blocked.
+Affected phases/tasks: Phase 7 Task 3 supervisor lifecycle; Phase 7 Task 4 startup recovery.
+Proposed correction: Add tests for attempt-window reset, stubborn-child forced kill timeout, and backoff sequence assertions, verify focused and broad suites, commit, and hand off.
 
-Reviewed Worker Iteration: 64
-Reviewed Commit/Range: `578a056781` / `73ff7f89c7..578a056781` (coordination handoff at `e68d693434`)
+Reviewed Worker Iteration: 65
+Reviewed Commit/Range: `577db49ae0` / `578a056781..577db49ae0` (coordination handoff at `267229fd01`)
 
 Next Step:
+Worker to add missing Task 3 attempt-window and forced-kill regression coverage, commit, and hand back Task 3.
 ---
-
 ## History
 
-### Iteration 64 Planner
+### Iteration 66
+Antigravity Worker remediated Phase 7 Task 3: added explicit unit tests for attempt-window reset, forced kill after timeout, and exponential backoff progression with 7 unit tests and 280 total passing tests (commit f3b29b9008). Handed off to Planner for Task 3 acceptance.
+
+### Iteration 65
+Antigravity Worker implemented Phase 7 Task 3: supervisor lifecycle, bounded exponential restart, graceful shutdown, and health sink integration with 5 unit tests and 278 total passing tests (commit 577db49ae0). Handed off to Planner for Task 3 acceptance.
+
+### Iteration 65 Planner
 Planner accepted Phase 7 Task 2 remediation at commit 578a056781 after verifying coherent runtime config/process exports, 7 focused tests, 273 broad tests, Ruff, and diff-check. Phase 7 remains IN_PROGRESS and Worker is assigned Task 3 supervisor lifecycle and bounded restart.### Iteration 64
 Antigravity Worker reconciled Phase 7 Task 2: aligned RuntimeConfig, ProcessSpec, and secret presence validation into a coherent committed state with 7 unit tests and 273 total passing tests (commit 578a056781). Handed off to Planner for Task 2 acceptance.
 
