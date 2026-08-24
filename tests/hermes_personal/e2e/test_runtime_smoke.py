@@ -1,24 +1,34 @@
 from __future__ import annotations
 
+import asyncio
 import json
-from typing import Any, Mapping
+from dataclasses import dataclass, field
+from typing import Any, Iterator, Mapping
 from starlette.testclient import TestClient
 
 from hermes_personal.application.app import create_application
 from hermes_personal.application.events_api import ArtifactRecord, EventsAPI, InMemoryEventStore
 from hermes_personal.application.health_api import HealthAPI
-from hermes_personal.contracts.events import AgentEvent
-from hermes_personal.contracts.operator import OperatorCommand, OperatorCommandType
-from hermes_personal.contracts.principal import PrincipalContext
+from hermes_personal.capabilities.bindings import ImplementationBinding
+from hermes_personal.capabilities.manifest import INITIAL_CAPABILITIES
+from hermes_personal.capabilities.policy import CapabilityPolicyEvaluator
+from hermes_personal.capabilities.service import CapabilityCatalogService
+from hermes_personal.capabilities.snapshots import CapabilitySnapshotRepository
+from hermes_personal.contracts import AgentEvent, AgentTurnRequest, PrincipalContext
+from hermes_personal.contracts.operator import OperatorCommand
+from hermes_personal.identity import IdentityRepository
 from hermes_personal.observability.health import ComponentHealth, HealthReport
+from hermes_personal.orchestration import AgentOutput, HermesTurnService
+from hermes_personal.orchestration.event_repository import EventRepository
 from hermes_personal.runtime.config import RuntimeConfig
 from hermes_personal.runtime.processes import ProcessSpec, build_process_topology
 from hermes_personal.runtime.readiness import ReadinessProbe
 from hermes_personal.runtime.startup import StartupReport, StartupStepRecord, StartupStepStatus
 from hermes_personal.runtime.supervisor import ChildProcess, ProcessRunner, Supervisor
+from hermes_personal.sessions import SessionRepository
+from hermes_personal.storage.sqlite import connect
 from hermes_personal.workflows.engine import WorkflowEngine
 from hermes_personal.workflows.repository import WorkflowRepository
-from hermes_personal.storage.sqlite import connect
 
 
 class SmokeChildProcess(ChildProcess):
@@ -71,15 +81,63 @@ class SmokeRunner(ProcessRunner):
         child.terminate()
 
 
+@dataclass
+class SmokeTranscript:
+    events: list[AgentEvent] = field(default_factory=list)
+    user_turns: list[str] = field(default_factory=list)
+    event_persisted: list[bool] = field(default_factory=list)
+    initial_history: list[Mapping[str, Any]] = field(default_factory=list)
+
+    @property
+    def history(self) -> tuple[Mapping[str, Any], ...]:
+        user_msgs = [{"role": "user", "content": text} for text in self.user_turns]
+        return tuple(self.initial_history + user_msgs)
+
+    def append_user_turn(self, text: str) -> None:
+        self.user_turns.append(text)
+
+    def append_event(self, event: AgentEvent) -> None:
+        self.events.append(event)
+        self.event_persisted.append(False)
+
+
+@dataclass
+class SmokeTranscriptFactory:
+    transcripts: dict[str, SmokeTranscript] = field(default_factory=dict)
+
+    def for_session(self, session_id: str) -> SmokeTranscript:
+        if session_id not in self.transcripts:
+            self.transcripts[session_id] = SmokeTranscript()
+        return self.transcripts[session_id]
+
+
+@dataclass
+class SmokeAgent:
+    catalog_service: CapabilityCatalogService | None = None
+
+    def run(
+        self, request: AgentTurnRequest, history: tuple[Mapping[str, Any], ...]
+    ) -> Iterator[AgentOutput]:
+        yield AgentOutput(
+            event_type="text_delta",
+            data={"text": f"Processing Web natural language turn for user: {request.message}"},
+        )
+        yield AgentOutput(
+            event_type="completed",
+            data={"text": "Web turn executed successfully."},
+        )
+
+
 def test_production_http_surface_runtime_smoke_cycle():
-    """Prove end-to-end fake-provider local runtime lifecycle over production HTTP API routes:
+    """Prove end-to-end fake-provider local runtime lifecycle over production HTTP API routes and Web Turn Service:
 
     1. Process topology built and started via Supervisor
     2. Readiness probe evaluates to READY -> HTTP GET /health/ready returns 200
-    3. Web/Operator command submitted via HTTP POST /api/operator/command
-    4. Real durable AgentEvents recorded and retrieved via HTTP GET /api/events/replay
-    5. Artifact metadata retrieved via HTTP GET /api/artifacts/{id} with owner verification
-    6. Clean supervisor shutdown with zero orphan child processes
+    3. Web Natural-Language Turn executed via HermesTurnService with durable SQLite events
+    4. Web/Operator command submitted via HTTP POST /api/operator/command
+    5. Real durable AgentEvents recorded and retrieved via HTTP GET /api/events/replay
+    6. Artifact metadata retrieved via HTTP GET /api/artifacts/{id} with owner verification
+    7. Clean supervisor shutdown with zero orphan child processes
     """
     # 1. Process topology & Supervisor
     config = RuntimeConfig(mode="development", app_api_port=8000, enable_mcp=True, enable_workers=True)
@@ -117,10 +175,72 @@ def test_production_http_surface_runtime_smoke_cycle():
     health_api = HealthAPI(readiness_probe=probe)
     event_store = InMemoryEventStore()
 
-    # Setup command handler connected to workflow engine
+    # 3. Setup SQLite storage and Web Natural-Language Turn Service
     conn = connect(":memory:")
+    identity_repo = IdentityRepository(conn)
+    session_repo = SessionRepository(conn)
+    event_repo = EventRepository(conn)
     wf_repo = WorkflowRepository(conn)
     wf_engine = WorkflowEngine(repository=wf_repo)
+
+    snap_repo = CapabilitySnapshotRepository(conn)
+    bindings = tuple(
+        ImplementationBinding(
+            capability_id=spec.capability_id,
+            wire_name=spec.capability_id.replace(".", "_"),
+            source="builtin",
+            provider=spec.owner,
+            implementation_version="1.0.0",
+            input_schema_version=spec.input_schema_version,
+            output_schema_version=spec.output_schema_version,
+            schema_digest=f"sha256:{spec.capability_id}",
+            health="healthy",
+        )
+        for spec in INITIAL_CAPABILITIES.values()
+    )
+    snap_repo.save_and_activate(bindings)
+    catalog_service = CapabilityCatalogService(
+        snapshot_repository=snap_repo,
+        policy_evaluator=CapabilityPolicyEvaluator(),
+    )
+
+    owner = identity_repo.create_owner("Alice Operator")
+    identity_repo.link(owner.owner_user_id, "web", "web_user_01")
+    web_session = session_repo.get_or_create(owner.owner_user_id, "web", "conv_web_001")
+
+    agent = SmokeAgent(catalog_service=catalog_service)
+    turn_service = HermesTurnService(
+        identity_repository=identity_repo,
+        session_repository=session_repo,
+        event_repository=event_repo,
+        transcript_factory=SmokeTranscriptFactory(),
+        agent=agent,
+        catalog_service=catalog_service,
+    )
+
+    # Execute Web Natural-Language Turn
+    web_turn_req = AgentTurnRequest(
+        principal=PrincipalContext(
+            actor_id="web_user_01",
+            owner_user_id=owner.owner_user_id,
+            channel="web",
+            session_id=web_session.session_id,
+        ),
+        message="Start video production workflow for product launch",
+        turn_id="turn_web_smoke_01",
+    )
+
+    async def _run_web_turn():
+        events = []
+        async for evt in turn_service.handle(web_turn_req):
+            events.append(evt)
+        return events
+
+    web_events = asyncio.run(_run_web_turn())
+    assert len(web_events) >= 2
+    assert web_events[0].event_type == "text_delta"
+    assert "video production workflow" in web_events[0].data["text"]
+    assert web_events[-1].event_type == "completed"
 
     # Pre-seed workflow into approval_requested state (version 2)
     wf_engine.handle({
@@ -147,7 +267,7 @@ def test_production_http_surface_runtime_smoke_cycle():
             evt = AgentEvent(
                 event_type="workflow_state",
                 principal_id=cmd.principal.owner_user_id,
-                session_id="session_smoke_01",
+                session_id=web_session.session_id,
                 turn_id="turn_smoke_01",
                 sequence=1,
                 workflow_id=cmd.target_id,
@@ -165,7 +285,7 @@ def test_production_http_surface_runtime_smoke_cycle():
 
     artifact = ArtifactRecord(
         artifact_id="art_video_script_01",
-        owner_user_id="user_owner_01",
+        owner_user_id=owner.owner_user_id,
         artifact_type="video_script",
         version=1,
         digest="sha256:script_digest_01",
@@ -177,7 +297,7 @@ def test_production_http_surface_runtime_smoke_cycle():
     app = create_application(health_api=health_api, events_api=events_api)
     client = TestClient(app)
 
-    # 3. HTTP Health Endpoints
+    # 4. HTTP Health Endpoints
     live_resp = client.get("/health/live")
     assert live_resp.status_code == 200
     assert live_resp.json()["status"] == "ok"
@@ -188,12 +308,12 @@ def test_production_http_surface_runtime_smoke_cycle():
     assert ready_data["status"] == "ready"
     assert ready_data["ready"] is True
 
-    # 4. HTTP Operator Command (Web Ingress)
+    # 5. HTTP Operator Command (Web Ingress via /api/operator/command)
     cmd_payload = {
         "command_id": "cmd_web_turn_01",
         "command_type": "approve",
         "target_id": "wf_web_smoke_01",
-        "owner_id": "user_owner_01",
+        "owner_id": owner.owner_user_id,
         "expected_version": 2,
         "payload": {"reason": "Approved by Web Operator"},
     }
@@ -205,9 +325,9 @@ def test_production_http_surface_runtime_smoke_cycle():
     assert cmd_resp.status_code == 200
     assert cmd_resp.json()["status"] == "ok"
 
-    # 5. HTTP Durable Event Replay
+    # 6. HTTP Durable Event Replay
     replay_resp = client.get(
-        "/api/events/replay?after_seq=0&owner_id=user_owner_01",
+        f"/api/events/replay?after_seq=0&owner_id={owner.owner_user_id}",
         headers={"Authorization": "Bearer fake_token"},
     )
     assert replay_resp.status_code == 200
@@ -217,9 +337,9 @@ def test_production_http_surface_runtime_smoke_cycle():
     assert events[0]["event_type"] == "workflow_state"
     assert events[0]["sequence"] == 1
 
-    # 6. HTTP Artifact Access
+    # 7. HTTP Artifact Access
     art_resp = client.get(
-        "/api/artifacts/art_video_script_01?owner_id=user_owner_01",
+        f"/api/artifacts/art_video_script_01?owner_id={owner.owner_user_id}",
         headers={"Authorization": "Bearer fake_token"},
     )
     assert art_resp.status_code == 200
@@ -232,7 +352,7 @@ def test_production_http_surface_runtime_smoke_cycle():
     )
     assert art_forbidden.status_code == 403
 
-    # 7. Clean supervisor shutdown with zero orphan processes
+    # 8. Clean supervisor shutdown with zero orphan processes
     supervisor.stop_all()
     for spec in topology:
         assert runner.active_processes[spec.name].is_alive() is False
