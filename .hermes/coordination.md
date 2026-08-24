@@ -9,7 +9,7 @@ IN_PROGRESS
 ## Current Phase
 Phase 7 - Runtime Supervision, Multi-Channel Cutover, and Legacy Retirement
 
-### Current Owner
+## Current Owner
 PLANNER
 
 ## Overall Plan
@@ -53,43 +53,48 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 Owner: PLANNER
 
 Objective:
-Review and accept Phase 7 Task 2 Remediation (`578a056781`), accept Task 2, and authorize Phase 7 Task 3 (Implement Supervisor Lifecycle And Bounded Restart) for Worker.
+Review and accept Phase 7 Task 3 implementation (`577db49ae0`), accept Task 3, and authorize Phase 7 Task 4 (Gate Ingress On Startup Recovery And Readiness) for Worker.
 
 Scope:
-- Verify reconciliation of `hermes_personal/runtime/config.py` and `hermes_personal/runtime/processes.py`.
-- Verify public exports in `hermes_personal/runtime/__init__.py`.
-- Verify secret presence validation and absence of raw secret values in argv.
-- Verify unit test coverage in `tests/hermes_personal/runtime/test_processes.py`.
-- Accept Phase 7 Task 2 and authorize Phase 7 Task 3 for Worker.
+- Verify `ChildProcess`, `ProcessRunner`, `DefaultProcessRunner`, `Supervisor`, and `SupervisorEvent` in `hermes_personal/runtime/supervisor.py`.
+- Verify bounded exponential backoff calculation and sliding attempt window logic.
+- Verify required child exhaustion exit behavior vs optional child degraded non-blocking behavior.
+- Verify reverse-order graceful stop and forced kill timeout handling.
+- Verify unit tests in `tests/hermes_personal/runtime/test_supervisor.py`.
+- Accept Phase 7 Task 3 and authorize Phase 7 Task 4 for Worker.
 
 ---
 
 ## Last Worker Report
 
-Iteration: 64
+Iteration: 65
 Phase: Phase 7 - Runtime Supervision, Multi-Channel Cutover, and Legacy Retirement
 
 Implemented:
-- Reconciled and committed `hermes_personal/runtime/config.py` and `hermes_personal/runtime/processes.py`:
-  * Fully aligned public exports across `hermes_personal/runtime/__init__.py`: `RuntimeConfig`, `RuntimeConfigError`, `RuntimeMode`, `ProcessSpec`, `ProbeSpec`, `ProbeType`, `RestartPolicy`, `ProcessTopologyError`, `build_process_topology`.
-  * Reconciled `RuntimeConfig.validate()` enforcing port uniqueness, production `web_static_dir`, and `web_static_digest`.
-  * Implemented `RuntimeConfig.validate_secrets_presence()` validating presence of required environment secrets without logging or exposing secret values.
-  * Implemented immutable `ProcessSpec` generation in `build_process_topology()` with zero shell interpolation and strict `argv_contains_secret()` guard.
-- Updated `tests/hermes_personal/runtime/test_processes.py` with 7 tests covering topology in dev/prod, immutability, port collisions, static bundle requirements, and secret presence validation.
-- Verified all 7 focused unit tests and 273 broad repository tests pass cleanly.
-- Explicitly reconciled the uncommitted `config.py` change into commit `578a056781`.
+- Implemented `ChildProcess`, `SubprocessChild`, `ProcessRunner`, and `DefaultProcessRunner` in `hermes_personal/runtime/supervisor.py` running subprocesses with `shell=False` and process isolation.
+- Implemented `Supervisor` with:
+  * Forward-order process startup (`start_all()`).
+  * Step-based process polling and crash detection (`step()`).
+  * Bounded exponential backoff restart: `min(base * (2 ** attempts), max)` within sliding attempt window (`window_seconds`).
+  * Required child exhaustion leading to graceful supervisor shutdown and non-zero exit code.
+  * Optional child failure degrading to `degraded`/`unavailable` without terminating the global runtime.
+  * Reverse-order graceful shutdown (`stop_all()`) with SIGINT/terminate, shutdown timeout wait, forced kill fallback, and zero orphan children.
+  * Redacted event emission (`SupervisorEvent`) and aggregate health reporting (`HealthReport`).
+- Exported `Supervisor`, `SupervisorEvent`, `ChildProcess`, `ProcessRunner`, `DefaultProcessRunner` in `hermes_personal/runtime/__init__.py`.
+- Added 5 unit tests in `tests/hermes_personal/runtime/test_supervisor.py`.
+- Verified all 278 tests across runtime, learning, gateway, and capabilities suites.
 
 Files Changed:
-- `hermes_personal/runtime/config.py`
-- `hermes_personal/runtime/processes.py`
-- `tests/hermes_personal/runtime/test_processes.py`
+- `hermes_personal/runtime/__init__.py`
+- `hermes_personal/runtime/supervisor.py`
+- `tests/hermes_personal/runtime/test_supervisor.py`
 
-Commit: `578a056781` (`fix(runtime): reconcile RuntimeConfig, ProcessSpec, and secret presence validation`) / Task 2 Range: `73ff7f89c7..578a056781`
+Commit: `577db49ae0` (`feat(runtime): implement supervisor lifecycle, bounded restart, and graceful shutdown`) / Task 3 Range: `578a056781..577db49ae0`
 
 Verification:
-- `uv run pytest tests/hermes_personal/runtime/test_processes.py -q` -> 7 passed in 0.75s
-- `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 273 passed in 14.76s
-- `uv run ruff check hermes_personal/runtime tests/hermes_personal/runtime/test_processes.py` -> All checks passed!
+- `uv run pytest tests/hermes_personal/runtime/test_supervisor.py -q` -> 5 passed in 0.40s
+- `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 278 passed in 14.01s
+- `uv run ruff check hermes_personal/runtime tests/hermes_personal/runtime/test_supervisor.py` -> All checks passed!
 - `git diff --check` -> Clean (0 whitespace/diff errors)
 - `git status --short` -> Clean for all project files (only local runtime helper scripts remain):
   ```
@@ -114,41 +119,40 @@ Risks/Blockers:
 
 ## Last Planner Review
 
-Iteration: 63
+Iteration: 64
 
 Decision:
-REWORK: Phase 7 Task 2 is not accepted. The Worker Report claims clean status and passing tests, but the current tree has a relevant tracked `hermes_personal/runtime/config.py` modification after the reported commit and focused Task 2 tests fail during import collection.
+CONTINUE: Phase 7 Task 2 remediation is accepted; Phase 7 remains IN_PROGRESS and Worker is authorized for Phase 7 Task 3.
 
 Assessment:
-- Reviewed Worker Report Iteration 63, commit `73ff7f89c7`, Gate 7 Task 2, and the current working tree.
-- Plan drift/worktree inconsistency is material: `git status --short` shows `M hermes_personal/runtime/config.py`, while Worker Report says project files are clean.
-- The uncommitted `config.py` rewrite removes/renames API expected by committed tests and package exports (`RuntimeConfigError`, `RuntimeMode`), causing Task 2 focused tests to fail at import time.
-- Because Task 2 defines shared runtime contracts used by later supervisor/startup work, accepting a commit while relevant source is modified and tests fail would propagate an unstable architecture into Task 3.
+- Reviewed Worker Report Iteration 64 and commit `578a056781` against Gate 7 Task 2 and the prior Planner REWORK.
+- The prior worktree/API drift is closed: `RuntimeConfig`, `RuntimeConfigError`, `RuntimeMode`, `ProcessSpec`, `ProbeSpec`, `ProbeType`, `RestartPolicy`, `ProcessTopologyError`, and `build_process_topology` import consistently through the runtime package.
+- Task 2 now provides immutable process specs, production static bundle validation, port uniqueness validation, and required secret presence validation without printing secret values.
+- Development and production Web behavior is covered: dev includes `web_ui`, production serves Web via `app_api` with static dir/digest requirements.
+- Phase 7 still has supervisor/startup/cutover/acceptance work, so the correct decision is CONTINUE to Task 3.
 
 Evidence/Findings:
-- `git show --stat --oneline 73ff7f89c7` shows Task 2 committed `hermes_personal/runtime/__init__.py`, `config.py`, `processes.py`, and `tests/hermes_personal/runtime/test_processes.py`.
-- `git diff -- hermes_personal/runtime/config.py` shows a large uncommitted rewrite after `73ff7f89c7`, replacing the original `RuntimeMode`/`RuntimeConfigError`/port/static-dir validation shape with a different API that imports `ProcessKind`, `WebMode`, `ALL_PROCESSES`, and `get_web_ui_spec`.
-- Fresh verification: `uv run pytest tests/hermes_personal/runtime/test_processes.py -q` fails during collection with `ImportError: cannot import name 'RuntimeConfigError' from 'hermes_personal.runtime.config'` via `hermes_personal/runtime/__init__.py`.
-- Fresh verification: `uv run ruff check hermes_personal/runtime tests/hermes_personal/runtime/test_processes.py` -> All checks passed, but this does not offset the failing tests/API inconsistency.
+- `git show --stat --oneline 578a056781` shows targeted remediation in `hermes_personal/runtime/config.py`, `hermes_personal/runtime/processes.py`, and `tests/hermes_personal/runtime/test_processes.py`.
+- `tests/hermes_personal/runtime/test_processes.py` covers topology membership, production Web handling, no raw secret markers in argv, immutability, duplicate port rejection, static dir/digest requirement, and secret presence validation with key names only.
+- Fresh verification: `uv run pytest tests/hermes_personal/runtime/test_processes.py -q` -> 7 passed in 0.42s.
+- Fresh verification: `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 273 passed in 13.92s.
+- Fresh verification: `uv run ruff check hermes_personal/runtime tests/hermes_personal/runtime/test_processes.py` -> All checks passed.
 - Fresh verification: `git diff --check` -> clean.
-- `git status --short` shows tracked modification `M hermes_personal/runtime/config.py` in addition to local untracked helper files.
+- `git status --short` shows only local untracked helper/runtime files (`build/`, `coord.txt`, `create_shortcut.vbs`, `launch_gui.vbs`, `run_worker.bat`, `update_coord.py`, `worker-prompt.txt`, `worker-scheduler.ps1`, `worker.ps1`).
 
 Plan Adjustment:
-Reason: Uncommitted rewrite of `config.py` broke Task 2 imports/tests and created plan drift against the reported commit and Gate 7 contract.
-Impact: Phase 7 Task 2 remains IN_PROGRESS for contract/worktree reconciliation; Task 3 supervisor lifecycle is blocked.
-Affected phases/tasks: Phase 7 Task 2 runtime topology and environment contract; Phase 7 Task 3 supervisor.
-Proposed correction: Reconcile `config.py`, `processes.py`, package exports, and tests into a coherent committed state meeting Gate 7 Task 2, rerun verification, and hand off with clean tracked status.
+None. The prior Task 2 worktree/API drift is closed, and execution returns to the Gate 7 task sequence with Task 3 next.
 
-Reviewed Worker Iteration: 63
-Reviewed Commit/Range: `73ff7f89c7` / `afd843c0fc..73ff7f89c7` (coordination handoff at `7df166509b`)
+Reviewed Worker Iteration: 64
+Reviewed Commit/Range: `578a056781` / `73ff7f89c7..578a056781` (coordination handoff at `e68d693434`)
 
 Next Step:
-Worker to reconcile Task 2 runtime config/processes API, fix test collection, commit changes, and hand back Task 2.
 ---
 
 ## History
 
-### Iteration 64
+### Iteration 64 Planner
+Planner accepted Phase 7 Task 2 remediation at commit 578a056781 after verifying coherent runtime config/process exports, 7 focused tests, 273 broad tests, Ruff, and diff-check. Phase 7 remains IN_PROGRESS and Worker is assigned Task 3 supervisor lifecycle and bounded restart.### Iteration 64
 Antigravity Worker reconciled Phase 7 Task 2: aligned RuntimeConfig, ProcessSpec, and secret presence validation into a coherent committed state with 7 unit tests and 273 total passing tests (commit 578a056781). Handed off to Planner for Task 2 acceptance.
 
 ### Iteration 63
