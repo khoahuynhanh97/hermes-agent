@@ -50,7 +50,13 @@ class ProductIntelligenceClient:
         """Run the deterministic research pipeline."""
         spec = ResearchSpec(product_name=product_name, keywords=keywords)
         result = self._pipeline.run(spec)
-        res = {"summary": result.summary, "report": result.report}
+        res = {
+            "owner": "product_intelligence",
+            "schema": "product_research_report",
+            "version": 1,
+            "summary": result.summary,
+            "report": result.report,
+        }
         if workflow_id:
             res["workflow_id"] = workflow_id
         if job_id:
@@ -84,6 +90,9 @@ class ProductIntelligenceClient:
         spec = ResourcePackSpec(product_name=product_name, assets=assets, scenes=scenes)
         result = self._builder.build(spec)
         res = {
+            "owner": "product_intelligence",
+            "schema": "product_resource_pack",
+            "version": 1,
             "summary": result.summary,
             "assets_mapping": result.assets_mapping,
             "scene_plan": result.scene_plan.steps,
@@ -121,6 +130,9 @@ class ProductIntelligenceClient:
             ],
         }
         locked = self.service.lock_resource_pack(payload, uid)
+        locked["owner"] = "product_intelligence"
+        locked["schema"] = "product_resource_pack_locked"
+        locked["version"] = locked.get("resource_pack_version", 1)
         if workflow_id:
             locked["workflow_id"] = workflow_id
         if job_id:
