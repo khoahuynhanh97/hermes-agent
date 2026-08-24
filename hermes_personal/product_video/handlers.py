@@ -167,7 +167,13 @@ class ProductVideoJobHandlers:
         if not product_name:
             return JobFailed(retryable=False, code="INVALID_INPUT", message="product_name cannot be empty")
         try:
-            result = self.pi_client.research(product_name, keywords)
+            result = self.pi_client.research(
+                product_name,
+                keywords,
+                workflow_id=ctx.workflow_id,
+                job_id=ctx.job_id,
+                idempotency_key=ctx.idempotency_key,
+            )
             return JobSucceeded(artifact_ref=result, next_command={"command": "build_resource_pack", "product_name": product_name})
         except Exception as e:
             return JobFailed(retryable=True, code="PI_RESEARCH_FAILED", message=str(e))
@@ -180,7 +186,12 @@ class ProductVideoJobHandlers:
         if not research_result:
             return JobFailed(retryable=False, code="MISSING_INPUT_REF", message="research_result cannot be empty")
         try:
-            result = self.pi_client.build_resource_pack(research_result)
+            result = self.pi_client.build_resource_pack(
+                research_result,
+                workflow_id=ctx.workflow_id,
+                job_id=ctx.job_id,
+                idempotency_key=ctx.idempotency_key,
+            )
             return JobSucceeded(artifact_ref=result, next_command={"command": "lock_resource_pack"})
         except Exception as e:
             return JobFailed(retryable=True, code="PI_BUILD_FAILED", message=str(e))
@@ -193,7 +204,13 @@ class ProductVideoJobHandlers:
         if not pack_dict:
             return JobFailed(retryable=False, code="MISSING_INPUT_REF", message="pack_dict cannot be empty")
         try:
-            result = self.pi_client.lock_resource_pack(pack_dict, ctx.owner_user_id)
+            result = self.pi_client.lock_resource_pack(
+                pack_dict,
+                ctx.owner_user_id,
+                workflow_id=ctx.workflow_id,
+                job_id=ctx.job_id,
+                idempotency_key=ctx.idempotency_key,
+            )
             return JobSucceeded(artifact_ref=result, next_command={"command": "create_creative_brief"})
         except Exception as e:
             return JobFailed(retryable=True, code="PI_LOCK_FAILED", message=str(e))
@@ -208,7 +225,12 @@ class ProductVideoJobHandlers:
         alloc = None
         try:
             alloc = reserve_budget("video_factory", 5)
-            result = self.video_client.create_creative_brief(brief_config)
+            result = self.video_client.create_creative_brief(
+                brief_config,
+                workflow_id=ctx.workflow_id,
+                job_id=ctx.job_id,
+                idempotency_key=ctx.idempotency_key,
+            )
             commit_budget(alloc)
             return JobSucceeded(artifact_ref=result, next_command={"command": "create_scene_plan", "product_id": product_id})
         except Exception as e:
@@ -226,7 +248,12 @@ class ProductVideoJobHandlers:
         alloc = None
         try:
             alloc = reserve_budget("video_factory", 5)
-            result = self.video_client.create_scene_plan(brief_ref)
+            result = self.video_client.create_scene_plan(
+                brief_ref,
+                workflow_id=ctx.workflow_id,
+                job_id=ctx.job_id,
+                idempotency_key=ctx.idempotency_key,
+            )
             commit_budget(alloc)
             return JobSucceeded(artifact_ref=result, next_command={"command": "create_storyboard"})
         except Exception as e:
@@ -244,7 +271,12 @@ class ProductVideoJobHandlers:
         alloc = None
         try:
             alloc = reserve_budget("video_factory", 10)
-            result = self.video_client.create_storyboard(scene_ref)
+            result = self.video_client.create_storyboard(
+                scene_ref,
+                workflow_id=ctx.workflow_id,
+                job_id=ctx.job_id,
+                idempotency_key=ctx.idempotency_key,
+            )
             commit_budget(alloc)
             return JobSucceeded(artifact_ref=result, next_command={"command": "render_video"})
         except Exception as e:
@@ -262,7 +294,12 @@ class ProductVideoJobHandlers:
         alloc = None
         try:
             alloc = reserve_budget("video_factory", 50)
-            result = self.video_client.render_video(story_ref)
+            result = self.video_client.render_video(
+                story_ref,
+                workflow_id=ctx.workflow_id,
+                job_id=ctx.job_id,
+                idempotency_key=ctx.idempotency_key,
+            )
             commit_budget(alloc)
             return JobSucceeded(artifact_ref=result, next_command={"command": "export_video"})
         except Exception as e:
@@ -280,7 +317,12 @@ class ProductVideoJobHandlers:
         alloc = None
         try:
             alloc = reserve_budget("video_factory", 20)
-            result = self.video_client.export_video(render_ref)
+            result = self.video_client.export_video(
+                render_ref,
+                workflow_id=ctx.workflow_id,
+                job_id=ctx.job_id,
+                idempotency_key=ctx.idempotency_key,
+            )
             commit_budget(alloc)
             return JobSucceeded(artifact_ref=result, next_command={"command": "complete"})
         except Exception as e:

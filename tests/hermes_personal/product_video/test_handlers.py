@@ -30,7 +30,6 @@ def setup_budget():
 def workflow_setup():
     conn = sqlite3.connect(":memory:")
     repo = WorkflowRepository(conn)
-    # create table schema
     with conn:
         conn.execute("CREATE TABLE IF NOT EXISTS workflow (workflow_id TEXT PRIMARY KEY, aggregate_json TEXT, version INTEGER)")
         conn.execute("CREATE TABLE IF NOT EXISTS processed_command (workflow_id TEXT, command_id TEXT PRIMARY KEY)")
@@ -81,7 +80,6 @@ def test_missing_required_input_ref(workflow_setup):
 
     handlers = ProductVideoJobHandlers(workflow_engine=engine)
     ctx = JobContext(workflow_id="wf_ref", job_id="j1")
-    # Empty brief_ref
     result = handlers.scene_plan_job(ctx, "")
     assert isinstance(result, JobFailed)
     assert result.code == "MISSING_INPUT_REF"
@@ -152,19 +150,62 @@ def test_budget_released_on_client_failure(workflow_setup):
     assert res.code == "VF_RENDER_FAILED"
 
 
-def test_parameter_and_ref_forwarding_to_clients(workflow_setup):
-    """Prove that handlers pass upstream refs and configurations to client methods."""
+def test_correlation_metadata_passed_to_all_clients(workflow_setup):
+    """Prove that handlers pass workflow_id, job_id, and idempotency_key to PI/VF client methods."""
     _, engine = workflow_setup
+    mock_pi = MagicMock()
     mock_vf = MagicMock()
-    mock_vf.create_scene_plan.return_value = {"artifact_ref": "sha256:scene1"}
+    handlers = ProductVideoJobHandlers(pi_client=mock_pi, video_client=mock_vf, workflow_engine=engine)
 
-    engine.set_workflow_state("wf_fwd", ProductVideoWorkflowState.CREATING_SCENE_PLAN.value, version=1)
-    handlers = ProductVideoJobHandlers(video_client=mock_vf, workflow_engine=engine)
-    ctx = JobContext(workflow_id="wf_fwd", job_id="j_fwd")
+    ctx = JobContext(workflow_id="wf_corr", job_id="job_42", idempotency_key="idemp_999")
 
-    res = handlers.scene_plan_job(ctx, "brief_ref_123")
-    assert isinstance(res, JobSucceeded)
-    mock_vf.create_scene_plan.assert_called_once_with("brief_ref_123")
+    # PI Research
+    engine.set_workflow_state("wf_corr", ProductVideoWorkflowState.RESEARCHING.value)
+    handlers.research_job(ctx, "Watch", ["fit"])
+    mock_pi.research.assert_called_once_with(
+        "Watch", ["fit"], workflow_id="wf_corr", job_id="job_42", idempotency_key="idemp_999"
+    )
+
+    # VF Scene Plan
+    engine.set_workflow_state("wf_corr", ProductVideoWorkflowState.CREATING_SCENE_PLAN.value)
+    handlers.scene_plan_job(ctx, "brief_ref_abc")
+    mock_vf.create_scene_plan.assert_called_once_with(
+        "brief_ref_abc", workflow_id="wf_corr", job_id="job_42", idempotency_key="idemp_999"
+    )
+
+
+def test_idempotent_replay_prevents_duplicate_client_calls(workflow_setup):
+    """Prove that replaying a job with the same idempotency_key uses cached results and avoids duplicate client effects."""
+    _, engine = workflow_setup
+    call_counts = {"render": 0}
+
+    class IdempotentVFClient:
+        def __init__(self):
+            self.cache = {}
+
+        def render_video(self, story_ref, workflow_id=None, job_id=None, idempotency_key=None, **kwargs):
+            if idempotency_key in self.cache:
+                return self.cache[idempotency_key]
+            call_counts["render"] += 1
+            result = {"artifact_ref": f"render_out_{idempotency_key}", "story_ref": story_ref}
+            if idempotency_key:
+                self.cache[idempotency_key] = result
+            return result
+
+    fake_client = IdempotentVFClient()
+    handlers = ProductVideoJobHandlers(video_client=fake_client, workflow_engine=engine)
+    engine.set_workflow_state("wf_idem", ProductVideoWorkflowState.RENDERING.value)
+
+    ctx = JobContext(workflow_id="wf_idem", job_id="job_1", idempotency_key="idemp_abc")
+    res1 = handlers.render_job(ctx, "story_ref_1")
+    assert isinstance(res1, JobSucceeded)
+    assert call_counts["render"] == 1
+
+    # Replay with same idempotency key
+    res2 = handlers.render_job(ctx, "story_ref_1")
+    assert isinstance(res2, JobSucceeded)
+    assert call_counts["render"] == 1  # No duplicate paid effect!
+    assert res1.artifact_ref == res2.artifact_ref
 
 
 def test_job_dispatcher_terminal_execution(workflow_setup):
@@ -174,7 +215,7 @@ def test_job_dispatcher_terminal_execution(workflow_setup):
 
     dispatcher = JobDispatcher()
     service = register_product_video_job_handlers(dispatcher, workflow_engine=engine)
-    ctx = JobContext(workflow_id="wf_disp", job_id="j_disp")
+    ctx = JobContext(workflow_id="wf_disp", job_id="j_disp", idempotency_key="idemp_disp")
 
     service.dispatch_registered_job("product_video.creative_brief", ctx, "prod_1")
     terminal_result = service.wait_for_job("j_disp", timeout=1.0)

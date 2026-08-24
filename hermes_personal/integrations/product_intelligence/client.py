@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 try:
     from hermes.application.product_resource_service import ProductResourceService
 except ImportError:
@@ -19,12 +21,12 @@ from hermes_personal.product.resource_pack import ResourcePackBuilder, ResourceP
 
 
 class ProductIntelligenceClient:
-    """Deterministic client for Phase 5 Task 2.
+    """Deterministic client for Phase 5 Task 2.
 
-    Provides three high‑level operations without external I/O:
-    * ``research`` – fabricates a research result.
-    * ``build_resource_pack`` – creates a deterministic resource‑pack from that result.
-    * ``lock_resource_pack`` – generates a lock payload and runs the anti‑corruption service.
+    Provides three high-level operations without external I/O:
+    * ``research`` - fabricates a research result with workflow/job correlation.
+    * ``build_resource_pack`` - creates a deterministic resource-pack from that result.
+    * ``lock_resource_pack`` - generates a lock payload and runs the anti-corruption service.
     """
 
     def __init__(self, owner_user_id: str = "user") -> None:
@@ -36,27 +38,39 @@ class ProductIntelligenceClient:
     # ---------------------------------------------------------------------
     # Research
     # ---------------------------------------------------------------------
-    def research(self, product_name: str, keywords: list[str]) -> dict:
-        """Run the deterministic research pipeline.
-
-        Returns the raw ``dict`` produced by :class:`ProductResearchPipeline` –
-        ``{"summary": ..., "report": ...}``.
-        """
+    def research(
+        self,
+        product_name: str,
+        keywords: list[str],
+        workflow_id: str | None = None,
+        job_id: str | None = None,
+        idempotency_key: str | None = None,
+        **kwargs: Any,
+    ) -> dict:
+        """Run the deterministic research pipeline."""
         spec = ResearchSpec(product_name=product_name, keywords=keywords)
         result = self._pipeline.run(spec)
-        return {"summary": result.summary, "report": result.report}
+        res = {"summary": result.summary, "report": result.report}
+        if workflow_id:
+            res["workflow_id"] = workflow_id
+        if job_id:
+            res["job_id"] = job_id
+        if idempotency_key:
+            res["idempotency_key"] = idempotency_key
+        return res
 
     # ---------------------------------------------------------------------
-    # Resource‑pack build
+    # Resource-pack build
     # ---------------------------------------------------------------------
-    def build_resource_pack(self, research_result: dict) -> dict:
-        """Build a deterministic ``ResourcePackResult`` from a research result.
-
-        The ``report`` JSON is parsed for ``product_name`` and ``keywords``.
-        Assets are generated as ``{keyword}_asset`` and a simple two‑scene plan
-        ``["intro", "outro"]`` is used.
-        Returns a plain ``dict`` with the ``ResourcePackResult`` fields.
-        """
+    def build_resource_pack(
+        self,
+        research_result: dict,
+        workflow_id: str | None = None,
+        job_id: str | None = None,
+        idempotency_key: str | None = None,
+        **kwargs: Any,
+    ) -> dict:
+        """Build a deterministic ``ResourcePackResult`` from a research result."""
         report = research_result.get("report", "{}")
         try:
             data = __import__("json").loads(report)
@@ -69,24 +83,33 @@ class ProductIntelligenceClient:
         scenes = ["intro", "outro"]
         spec = ResourcePackSpec(product_name=product_name, assets=assets, scenes=scenes)
         result = self._builder.build(spec)
-        return {
+        res = {
             "summary": result.summary,
             "assets_mapping": result.assets_mapping,
             "scene_plan": result.scene_plan.steps,
         }
+        if workflow_id:
+            res["workflow_id"] = workflow_id
+        if job_id:
+            res["job_id"] = job_id
+        if idempotency_key:
+            res["idempotency_key"] = idempotency_key
+        return res
 
     # ---------------------------------------------------------------------
     # Lock
     # ---------------------------------------------------------------------
-    def lock_resource_pack(self, pack_dict: dict, owner_user_id: str | None = None) -> dict:
-        """Create a lock payload and invoke :class:`ProductResourceService`.
-
-        ``pack_dict`` must contain ``assets_mapping`` as produced by
-        :meth:`build_resource_pack`. The method returns the enriched payload
-        (including ``manifest_digest`` and ``status="locked"``).
-        """
+    def lock_resource_pack(
+        self,
+        pack_dict: dict,
+        owner_user_id: str | None = None,
+        workflow_id: str | None = None,
+        job_id: str | None = None,
+        idempotency_key: str | None = None,
+        **kwargs: Any,
+    ) -> dict:
+        """Create a lock payload and invoke :class:`ProductResourceService`."""
         uid = owner_user_id or self.owner_user_id
-        # deterministic id based on summary hash – simple stable string
         resource_pack_id = f"rp_{hash(pack_dict.get('summary', '')) & 0xffffffff}"
         payload: dict = {
             "resource_pack_id": resource_pack_id,
@@ -98,4 +121,10 @@ class ProductIntelligenceClient:
             ],
         }
         locked = self.service.lock_resource_pack(payload, uid)
+        if workflow_id:
+            locked["workflow_id"] = workflow_id
+        if job_id:
+            locked["job_id"] = job_id
+        if idempotency_key:
+            locked["idempotency_key"] = idempotency_key
         return locked
