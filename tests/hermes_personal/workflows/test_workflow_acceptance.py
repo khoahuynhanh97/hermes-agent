@@ -90,4 +90,3 @@ def test_phase4_exit_criterion_6_restart_recovery(db_conn):
     recovery_svc = WorkflowRecoveryService(db_conn)
     recovered = recovery_svc.recover_pending_workflows()
     assert "wf-rec-1" in recovered
-
