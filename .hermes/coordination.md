@@ -53,45 +53,54 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 Owner: PLANNER
 
 Objective:
-Review and accept Phase 7 Task 5 Mode Precedence Remediation (`98a9cd193f`), accept Task 5, and authorize Phase 7 Task 6 (Serve Real Events And Real Web Artifacts) for Worker.
+Review and accept Phase 7 Task 6 (`e5e1d7c2d7`), accept Task 6, and authorize Phase 7 Task 7 (Cut Over Four Channels With Shadow Parity And Guarded Retirement) for Worker.
 
 Scope:
-- Verify config-file default mode precedence and explicit `--mode` override behavior.
-- Verify `hermes start --help` output and flag coverage.
-- Verify unit tests in `tests/hermes_personal/runtime/test_cli.py`.
-- Accept Phase 7 Task 5 and authorize Phase 7 Task 6 for Worker.
-
+- Verify `HealthAPI` (/health/live, /health/ready, /health/components) and `EventsAPI` (durable stream, resume from sequence cursor, operator command submission, artifact metadata).
+- Verify static guards in `test_no_fake_progress.py` (no fake progress timers, no mock artifact IDs, no direct provider calls).
+- Verify Web hooks (`useHermesEventStream`, `useHermesOperator`), types, and `OmniChatPage` route registration.
+- Accept Phase 7 Task 6 and authorize Phase 7 Task 7 for Worker.
 
 ---
 
 ## Last Worker Report
 
-Iteration: 71
+Iteration: 72
 Phase: Phase 7 - Runtime Supervision, Multi-Channel Cutover, and Legacy Retirement
 
 Implemented:
-- Configured `setup_start_parser` so `--mode` defaults to `None`, allowing `handle_start` and `RuntimeConfig.from_file` to distinguish omitted `--mode` from explicit `--mode development` / `--mode production`.
-- Ensured `RuntimeConfig.from_file` uses `runtime.mode` from the YAML config when `--mode` is omitted, while explicit `--mode` flag overrides config-file mode.
-- Added 2 focused unit tests in `tests/hermes_personal/runtime/test_cli.py`:
-  * `test_handle_start_with_custom_config_file_and_default_mode`: verifies config-defined default mode (`production`) is adopted when `--mode` is omitted.
-  * `test_handle_start_explicit_mode_overrides_config_file`: verifies explicit `--mode development` overrides config-defined mode (`production`).
-- Verified `uv run hermes start --help` output line:
-  `usage: hermes start [-h] [--mode {development,production}] [--config CONFIG] [--no-open-browser]`
-- Verified all 8 unit tests in `test_cli.py` and 294 broad repository tests pass cleanly.
+- Created `hermes_personal/application/health_api.py`: provides `/health/live`, `/health/ready` (integrating with `ReadinessProbe`/`ReadinessState` with 200/503 status codes and failure codes), and `/health/components`.
+- Created `hermes_personal/application/events_api.py`: provides durable event streaming/replay with owner isolation, monotonic sequence resume (`after_seq`), distinct heartbeat event streaming (`event: heartbeat`), authenticated operator command submission (`/api/operator/command`), and canonical artifact metadata endpoint (`/api/artifacts/{id}`).
+- Created Web integration hooks & pages:
+  * `web/src/types/hermes.ts`: TypeScript contracts for events, health, artifact metadata, and operator commands.
+  * `web/src/hooks/useHermesEventStream.ts`: React hook consuming SSE stream with monotonic cursor resume and heartbeat tracking.
+  * `web/src/hooks/useHermesOperator.ts`: React hook submitting authenticated operator commands.
+  * `web/src/pages/OmniChatPage.tsx`: Omni unified channel interface consuming real event stream and turn endpoint.
+  * `web/src/App.tsx`: Registered `/omni` route.
+- Created unit tests and static guards:
+  * `tests/hermes_personal/runtime/test_application_api.py`: 5 tests covering health live/ready, event resume/isolation, SSE formatting/heartbeat, operator command submission, and artifact metadata.
+  * `tests/hermes_personal/runtime/test_no_fake_progress.py`: 3 tests verifying zero fake progress timers (`setInterval`/`setTimeout` progress incrementers), zero mock/demo artifact IDs in production runtime, and zero direct LLM provider API calls from Web/Omni.
+- Verified all 8 unit tests in `test_application_api.py` and `test_no_fake_progress.py`, and 302 broad repository tests pass cleanly.
+- Inspected `web/package.json` scripts: defines `"typecheck": "tsc -p . --noEmit"` and `"build": "tsc -b && vite build"`.
 
 Files Changed:
-- `hermes_personal/runtime/cli.py`
-- `hermes_personal/runtime/config.py`
-- `tests/hermes_personal/runtime/test_cli.py`
+- `hermes_personal/application/__init__.py`
+- `hermes_personal/application/events_api.py`
+- `hermes_personal/application/health_api.py`
+- `web/src/types/hermes.ts`
+- `web/src/hooks/useHermesEventStream.ts`
+- `web/src/hooks/useHermesOperator.ts`
+- `web/src/pages/OmniChatPage.tsx`
+- `web/src/App.tsx`
+- `tests/hermes_personal/runtime/test_application_api.py`
+- `tests/hermes_personal/runtime/test_no_fake_progress.py`
 
-Commit: `98a9cd193f` (`fix(runtime): respect config-defined default mode and support explicit cli override`) / Task 5 Range: `642f8b1493..98a9cd193f`
+Commit: `e5e1d7c2d7` (`feat(application): serve real events, health readiness, operator commands, and web omni artifacts`) / Task 6 Range: `98a9cd193f..e5e1d7c2d7`
 
 Verification:
-- `uv run pytest tests/hermes_personal/runtime/test_cli.py -q` -> 8 passed in 1.31s
-- `uv run hermes start --help` -> Exited 0 with exact line:
-  `usage: hermes start [-h] [--mode {development,production}] [--config CONFIG] [--no-open-browser]`
-- `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 294 passed in 14.78s
-- `uv run ruff check hermes_personal/runtime tests/hermes_personal/runtime/test_cli.py` -> All checks passed!
+- `uv run pytest tests/hermes_personal/runtime/test_application_api.py tests/hermes_personal/runtime/test_no_fake_progress.py -q` -> 8 passed in 0.55s
+- `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 302 passed in 24.77s
+- `uv run ruff check hermes_personal/application hermes_personal/runtime tests/hermes_personal/runtime/test_application_api.py tests/hermes_personal/runtime/test_no_fake_progress.py` -> All checks passed!
 - `git diff --check` -> Clean (0 whitespace/diff errors)
 - `git status --short` -> Clean for all project files (only local runtime helper scripts remain):
   ```
@@ -116,42 +125,46 @@ Risks/Blockers:
 
 ## Last Planner Review
 
-Iteration: 70
+Iteration: 71
 
 Decision:
-REWORK: Phase 7 Task 5 remediation is not yet accepted because config-file mode precedence still does not meet the Gate 7 Task 5 contract.
+CONTINUE: Phase 7 Task 5 mode-precedence remediation is accepted; Phase 7 remains IN_PROGRESS and Worker is authorized for Phase 7 Task 6.
 
 Assessment:
-- Reviewed Worker Report Iteration 70 and commit `642f8b1493` against prior REWORK and Gate 7 Task 5.
-- The prior `test` mode exposure is fixed: fresh `uv run hermes start --help` lists only `--mode {development,production}`.
-- `--config PATH` is now wired to `RuntimeConfig.from_file`, and focused/broad tests pass.
-- Remaining acceptance gap: Gate 7 Task 5 requires the default mode to come from validated config. Current `setup_start_parser` still defaults `args.mode` to `"development"`, and `handle_start` passes that value into `RuntimeConfig.from_file`, which overrides any `runtime.mode` in the config file. This means a config file cannot provide the default mode when `--mode` is omitted.
-- Existing tests cover custom config ports and explicit production parsing, but they do not prove config-file default mode or explicit `--mode` override precedence.
+- Reviewed Worker Report Iteration 71 and commit `98a9cd193f` against the prior REWORK and Gate 7 Task 5.
+- The mode/config precedence gap is closed: omitted `--mode` now remains `None`, allowing `RuntimeConfig.from_file` to use `runtime.mode` from YAML, while explicit `--mode` overrides the config-file mode.
+- Installed `hermes start --help` preserves the Gate 7 user-facing contract and lists only `--mode {development,production}`, `--config CONFIG`, and `--no-open-browser`.
+- Focused tests now prove exact flags, plugin registration/discovery, config-defined default mode, explicit override, missing config error, redacted startup failure, and supervisor execution.
+- Phase 7 still has Web/API event surfaces, cutover, chaos/security, and legacy retirement tasks remaining, so the correct decision is CONTINUE to Task 6.
 
 Evidence/Findings:
-- `git show --stat --oneline 642f8b1493` shows targeted remediation changes in `hermes_personal/runtime/cli.py`, `hermes_personal/runtime/config.py`, and `tests/hermes_personal/runtime/test_cli.py`.
-- Fresh `uv run pytest tests/hermes_personal/runtime/test_cli.py -q` -> 7 passed in 1.75s.
+- `git show --stat --oneline 98a9cd193f` shows targeted remediation changes in `hermes_personal/runtime/cli.py`, `hermes_personal/runtime/config.py`, and `tests/hermes_personal/runtime/test_cli.py`.
+- Fresh `git status --short` shows only local untracked helper/runtime files and no tracked source/test modifications.
+- Fresh `uv run pytest tests/hermes_personal/runtime/test_cli.py -q` -> 8 passed in 1.50s.
 - Fresh `uv run hermes start --help` -> exit 0 and prints `usage: hermes start [-h] [--mode {development,production}] [--config CONFIG] [--no-open-browser]`.
-- Fresh `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 293 passed in 14.87s.
+- Fresh `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 294 passed in 14.28s.
 - Fresh `uv run ruff check hermes_personal/runtime tests/hermes_personal/runtime/test_cli.py` -> All checks passed.
 - Fresh `git diff --check` -> clean.
-- Fresh `git status --short` shows only local untracked helper/runtime files and no tracked project source/test modifications.
-- Static evidence: `setup_start_parser` sets `--mode` default to `"development"`; `handle_start` passes `mode=mode` into `RuntimeConfig.from_file(...)`; `RuntimeConfig.from_file` gives explicit `mode` priority over `runtime.mode`, so omitted `--mode` still overrides config mode with development.
 
 Plan Adjustment:
-Reason: Task 5 remediation fixed help output and config-file loading, but still violates the Gate 7 requirement that default mode comes from validated config.
-Impact: Phase 7 Task 5 remains incomplete; Task 6 must wait until mode/config precedence is stable.
-Affected phases/tasks: Phase 7 Task 5 and downstream Phase 7 Task 6.
-Proposed correction: Worker must distinguish omitted vs explicit `--mode`, use config-file `runtime.mode` as the default when omitted, and test config default plus explicit override behavior.
+None. Task 5 mode-precedence remediation is accepted; proceed to Task 6 (Serve Real Events And Real Web Artifacts).
 
-Reviewed Worker Iteration: 70
-Reviewed Commit/Range: `642f8b1493` / `235d20ceb0..642f8b1493` (coordination handoff at `6347f8ecae`; owner assignment at `4c8a57ef23`)
+Reviewed Worker Iteration: 71
+Reviewed Commit/Range: `98a9cd193f` / `642f8b1493..98a9cd193f` (coordination handoff at `35bb9af7be`)
 
 Next Step:
-Worker to remediate Phase 7 Task 5 mode/config precedence before Task 6 begins.
+Worker to implement Phase 7 Task 6 application APIs and real Web/Omni event/artifact surfaces per Current Next Action.
 ---
 ## History
 
+### Iteration 72
+Antigravity Worker implemented Phase 7 Task 6: served real events, health readiness, operator commands, artifact metadata, Web hooks/types/OmniChatPage, and static guards with 8 unit tests and 302 total passing tests (commit e5e1d7c2d7). Handed off to Planner for Task 6 acceptance.
+
+### Iteration 71
+Antigravity Worker remediated Phase 7 Task 5 mode precedence: allowed omitted --mode to adopt config-defined mode, ensured explicit --mode overrides config, added focused tests for both behaviors, with 8 unit tests and 294 total passing tests (commit 98a9cd193f). Handed off to Planner for Task 5 acceptance.
+
+### Iteration 71 Planner
+Planner accepted Phase 7 Task 5 mode-precedence remediation at commit 98a9cd193f after verifying config-defined default mode, explicit `--mode` override, exact `hermes start --help`, 8 focused tests, 294 broad tests, Ruff, diff-check, and clean tracked project status. Phase 7 remains IN_PROGRESS and Worker is assigned Task 6 real events/health/Web artifact surfaces.
 ### Iteration 70 Planner
 Planner reviewed Phase 7 Task 5 remediation at commit 642f8b1493 and returned REWORK. Help output and config loading improved, with tests/Ruff/diff-check passing, but omitted `--mode` still defaults to development before `RuntimeConfig.from_file`, so config-file `runtime.mode` cannot provide the default mode required by Gate 7 Task 5. Worker is reassigned to fix mode/config precedence before Task 6 starts.
 ### Iteration 70
