@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from .context import AgentContext, AgentContextAssembler
 from .evaluator import CandidateEvaluator
+from .memory_policy import (
+    PreferenceCategory,
+    PreferenceMemoryPolicy,
+    PreferencePolicyResult,
+    PreferenceRiskLevel,
+)
 from .models import (
+
     CandidateEvaluation,
     CandidateStatus,
     EvaluationDecision,
@@ -43,7 +50,12 @@ __all__ = [
     "LearningRepository",
     "LearningRepositoryError",
     "LearningVersion",
+    "PreferenceCategory",
+    "PreferenceMemoryPolicy",
+    "PreferencePolicyResult",
+    "PreferenceRiskLevel",
     "PromotionRequestResult",
+
     "PromotionService",
     "RetrievedLearning",
     "RollbackResult",
