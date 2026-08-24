@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .context import AgentContext, AgentContextAssembler
 from .evaluator import CandidateEvaluator
 from .models import (
     CandidateEvaluation,
@@ -23,8 +24,12 @@ from .promotion import (
     RollbackResult,
 )
 from .repository import LearningRepository
+from .retrieval import ApprovedLearningRetriever, RetrievedLearning
 
 __all__ = [
+    "AgentContext",
+    "AgentContextAssembler",
+    "ApprovedLearningRetriever",
     "CandidateEvaluation",
     "CandidateEvaluator",
     "CandidateStatus",
@@ -40,9 +45,11 @@ __all__ = [
     "LearningVersion",
     "PromotionRequestResult",
     "PromotionService",
+    "RetrievedLearning",
     "RollbackResult",
     "TaskOutcome",
     "TaskOutcomeStatus",
     "VersionStatus",
 ]
+
 

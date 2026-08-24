@@ -80,6 +80,7 @@ class HermesTurnService:
         transcript_factory: TranscriptFactory,
         agent: UpstreamAgentPort,
         catalog_service: CapabilityCatalogService | None = None,
+        context_assembler: Any | None = None,
     ) -> None:
         self._identity_repository = identity_repository
         self._session_repository = session_repository
@@ -87,10 +88,15 @@ class HermesTurnService:
         self._transcript_factory = transcript_factory
         self._agent = agent
         self._catalog_service = catalog_service
+        self._context_assembler = context_assembler
 
     @property
     def catalog_service(self) -> CapabilityCatalogService | None:
         return self._catalog_service
+
+    @property
+    def context_assembler(self) -> Any | None:
+        return self._context_assembler
 
     def build_policy_context(
         self,
@@ -121,6 +127,12 @@ class HermesTurnService:
 
         transcript = self._transcript_factory.for_session(request.session_id)
         history = self._assemble_history(transcript, request.session_id)
+        if self._context_assembler is not None:
+            assembled_context = self._context_assembler.assemble(request, history)
+            effective_history = assembled_context.assemble_history_messages()
+        else:
+            effective_history = history
+
         transcript.append_user_turn(request.message)
         outputs: Iterator[AgentOutput] | None = None
         terminal_emitted = False
@@ -128,8 +140,9 @@ class HermesTurnService:
         try:
             try:
                 outputs = await _start_agent_in_worker(
-                    self._agent, request, history
+                    self._agent, request, effective_history
                 )
+
             except AuthorizationError as error:
                 failed = self._failed_event(request, 0, error)
                 self._persist_event(transcript, failed)
