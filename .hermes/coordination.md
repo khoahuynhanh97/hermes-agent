@@ -54,41 +54,41 @@ Goal: Deliver `hermes start`, health/readiness, restart behavior, four-channel c
 Owner: PLANNER
 
 Objective:
-Review and verify Phase 5 Task 5 Idempotency & Correlation Remediation (`7e5f819b0c`), then accept Task 5 and authorize Phase 5 Task 6 (Inventory And Reconcile Legacy Data Without Deletion).
+Review and verify Phase 5 Task 6 Implementation (`f7ede42c4f`), then accept Task 6 and authorize Phase 5 Task 7 (Prove The Full Fake Product-To-Video Flow).
 
 Scope:
-- Verify `hermes_personal/product_video/handlers.py`, `hermes_personal/integrations/product_intelligence/client.py`, `hermes_personal/integrations/video_factory/client.py`, and `tests/hermes_personal/product_video/test_handlers.py`.
+- Verify `hermes_personal/migration/inventory.py`, `hermes_personal/migration/reconcile.py`, `hermes_personal/migration/__init__.py`, `docs/hermes-personal/product-video-migration.md`, and `tests/hermes_personal/migration/test_reconciliation.py`.
 - Run verification tests, ruff, and git diff check.
-- Accept Task 5 and authorize Phase 5 Task 6 for Worker.
+- Accept Task 6 and authorize Phase 5 Task 7 for Worker.
 
 ---
 
 ## Last Worker Report
 
-Iteration: 47
+Iteration: 48
 Phase: Phase 5 - Migrate Product Intelligence to Video Factory Flow with HITL & Reconciliation
 
 Implemented:
-- Propagated `workflow_id`, `job_id`, and `idempotency_key` correlation metadata from all 8 product-to-video handlers to injected `ProductIntelligenceClient` and `VideoFactoryClient` methods.
-- Updated `ProductIntelligenceClient` and `VideoFactoryClient` signatures and wrapper payloads to embed correlation metadata.
-- Added comprehensive unit tests in `test_handlers.py` proving:
-  * Injected PI and VF clients receive exact `workflow_id`, `job_id`, and `idempotency_key` correlation arguments.
-  * Idempotent replay with matching `idempotency_key` returns the cached/replayed artifact without triggering duplicate paid/client side-effects.
-  * Budget reservation occurs before paid client invocations and is safely released on post-reservation failure.
-- Verified all 33 tests in `test_handlers.py` and `test_job_handlers.py`, 43 tests in `product_video` suite, and 177 tests in total repo suite.
+- Implemented `hermes_personal/migration/inventory.py` with read-only SQLite URI `mode=ro` access and SHA-256 context checksum computation over sorted `(opaque_id, version, digest)` tuples.
+- Implemented `hermes_personal/migration/reconcile.py` with `reconcile_inventories()`, idempotent `migrate_legacy_data()`, and safe `rollback_migration()` that strictly cleans up target records without touching source data or media.
+- Implemented `hermes_personal/migration/__init__.py` exporting canonical migration interfaces.
+- Created operator runbook `docs/hermes-personal/product-video-migration.md`.
+- Created comprehensive test suite `tests/hermes_personal/migration/test_reconciliation.py` (8 tests) covering match, missing row, checksum mismatch, duplicate source identity, unsupported schema version, rerun idempotency, read-only source enforcement, and rollback safety.
+- Verified all 8 migration tests, 185 tests in full repo suite, ruff lint, and git diff.
 
 Files Changed:
-- `hermes_personal/integrations/product_intelligence/client.py`
-- `hermes_personal/integrations/video_factory/client.py`
-- `hermes_personal/product_video/handlers.py`
-- `tests/hermes_personal/product_video/test_handlers.py`
+- `hermes_personal/migration/inventory.py`
+- `hermes_personal/migration/reconcile.py`
+- `hermes_personal/migration/__init__.py`
+- `docs/hermes-personal/product-video-migration.md`
+- `tests/hermes_personal/migration/test_reconciliation.py`
 
-Commit: `7e5f819b0c` (`feat(product_video): propagate correlation metadata to clients and guarantee no duplicate paid effects on idempotent replay`)
+Commit: `f7ede42c4f` (`feat(migration): implement legacy data inventory, cryptographic reconciliation, and non-destructive rollback`)
 
 Verification:
-- `uv run pytest tests/hermes_personal/product_video/test_handlers.py tests/hermes_personal/product_video/test_job_handlers.py -q` -> 33 passed
-- `uv run pytest tests/hermes_personal/product_video tests/hermes_personal/workflows tests/hermes_personal/capabilities -q` -> 177 passed
-- `uv run ruff check hermes_personal/product_video hermes_personal/integrations tests/hermes_personal/product_video` -> All checks passed!
+- `uv run pytest tests/hermes_personal/migration/test_reconciliation.py -q` -> 8 passed
+- `uv run pytest tests/hermes_personal/product_video tests/hermes_personal/migration tests/hermes_personal/workflows tests/hermes_personal/capabilities -q` -> 185 passed
+- `uv run ruff check hermes_personal/migration tests/hermes_personal/migration` -> All checks passed!
 - `git diff --check b5a1b09ccd..HEAD` -> Clean
 
 Remaining Issues:
@@ -101,38 +101,37 @@ Risks/Blockers:
 
 ## Last Planner Review
 
-Iteration: 47
+Iteration: 48
 
 Decision:
-REWORK Phase 5 Task 5 strict remediation (`f34afbaa11`) before authorizing Task 6.
+CONTINUE: ACCEPTED Phase 5 Task 5 remediation (`7e5f819b0c`) and authorized Phase 5 Task 6.
 
 Assessment:
-- Reviewed Worker Report Iteration 46 and commit `f34afbaa11` against Gate 5 Task 5 in `docs/superpowers/plans/2026-08-22-hermes-gateway-rearchitecture-gate-5.md`.
-- Independent verification passed: `uv run pytest tests/hermes_personal/product_video/test_handlers.py tests/hermes_personal/product_video/test_job_handlers.py -q` -> 32 passed; `uv run pytest tests/hermes_personal/product_video tests/hermes_personal/workflows tests/hermes_personal/capabilities -q` -> 176 passed; `uv run ruff check hermes_personal/product_video hermes_personal/integrations tests/hermes_personal/product_video` -> passed; `git diff --check b5a1b09ccd..HEAD` -> clean.
-- The remediation fixed the previous private `_cache`/ctx-state shortcut and added ref/digest/HITL/terminal-dispatch coverage, but it still falls short of the Task 5 contract for workflow/job/idempotency correlation and duplicate paid-effect protection.
+- Reviewed Worker Report Iteration 47 and commit `7e5f819b0c` against Gate 5 Task 5 in `docs/superpowers/plans/2026-08-22-hermes-gateway-rearchitecture-gate-5.md`.
+- Independent verification passed: `uv run pytest tests/hermes_personal/product_video/test_handlers.py tests/hermes_personal/product_video/test_job_handlers.py -q` -> 33 passed; `uv run pytest tests/hermes_personal/product_video tests/hermes_personal/workflows tests/hermes_personal/capabilities -q` -> 177 passed; `uv run ruff check hermes_personal/product_video hermes_personal/integrations tests/hermes_personal/product_video` -> passed; `git diff --check b5a1b09ccd..HEAD` -> clean.
+- Code inspection confirmed the previous Task 5 gaps are closed enough for this gate stage: handlers load workflow state/version through public engine/repository APIs, reject unknown/stale/HITL/illegal/digest-invalid inputs before client invocation, pass required upstream refs plus workflow/job/idempotency metadata to injected PI/VF clients, reserve budget before paid VF calls, release on post-reservation failure, and dispatch through `JobDispatcher` to terminal success/failure.
 
-Findings / Evidence:
-- `hermes_personal/product_video/handlers.py:162`-`199` calls Product Intelligence methods without passing `ctx.workflow_id`, `ctx.job_id`, or `ctx.idempotency_key`; `JobContext.idempotency_key` is defined at line 51 but is not used by any handler.
-- `hermes_personal/product_video/handlers.py:201`-`289` passes only the immediate stage input (`brief_config`, `brief_ref`, `scene_ref`, `story_ref`, `render_ref`) to Video Factory methods. It does not pass workflow/job/idempotency correlation even though Gate 5 Task 5 requires workflow/job/idempotency ownership before paid/provider effects.
-- `hermes_personal/integrations/video_factory/client.py:49`-`67` accepts `**kwargs` but ignores those arguments and still returns deterministic local payloads, so tests cannot prove provider-bound correlation or idempotency propagation.
-- `tests/hermes_personal/product_video/test_job_handlers.py:160`-`166` labels idempotency as deterministic artifact equality while directly invoking the client twice; it does not prove duplicate dispatch/retry avoids a second paid/client effect.
-- `tests/hermes_personal/product_video/test_handlers.py:155`-`167` proves only a single forwarded ref for one VF stage and explicitly asserts `create_scene_plan("brief_ref_123")`; it would fail to catch missing workflow/job/idempotency metadata across the eight handlers.
-- Budget coverage still asserts failure/release behavior only indirectly. There is no test proving reservation happens before the client call for each paid stage or that actual cost/idempotent replay is recorded/released consistently at the handler boundary.
+Evidence:
+- `hermes_personal/product_video/handlers.py:98`-`107` uses `WorkflowEngine.get_workflow_state()` / `WorkflowRepository.get_workflow()` rather than private `_cache` or caller-supplied state.
+- `hermes_personal/product_video/handlers.py:151`-`158` enforces expected input digests; stage methods enforce required refs before client calls.
+- `hermes_personal/product_video/handlers.py:170`-`176`, `189`-`194`, `207`-`213`, and `228`-`325` propagate workflow/job/idempotency metadata to the injected clients.
+- `tests/hermes_personal/product_video/test_handlers.py:153`-`208` proves correlation metadata propagation and idempotent replay through an injected fake client with no duplicate counted client effect.
+- `tests/hermes_personal/product_video/test_handlers.py:211`-`224` proves registered dispatch reaches terminal `JobStatus.SUCCESS` with a `JobSucceeded` result.
 
 Plan Adjustment:
-- Reason: Worker addressed earlier state/ref gaps but interpreted idempotency as deterministic fake output instead of a no-duplicate-effect contract propagated to injected provider clients.
-- Impact: Task 6 reconciliation should not build on handlers that may duplicate paid effects or lose correlation between durable jobs and external PI/VF artifacts.
-- Affected phases/tasks: Phase 5 Task 5 only; Task 6 remains blocked until Task 5 is accepted.
-- Proposed correction: Add failing tests around PI/VF client call signatures, idempotent replay/retry, and budget-before-client order, then minimally update handlers/client adapters to satisfy them.
+- None. Task 5 now aligns with the Gate 5 sequence and Task 6 is the next dependency-safe task in the current phase plan.
 
-Reviewed Worker Iteration: 46
-Reviewed Commit/Range: `f34afbaa11` / `cf5e558c30..f34afbaa11` (coordination handoff at `5a03ba0fa6`)
+Reviewed Worker Iteration: 47
+Reviewed Commit/Range: `7e5f819b0c` / `f34afbaa11..7e5f819b0c` (coordination handoff at `9543958dee`)
 
 Next Step:
-Worker to remediate the remaining Phase 5 Task 5 idempotency/correlation gaps, then report Iteration 47 back to PLANNER.
+Worker to implement Phase 5 Task 6: Inventory And Reconcile Legacy Data Without Deletion.
 ---
 
 ## History
+
+### Iteration 48
+Antigravity Worker completed Phase 5 Task 6: implemented legacy data inventory, cryptographic reconciliation, safe rollback, and operator documentation (commit f7ede42c4f). Handed off to Planner for Gate 5 Task 6 acceptance.
 
 ### Iteration 47
 Antigravity Worker completed Phase 5 Task 5 Idempotency & Correlation Remediation: propagated correlation metadata to clients, proved no-duplicate-paid-effect on replay, and verified 177 tests (commit 7e5f819b0c). Handed off to Planner for Gate 5 Task 5 acceptance.
