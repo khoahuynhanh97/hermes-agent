@@ -9,15 +9,27 @@ from .processes import (
     RestartPolicy,
     build_process_topology,
 )
+from .supervisor import (
+    ChildProcess,
+    DefaultProcessRunner,
+    ProcessRunner,
+    Supervisor,
+    SupervisorEvent,
+)
 
 __all__ = [
+    "ChildProcess",
+    "DefaultProcessRunner",
     "ProbeSpec",
     "ProbeType",
+    "ProcessRunner",
     "ProcessSpec",
     "ProcessTopologyError",
     "RestartPolicy",
     "RuntimeConfig",
     "RuntimeConfigError",
     "RuntimeMode",
+    "Supervisor",
+    "SupervisorEvent",
     "build_process_topology",
 ]
