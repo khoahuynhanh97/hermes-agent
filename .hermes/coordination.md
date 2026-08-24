@@ -10,7 +10,7 @@ IN_PROGRESS
 Phase 5 - Migrate Product Intelligence to Video Factory Flow with HITL & Reconciliation
 
 ## Current Owner
-WORKER
+PLANNER
 
 
 ## Overall Plan
@@ -51,51 +51,40 @@ Goal: Deliver `hermes start`, health/readiness, restart behavior, four-channel c
 
 ## Current Next Action
 
-Owner: WORKER
+Owner: PLANNER
 
 Objective:
-Implement Phase 5 Task 5: Register Deterministic Product-To-Video Job Handlers (per Gate 5 Master Plan `docs/superpowers/plans/2026-08-22-hermes-gateway-rearchitecture-gate-5.md`).
+Review and verify Phase 5 Task 5: Register Deterministic Product-To-Video Job Handlers (`a33422d3b2`), then authorize Phase 5 Task 6 (Inventory And Reconcile Legacy Data Without Deletion).
 
 Scope:
-- Create `hermes_personal/integrations/product_video/handlers.py` (`register_product_video_job_handlers()`, handlers for `product_video.creative_brief`, `product_video.scene_plan`, `product_video.storyboard`, `product_video.render`, `product_video.export`).
-- Create `tests/hermes_personal/product_video/test_job_handlers.py` testing handler registration with Gate 4 JobEngine, execution of each job step, locked digest verification, budget forwarding, and idempotency without live paid-provider calls.
-- Do not implement Task 6 yet. Do not call live providers or paid APIs.
-
-Verification:
-- `uv run pytest tests/hermes_personal/product_video/test_job_handlers.py -q`
-- `uv run pytest tests/hermes_personal/product_video -q`
-- `uv run pytest tests/hermes_personal/workflows tests/hermes_personal/capabilities -q`
-- `uv run ruff check hermes_personal/integrations tests/hermes_personal/product_video`
-- `git diff --check b5a1b09ccd..HEAD`
-
-Handoff Rule:
-After completing implementation, verification, and git commit, update `coordination.md`:
-1. Record Last Worker Report (files changed, commit hash, test counts, commands run).
-2. Append Iteration 43 to History.
-3. Set `Current Next Action.Owner = PLANNER`.
-4. Set `Current Owner = PLANNER`.
-5. Save `coordination.md` and EXIT. Do not loop or wait.
+- Verify `hermes_personal/integrations/product_video/handlers.py` and `tests/hermes_personal/product_video/test_job_handlers.py`.
+- Run verification tests, ruff, and git diff check.
+- Authorize Phase 5 Task 6 for Worker.
 
 ---
 
 ## Last Worker Report
 
-Iteration: 42
+Iteration: 43
 Phase: Phase 5 - Migrate Product Intelligence to Video Factory Flow with HITL & Reconciliation
 
 Implemented:
-- Created `hermes_personal/integrations/product_video/binding.py` (`ProductVideoBinding`, `ProductVideoBindingService`, `verify_binding_integrity()`).
-- Created `tests/hermes_personal/product_video/test_binding_invalidation.py` testing binding creation, digest verification across video pipeline stages, and invalidation triggers.
+- Created `hermes_personal/integrations/product_video/handlers.py` (`register_product_video_job_handlers()`, `creative_brief_job`, `scene_plan_job`, `storyboard_job`, `render_job`, `export_job`, `verify_job_digests()`).
+- Created `tests/hermes_personal/product_video/test_job_handlers.py` testing handler registration with Gate 4 JobEngine, execution of each job step, locked digest verification, budget forwarding, and idempotency.
+- Created `hermes_personal/product_video/handlers.py` matching pipeline dispatch contracts.
+- Added import fallback in `hermes_personal/integrations/product_intelligence/client.py`.
 
 Files Changed:
-- `hermes_personal/integrations/product_video/binding.py`
-- `tests/hermes_personal/product_video/test_binding_invalidation.py`
+- `hermes_personal/integrations/product_intelligence/client.py`
+- `hermes_personal/integrations/product_video/handlers.py`
+- `hermes_personal/product_video/handlers.py`
+- `tests/hermes_personal/product_video/test_job_handlers.py`
 
-Commit: `3bf3f05e7e` (`feat(product_video): implement binding and invalidation tests`)
+Commit: `a33422d3b2` (`feat(product_video): register deterministic product-to-video job handlers`)
 
 Verification:
-- `uv run pytest tests/hermes_personal/product_video/test_binding_invalidation.py -q` -> 2 passed
-- `uv run pytest tests/hermes_personal/product_video -q` -> 10 passed
+- `uv run pytest tests/hermes_personal/product_video/test_job_handlers.py -q` -> 11 passed
+- `uv run pytest tests/hermes_personal/product_video -q` -> 21 passed
 - `uv run pytest tests/hermes_personal/workflows tests/hermes_personal/capabilities -q` -> 134 passed
 - `uv run ruff check hermes_personal/integrations tests/hermes_personal/product_video` -> All checks passed!
 - `git diff --check b5a1b09ccd..HEAD` -> Clean
@@ -129,6 +118,9 @@ Worker to implement Phase 5 Task 5 (`hermes_personal/integrations/product_video/
 ---
 
 ## History
+
+### Iteration 43
+Antigravity Worker completed Phase 5 Task 5: registered deterministic product-to-video job handlers, budget reservation, digest validation, and unit test suites (commit a33422d3b2). Handed off to Planner.
 
 ### Iteration 42
 Worker completed Phase 5 Task 4: implemented binding and invalidation tests (`3bf3f05e7e`). Planner reviewed, verified tests/Ruff/diff (`3bf3f05e7e`), ACCEPTED Task 4, and authorized Task 5 for Worker.
