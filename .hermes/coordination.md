@@ -10,7 +10,7 @@ IN_PROGRESS
 Phase 7 - Runtime Supervision, Multi-Channel Cutover, and Legacy Retirement
 
 ## Current Owner
-WORKER
+PLANNER
 ## Overall Plan
 
 ### Phase 0
