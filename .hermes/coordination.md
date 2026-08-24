@@ -8,9 +8,9 @@ IN_PROGRESS
 
 ## Current Phase
 Phase 5 - Migrate Product Intelligence to Video Factory Flow with HITL & Reconciliation
-
 ## Current Owner
-WORKER
+
+PLANNER
 
 
 ## Overall Plan
@@ -51,7 +51,7 @@ Goal: Deliver `hermes start`, health/readiness, restart behavior, four-channel c
 
 ## Current Next Action
 
-Owner: WORKER
+Owner: PLANNER
 
 Objective:
 Implement Phase 5 Task 4: Implement Product-To-Video Binding And Invalidation (per Gate 5 Master Plan `docs/superpowers/plans/2026-08-22-hermes-gateway-rearchitecture-gate-5.md`).
