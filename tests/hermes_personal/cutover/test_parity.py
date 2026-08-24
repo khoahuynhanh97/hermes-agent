@@ -66,7 +66,7 @@ def test_semantic_parity_comparison():
         cost_usd=0.012,
     )
 
-    # Identical semantic fingerprint with slight latency delta -> PASS
+    # Identical semantic fingerprint with acceptable bounded latency delta (465ms vs 450ms = +3.3%) -> PASS
     fp_candidate = ExecutionFingerprint(
         outcome_category="workflow_started",
         clarification_required=False,
@@ -101,6 +101,60 @@ def test_semantic_parity_comparison():
     report2 = compare_semantic_parity("test_fixture_002", fp_baseline, fp_mismatch)
     assert report2.is_equivalent is False
     assert any(m.field_name == "selected_capability_ids" for m in report2.mismatches)
+
+
+def test_semantic_parity_enforces_bounded_latency_and_cost():
+    fp_baseline = ExecutionFingerprint(
+        outcome_category="success",
+        clarification_required=False,
+        selected_capability_ids=("hermes.tools.search",),
+        workflow_type=None,
+        workflow_state=None,
+        approval_gates=(),
+        artifact_ownership_version_digest=(),
+        terminal_status="completed",
+        latency_ms=100.0,
+        cost_usd=0.010,
+    )
+
+    # 1. Excessive latency delta: 180ms vs 100ms (+80% > 50% max delta) -> FAIL
+    fp_excessive_latency = ExecutionFingerprint(
+        outcome_category="success",
+        clarification_required=False,
+        selected_capability_ids=("hermes.tools.search",),
+        workflow_type=None,
+        workflow_state=None,
+        approval_gates=(),
+        artifact_ownership_version_digest=(),
+        terminal_status="completed",
+        latency_ms=180.0,
+        cost_usd=0.010,
+    )
+    report_lat = compare_semantic_parity("test_fixture_lat", fp_baseline, fp_excessive_latency, max_latency_delta_ratio=0.5)
+    assert report_lat.is_equivalent is False
+    assert any(m.field_name == "latency_ms" for m in report_lat.mismatches)
+
+    # 2. Excessive cost delta: 0.015 vs 0.010 (+50% > 20% max delta) -> FAIL
+    fp_excessive_cost = ExecutionFingerprint(
+        outcome_category="success",
+        clarification_required=False,
+        selected_capability_ids=("hermes.tools.search",),
+        workflow_type=None,
+        workflow_state=None,
+        approval_gates=(),
+        artifact_ownership_version_digest=(),
+        terminal_status="completed",
+        latency_ms=105.0,
+        cost_usd=0.015,
+    )
+    report_cost = compare_semantic_parity("test_fixture_cost", fp_baseline, fp_excessive_cost, max_cost_delta_ratio=0.2)
+    assert report_cost.is_equivalent is False
+    assert any(m.field_name == "cost_usd" for m in report_cost.mismatches)
+
+    # Verify redaction in ParityReport.as_dict()
+    dict_repr = report_cost.as_dict()
+    assert dict_repr["is_equivalent"] is False
+    assert len(dict_repr["mismatches"]) == 1
 
 
 def test_ordered_reversible_cutover_progression():

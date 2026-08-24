@@ -146,7 +146,19 @@ def compare_semantic_parity(
             reason="Terminal status mismatch",
         ))
 
-    # 8. Bounded cost and latency bounds
+    # 8. Bounded latency bounds
+    if baseline.latency_ms > 0:
+        lat_diff = abs(candidate.latency_ms - baseline.latency_ms) / baseline.latency_ms
+        if lat_diff > max_latency_delta_ratio:
+            mismatches.append(ParityMismatch(
+                fixture_id=fixture_id,
+                field_name="latency_ms",
+                baseline_value=baseline.latency_ms,
+                candidate_value=candidate.latency_ms,
+                reason=f"Latency delta {lat_diff:.1%} exceeded threshold {max_latency_delta_ratio:.1%}",
+            ))
+
+    # 9. Bounded cost bounds
     if baseline.cost_usd > 0:
         cost_diff = abs(candidate.cost_usd - baseline.cost_usd) / baseline.cost_usd
         if cost_diff > max_cost_delta_ratio:
