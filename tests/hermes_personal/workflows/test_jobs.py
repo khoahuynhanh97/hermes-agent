@@ -54,4 +54,3 @@ def test_job_timeout():
     assert result.status == JobStatus.FAILURE
     assert isinstance(result.error, TimeoutError)
 
-
