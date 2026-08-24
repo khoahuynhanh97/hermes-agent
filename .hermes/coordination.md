@@ -49,50 +49,60 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 ---
 
 ## Current Next Action
-
 Owner: PLANNER
 
 Objective:
-Review and accept Phase 7 Task 7 Remediation (`01a0543353`), accept Task 7, and authorize Phase 7 Task 8 (Run Full Offline Acceptance And Operational Smoke Tests) for Worker.
+Review Phase 7 Task 8 offline acceptance, supervisor recovery, security boundary e2e test suite, and operational guide for Gate 7 and program completion.
 
 Scope:
-- Verify bounded latency delta enforcement in `compare_semantic_parity()`.
-- Verify bounded latency unit tests and redaction tests in `tests/hermes_personal/cutover/test_parity.py`.
-- Accept Phase 7 Task 7 and authorize Phase 7 Task 8 for Worker.
+- Review `tests/hermes_personal/e2e/test_four_channel_orchestration.py`, `tests/hermes_personal/e2e/test_supervisor_recovery.py`, `tests/hermes_personal/e2e/test_security_boundaries.py`.
+- Review `docs/hermes-personal/operations.md`.
+- Verify full test suite passing (451 hermes_personal + 120 regression tests).
+- Review Gate 7 completion and program cutover acceptance.
+
+Expected Result:
+Planner accepts Phase 7 Task 8 and issues the final Gate 7 / Phase 7 program review.
+
+Exact Verification:
+- `uv run pytest tests/hermes_personal -q`
+- `uv run pytest tests/tools/test_registry.py tests/tools/test_mcp_capability_gating.py tests/gateway/test_session.py -q`
+- `uv run hermes start --help`
+- `git diff --check`
+- `git status --short`
+
+Handoff Rule:
+Planner reviews commit `d2477c679b`, updates Last Planner Review, and records Gate 7 final assessment.
 
 ## Last Worker Report
 
-Iteration: 76
+Iteration: 77
 Phase: Phase 7 - Runtime Supervision, Multi-Channel Cutover, and Legacy Retirement
 
 Implemented:
-- Updated `compare_semantic_parity()` in `hermes_personal/cutover/parity.py` to enforce Gate 7 bounded latency delta comparison (`max_latency_delta_ratio`) alongside cost delta bounds.
-- Added comprehensive unit tests in `tests/hermes_personal/cutover/test_parity.py` verifying that excessive latency deltas (e.g. +80% > 50% max threshold) produce a `ParityMismatch` on field `latency_ms`, while acceptable bounded latency passes, and sensitive values are redacted in `ParityReport.as_dict()`.
-- Verified all 8 unit tests in `tests/hermes_personal/cutover/` and 300 broad repository tests pass cleanly.
+- Implemented Phase 7 Task 8: Full Offline Acceptance and Operational Smoke Tests:
+  * `tests/hermes_personal/e2e/test_four_channel_orchestration.py`: Proves natural-language turns across Telegram, CLI, Web, and Omni converge on single `HermesTurnService` boundary, structured clarification on ambiguity, and isolated per-channel session histories.
+  * `tests/hermes_personal/e2e/test_supervisor_recovery.py`: Proves supervisor process topology with bounded restart policies, readiness probe state transitions, and workflow engine / event store durability across process restarts.
+  * `tests/hermes_personal/e2e/test_security_boundaries.py`: Proves owner isolation (403 on cross-user artifact lookup), unauthenticated principal policy rejection, optimistic concurrency version conflict on stale workflow commits, and sensitive secret redaction.
+  * `docs/hermes-personal/operations.md`: Comprehensive operational guide detailing supervised architecture, zero-paid offline smoke test procedures, security boundaries, and packaging verification.
+  * Renamed `tests/hermes_personal/workflows/test_repository.py` -> `test_workflow_repository.py` to ensure clean, non-colliding test discovery.
 
 Files Changed:
-- `hermes_personal/cutover/parity.py`
-- `tests/hermes_personal/cutover/test_parity.py`
+- `docs/hermes-personal/operations.md`
+- `tests/hermes_personal/e2e/test_four_channel_orchestration.py`
+- `tests/hermes_personal/e2e/test_supervisor_recovery.py`
+- `tests/hermes_personal/e2e/test_security_boundaries.py`
+- `tests/hermes_personal/workflows/test_workflow_repository.py`
+- `tests/hermes_personal/workflows/test_repository.py` (deleted)
 
-Commit: `01a0543353` (`fix(cutover): enforce bounded latency deltas in semantic parity comparison`) / Task 7 Range: `f4ed7b158e..01a0543353`
+Commit: `d2477c679b` (`feat(e2e): add full offline acceptance, supervisor recovery, security boundary e2e tests and operations runbook`)
 
 Verification:
-- `uv run pytest tests/hermes_personal/cutover -q` -> 8 passed in 0.79s
-- `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 300 passed in 47.04s
-- `uv run ruff check hermes_personal/cutover tests/hermes_personal/cutover` -> All checks passed!
-- `git diff --check` -> Clean (0 whitespace/diff errors)
-- `git status --short` -> Clean for all project files (only local runtime helper scripts remain):
-  ```
-  ?? build/
-  ?? coord.txt
-  ?? create_shortcut.vbs
-  ?? launch_gui.vbs
-  ?? run_worker.bat
-  ?? update_coord.py
-  ?? worker-prompt.txt
-  ?? worker-scheduler.ps1
-  ?? worker.ps1
-  ```
+- `uv run pytest tests/hermes_personal -q` -> 451 passed in 34.02s
+- `uv run pytest tests/tools/test_registry.py tests/tools/test_mcp_capability_gating.py tests/gateway/test_session.py -q` -> 120 passed in 8.68s
+- `uv run hermes start --help` -> Exited with code 0 (CLI argument parser verified)
+- `HERMES_NIX_BUILD=1 uv build --wheel` -> Package wheel built successfully
+- `git diff --check` -> Clean (0 whitespace/syntax errors)
+- `git status --short` -> Clean for all project files
 
 Remaining Issues:
 - None.
@@ -103,42 +113,41 @@ Risks/Blockers:
 ---
 
 ## Last Planner Review
-
-Iteration: 75
+Iteration: 76
 
 Decision:
-REWORK: Phase 7 Task 7 is not accepted yet. Most Task 7 scaffolding and tests are present, but semantic parity does not enforce the Gate-required bounded latency delta.
+CONTINUE: Phase 7 Task 7 latency remediation is accepted; Phase 7 remains IN_PROGRESS and Worker is authorized for Phase 7 Task 8.
 
 Assessment:
-- Reviewed Worker Report Iteration 75 and commit/range `2a399c5a32..f4ed7b158e` against Gate 7 Task 7.
-- The implementation adds the expected cutover package, default route inventory, semantic parity structures, ordered cutover coordinator, retirement checker, tests, and runbook.
-- Inventory validation rejects prohibited direct-provider routes and natural-language bypasses of `HermesTurnService`.
-- Retirement authorization enforces zero callers, parity, reconciliation, rollback artifact, full suite, observation window, signed release record, and retained data stores/media.
-- However, `ExecutionFingerprint` includes `latency_ms` and `compare_semantic_parity()` accepts `max_latency_delta_ratio`, but the function never compares latency. Gate 7 explicitly requires semantic parity to compare bounded latency/cost deltas, so this is an acceptance gap.
-- The current tests only prove a small latency delta is accepted; they do not prove an excessive latency delta is rejected.
+- Reviewed Worker Report Iteration 76 and commit/range `f4ed7b158e..01a0543353` against prior REWORK and Gate 7 Task 7.
+- The prior blocker is closed: `compare_semantic_parity()` now enforces `max_latency_delta_ratio` for `latency_ms` and emits a `latency_ms` `ParityMismatch` when exceeded.
+- Tests now prove excessive latency fails, bounded latency remains accepted, excessive cost still fails, and parity report dictionary serialization remains exercised.
+- Task 7 inventory, semantic parity, ordered reversible cutover, retirement checker, runbook, and tests are sufficient to proceed to Task 8 final offline acceptance.
 
 Evidence/Findings:
-- `git show --stat f4ed7b158e` shows the expected Task 7 files under `hermes_personal/cutover`, `tests/hermes_personal/cutover`, and `docs/hermes-personal/cutover-runbook.md`.
-- `hermes_personal/cutover/parity.py:149-159` comments `Bounded cost and latency bounds` but only checks `baseline.cost_usd`; no branch checks `latency_ms` or appends a `latency_ms` mismatch.
-- `tests/hermes_personal/cutover/test_parity.py:55-103` covers equivalent fingerprints with a small latency delta and a missing capability mismatch, but no excessive latency mismatch.
-- Fresh cutover pytest with approved escalation: `uv run pytest tests/hermes_personal/cutover -q` -> 7 passed in 0.82s.
-- Fresh broad pytest with approved escalation: `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 300 passed in 14.54s.
+- `git diff f4ed7b158e..01a0543353 -- hermes_personal/cutover/parity.py tests/hermes_personal/cutover/test_parity.py` shows targeted latency enforcement and tests only.
+- `hermes_personal/cutover/parity.py` now checks `baseline.latency_ms > 0`, computes relative latency delta, compares it to `max_latency_delta_ratio`, and appends a `latency_ms` mismatch with threshold details.
+- `tests/hermes_personal/cutover/test_parity.py` now covers excessive latency delta (`180ms` vs `100ms`) and confirms `latency_ms` mismatch, plus existing cost mismatch coverage.
+- Fresh cutover pytest with approved escalation: `uv run pytest tests/hermes_personal/cutover -q` -> 8 passed in 0.45s.
+- Fresh broad pytest with approved escalation: `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 300 passed in 14.57s.
 - Fresh Ruff with approved escalation: `uv run ruff check hermes_personal/cutover tests/hermes_personal/cutover` -> All checks passed.
 - Fresh `git diff --check` -> clean. Fresh `git status --short` shows only local untracked helper/runtime files.
 
 Plan Adjustment:
-Reason: Task 7 semantic parity omitted one Gate-required comparison dimension: bounded latency delta.
-Impact: Cutover could incorrectly pass shadow parity while candidate channel latency exceeds configured thresholds.
-Affected phases/tasks: Phase 7 Task 7 only; Task 8 remains blocked until parity enforcement is complete.
-Proposed correction: Add latency delta enforcement and regression tests, then hand off for re-review.
+None. Task 7 remediation is accepted; proceed to Gate 7 Task 8.
 
-Reviewed Worker Iteration: 75
-Reviewed Commit/Range: `f4ed7b158e` / `2a399c5a32..f4ed7b158e` (coordination handoff at `515b3c3341`)
+Reviewed Worker Iteration: 76
+Reviewed Commit/Range: `01a0543353` / `f4ed7b158e..01a0543353` (coordination handoff at `bb5577bc6f`)
 
 Next Step:
-Worker to remediate bounded latency parity enforcement before Task 8 can start.
+Worker to implement Phase 7 Task 8 final offline acceptance, operational smoke tests, and operations documentation per Current Next Action.
 ## History
 
+### Iteration 77
+Antigravity Worker implemented Phase 7 Task 8 (Full Offline Acceptance & Operational Smoke Tests): created four-channel orchestration, supervisor recovery, and security boundary e2e tests, operations runbook (docs/hermes-personal/operations.md), verified all 451 hermes_personal and 120 regression tests pass, built wheel distribution, and verified hermes start --help (commit d2477c679b). Handed off to Planner for Gate 7 and program review.
+
+### Iteration 76 Planner
+Planner accepted Phase 7 Task 7 latency remediation at commit 01a0543353 after verifying bounded latency parity enforcement, excessive-latency regression tests, cutover tests, broad runtime/learning/gateway/capabilities tests, Ruff, and diff-check. Phase 7 remains IN_PROGRESS and Worker is assigned Task 8 final offline acceptance and operational smoke tests.
 ### Iteration 76
 Antigravity Worker remediated Phase 7 Task 7: enforced bounded latency delta comparison in compare_semantic_parity against max_latency_delta_ratio, added tests for excessive latency rejection and report redaction, with 8 cutover unit tests and 300 broad passing tests (commit 01a0543353). Handed off to Planner for Task 7 acceptance.
 
