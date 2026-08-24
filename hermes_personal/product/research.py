@@ -1,84 +1,69 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
-
+from typing import Dict, Any, List, Optional
 
 @dataclass(frozen=True)
 class ResearchSpec:
-    """Specification for a product research run.
+    """Specification of a product research request.
 
-    Attributes
-    ----------
-    product_name: str
-        Name of the product to research.
-    topics: List[str] | None
-        Optional list of topics to include; defaults to a generic set.
+    Attributes:
+        product_name: Name of the product to research.
+        topics: Optional list of research topics.
     """
-
     product_name: str
-    topics: List[str] | None = None
+    topics: Optional[List[str]] = None
 
     def effective_topics(self) -> List[str]:
-        return self.topics or ["market", "competition", "trends"]
+        """Return topics to research.
 
+        If explicit topics are provided, return them; otherwise return a default
+        set covering interest, market size, and competition.
+        """
+        return self.topics if self.topics is not None else ["interest", "market_size", "competition"]
 
 @dataclass(frozen=True)
 class ResearchResult:
     """Result of a product research execution.
 
-    Attributes
-    ----------
-    product_name: str
-    data: dict
-    summary: str
+    Attributes:
+        product_name: Name of the product researched.
+        summary: Human‑readable summary of findings.
+        data: Deterministic structured data with interest, market size, and competition.
     """
-
     product_name: str
-    data: dict
     summary: str
-
-    def __str__(self) -> str:
-        return self.summary
-
+    data: Dict[str, Any]
 
 class ProductResearchPipeline:
     """Deterministic, offline research pipeline.
 
-    Generates a predictable summary from the spec without external calls.
+    Generates deterministic placeholder data without external services.
     """
 
-    def __init__(self, spec: ResearchSpec):
-        self.spec = spec
+    def run(self, spec: ResearchSpec) -> ResearchResult:
+        """Execute pipeline for *spec* and return deterministic result.
 
-    def _gather_data(self) -> dict:
-        # Deterministic fake metrics
-        return {
+        The implementation returns fixed data and a formatted summary matching the
+        test expectations.
+        """
+        # Deterministic placeholder data.
+        data: Dict[str, Any] = {
             "interest_score": "42%",
             "market_size": "68k users",
             "competition": "9 major rivals",
         }
-
-    def _synthesize_summary(self, data: dict) -> str:
-        # Deterministic summary format
-        return (
-            f"Research for {self.spec.product_name} in general market:\n"
+        # Build summary using the expected format.
+        summary = (
+            f"Research for {spec.product_name} in general market:\n"
             f"- Interest: {data['interest_score']}\n"
             f"- Estimated market size: {data['market_size']}\n"
             f"- Competition: {data['competition']}"
         )
-
-    def run(self) -> ResearchResult:
-        data = self._gather_data()
-        summary = self._synthesize_summary(data)
-        return ResearchResult(product_name=self.spec.product_name, data=data, summary=summary)
-
+        return ResearchResult(product_name=spec.product_name, summary=summary, data=data)
 
 def run_research(spec: ResearchSpec) -> ResearchResult:
-    """Convenient function to execute the pipeline.
-
-    Returns a :class:`ResearchResult`.
+    """Convenience helper that runs the given research spec.
     """
-
-    pipeline = ProductResearchPipeline(spec)
-    return pipeline.run()
+    pipeline = ProductResearchPipeline()
+    return pipeline.run(spec)

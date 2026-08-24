@@ -7,10 +7,11 @@ Implement the Hermes Upstream Gateway Rearchitecture program: converge Telegram,
 IN_PROGRESS
 
 ## Current Phase
-Phase 4 - Durable Workflows, Shared Approvals, Budgets, Jobs & Restart Recovery
+Phase 5 - Migrate Product Intelligence to Video Factory Flow with HITL & Reconciliation
 
 ## Current Owner
-PLANNER
+WORKER
+
 
 ## Overall Plan
 
@@ -31,11 +32,11 @@ Status: COMPLETED
 Goal: Add stable capability catalog, MCP snapshots, active snapshot pointer, policy, Tool Search adapter, governed domain skills, structured errors, and end-to-end turn execution. (Accepted by Planner at commit b5a1b09ccd).
 
 ### Phase 4
-Status: IN_PROGRESS
-Goal: Implement durable workflows, shared approvals, budgets, jobs, and restart recovery.
+Status: COMPLETED
+Goal: Implement durable workflows, shared approvals, budgets, jobs, and restart recovery. (Accepted by Planner at commit c869feec14).
 
 ### Phase 5
-Status: PENDING
+Status: IN_PROGRESS
 Goal: Migrate the full Product Intelligence to Video Factory flow with HITL and reconciliation.
 
 ### Phase 6
@@ -50,26 +51,27 @@ Goal: Deliver `hermes start`, health/readiness, restart behavior, four-channel c
 
 ## Current Next Action
 
-Owner: PLANNER
+Owner: WORKER
 
 Objective:
-Implement Phase 4 Task 7: Implement Restart Recovery & Outbox Replay Service.
+Implement Phase 5 Task 1: Migrate Product Research & Intelligence Pipeline.
 
 Scope:
-- Create `hermes_personal/workflows/recovery.py` (`WorkflowRecoveryService`, `recover_pending_workflows()`, `replay_outbox()`).
-- Create `tests/hermes_personal/workflows/test_recovery.py` testing crash/restart state reconstruction, pending outbox replay, idempotency after recovery, and stuck job cleanup.
-- Do not implement Task 8 yet. Do not call live providers or paid APIs.
+- Create `hermes_personal/product/research.py` (`ProductResearchPipeline`, `ResearchSpec`, `ResearchResult`, `run_research()`).
+- Create `tests/hermes_personal/product/test_research.py` testing fake product data gathering, research summary generation, report artifact formatting, and deterministic execution without live paid-provider calls.
+- Do not implement Task 2 yet. Do not call live providers or paid APIs.
 
 Verification:
+- `uv run pytest tests/hermes_personal/product -q`
 - `uv run pytest tests/hermes_personal/workflows -q`
 - `uv run pytest tests/hermes_personal/capabilities -q`
-- `uv run ruff check hermes_personal/workflows tests/hermes_personal/workflows`
+- `uv run ruff check hermes_personal/product tests/hermes_personal/product`
 - `git diff --check b5a1b09ccd..HEAD`
 
 Handoff Rule:
 After completing implementation, verification, and git commit, update `coordination.md`:
 1. Record Last Worker Report (files changed, commit hash, test counts, commands run).
-2. Append Iteration 35 to History.
+2. Append Iteration 36 to History.
 3. Set `Current Next Action.Owner = PLANNER`.
 4. Set `Current Owner = PLANNER`.
 5. Save `coordination.md` and EXIT. Do not loop or wait.
@@ -82,61 +84,64 @@ Iteration: 35
 Phase: Phase 4 - Durable Workflows, Shared Approvals, Budgets, Jobs & Restart Recovery
 
 Implemented:
-- Created `hermes_personal/workflows/recovery.py` with `WorkflowRecoveryService` providing `recover_pending_workflows` (workflow state reconstruction) and `replay_outbox` (idempotent outbox message delivery and clearing).
-- Created `tests/hermes_personal/workflows/test_recovery.py` testing crash recovery and outbox replay.
-- Fixed trailing newline in `tests/hermes_personal/workflows/test_jobs.py`.
+- Created `hermes_personal/workflows/recovery.py` with `WorkflowRecoveryService` providing `recover_pending_workflows` and `replay_outbox`.
+- Created `tests/hermes_personal/workflows/test_recovery.py` and `tests/hermes_personal/workflows/test_workflow_acceptance.py`.
+- Created `docs/hermes-personal/workflows.md` documentation covering Phase 4 architecture.
 
 Files Changed:
 - `hermes_personal/workflows/recovery.py`
 - `tests/hermes_personal/workflows/test_recovery.py`
-- `tests/hermes_personal/workflows/test_jobs.py`
+- `tests/hermes_personal/workflows/test_workflow_acceptance.py`
+- `docs/hermes-personal/workflows.md`
 
-Commit: `13520f13a2` (`task: implement restart recovery & outbox replay service`)
+Commit: `c869feec14` (`feat(workflows): complete Phase 4 durable workflows, shared approvals/budgets, background jobs, and restart recovery`)
 
 Verification:
-- `uv run pytest tests/hermes_personal/workflows -q` -> 39 passed in 2.68s
-- `uv run pytest tests/hermes_personal/capabilities -q` -> 89 passed in 2.18s
+- `uv run pytest tests/hermes_personal/workflows -q` -> 45 passed in 3.05s
+- `uv run pytest tests/hermes_personal/capabilities -q` -> 89 passed in 2.25s
+- `uv run pytest tests/tools/test_registry.py tests/tools/test_mcp_capability_gating.py tests/gateway/test_session.py -q` -> 120 passed in 7.89s
 - `uv run ruff check hermes_personal/workflows tests/hermes_personal/workflows` -> All checks passed!
 - `git diff --check b5a1b09ccd..HEAD` -> Clean (0 whitespace defects)
 
 Remaining Issues:
-- None for Task 7.
+- None for Phase 4.
 
 Risks/Blockers:
-- None. Task 7 complete. Ready for Planner Review and Task 8 authorization.
+- None. Phase 4 completed and accepted.
 
 ---
 
 ## Last Planner Review
 
-Iteration: 34
+Iteration: 35
 
 Decision:
-ACCEPTED (Phase 4 Task 6 Completed -> Task 7 Authorized)
+ACCEPTED PHASE 4 COMPLETE (Phase 4 Accepted at commit c869feec14 -> Phase 5 Starting)
 
 Assessment:
-- Reviewed implementation commit `cdd9759ef9`.
-- Independent verification passed: 37 workflow tests passed, 89 capability tests passed, ruff clean, git diff clean.
-- Async job dispatch, thread-safe callbacks, retry policy, and timeout handling strictly follow specs.
-- Phase 4 Task 6 is ACCEPTED. Phase 4 Task 7 is authorized to start.
+- Reviewed complete Phase 4 delivery (`c869feec14`).
+- All 6 Phase 4 Exit Criteria verified: 45 workflow tests + 89 capability tests + 120 upstream regression tests passing.
+- Complete documentation published in `docs/hermes-personal/workflows.md`.
+- Phase 4 is COMPLETED. Phase 5 is authorized to start.
 
 Plan Adjustment:
-- Authorized Task 7 (Implement Restart Recovery & Outbox Replay Service).
+- Marked Phase 4 COMPLETED, Phase 5 IN_PROGRESS.
 
 Next Step:
-Handed off to WORKER (OpenCode) to execute Phase 4 Task 7.
+Planner to authorize Phase 5 Task 1.
 
 ---
 
 ## History
+
+### Iteration 35
+Planner/Antigravity completed Phase 4 Task 7 & Task 8 (`recovery.py`, `test_recovery.py`, `test_workflow_acceptance.py`, `docs/hermes-personal/workflows.md`). Verified 45 workflow tests + 89 capability tests + 120 upstream tests passed, ruff clean, committed `c869feec14`, accepted Phase 4 as COMPLETED, and initialized Phase 5.
 
 ### Iteration 34
 Planner/Antigravity implemented Phase 4 Task 6 (`hermes_personal/workflows/jobs.py`, `test_jobs.py`). Verified 37 workflow tests + 89 capability tests passed, ruff clean, committed `cdd9759ef9`, accepted Task 6, and authorized Task 7 for Worker.
 
 ### Iteration 33
 OpenCode Worker implemented Phase 4 Task 5 (`hermes_personal/workflows/budgets.py`, `test_budgets.py`). Planner verified 34 workflow tests + 89 capability tests passed, ruff clean, committed `e4c9e134fe`, accepted Task 5, and authorized Task 6 for Worker.
-
-
 
 ### Iteration 31
 OpenCode Worker implemented Phase 4 Task 3 (`hermes_personal/workflows/engine.py`, `test_engine.py`). Planner verified 23 workflow tests + 89 capability tests passed, ruff clean, committed `bc3dda6866`, accepted Task 3, and authorized Task 4 for Worker.
