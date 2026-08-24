@@ -53,44 +53,48 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 Owner: PLANNER
 
 Objective:
-Review and accept Phase 7 Task 1 Rework (`afd843c0fc`), accept Task 1, and authorize Phase 7 Task 2 (Define Runtime Process Topology And Environment Contract) for Worker.
+Review and accept Phase 7 Task 2 implementation (`73ff7f89c7`), accept Task 2, and authorize Phase 7 Task 3 (Implement Supervisor Lifecycle And Bounded Restart) for Worker.
 
 Scope:
-- Verify `redact()` in `hermes_personal/observability/redaction.py` supporting `value_fingerprints: Sequence[str | Pattern[str]]`.
-- Verify value fingerprint regression tests in `tests/hermes_personal/runtime/test_observability.py`.
-- Accept Phase 7 Task 1 and authorize Phase 7 Task 2 for Worker.
+- Verify `RuntimeConfig` and `RuntimeMode` validation in `hermes_personal/runtime/config.py`.
+- Verify `ProcessSpec`, `ProbeSpec`, `RestartPolicy`, and `build_process_topology` in `hermes_personal/runtime/processes.py`.
+- Verify absence of raw secret values in argv.
+- Verify unit test coverage in `tests/hermes_personal/runtime/test_processes.py`.
+- Authorize Phase 7 Task 3 for Worker.
 
 ---
 
 ## Last Worker Report
 
-Iteration: 62
+Iteration: 63
 Phase: Phase 7 - Runtime Supervision, Multi-Channel Cutover, and Legacy Retirement
 
 Implemented:
-- Updated `hermes_personal/observability/redaction.py`:
-  * API Shape: `redact(data: Any, sensitive_keys: Sequence[str] = DEFAULT_SECRET_KEY_PATTERNS, value_fingerprints: Sequence[str | Pattern[str]] = ()) -> Any`
-  * API Shape: `redact_string(value: str, value_fingerprints: Sequence[str | Pattern[str]] = ()) -> str`
-  * Supports string substring matches as well as compiled regex `re.Pattern` value fingerprints.
-  * Recursively redacts across dict values, list items, tuple elements, and set members.
-- Exported `redact_string` in `hermes_personal/observability/__init__.py`.
-- Added focused regression tests in `tests/hermes_personal/runtime/test_observability.py`:
-  * `test_configured_value_fingerprint_redaction_under_safe_keys`: validates secret tokens under innocent keys like `description`, `nested_item.stdout`, `log_lines`, `tuple_items`, `set_items` are masked.
-  * `test_configured_value_fingerprint_regex_patterns`: validates regex pattern matching for API key formats (`sk-...`).
-  * `test_redact_string_directly`: validates standalone string redaction helper.
-- Verified all 17 observability unit tests and 266 total repository tests pass cleanly.
+- Created `hermes_personal/runtime/config.py`: defines `RuntimeConfig`, `RuntimeMode` (`development`, `production`, `test`), and port/static directory validation logic (`RuntimeConfigError`).
+- Created `hermes_personal/runtime/processes.py`: defines immutable dataclasses `ProcessSpec`, `ProbeSpec`, `ProbeType`, `RestartPolicy`, and `build_process_topology()` generating ordered process specifications:
+  * `gateway`: Gateway / Agent Runtime (required=True, port=8642)
+  * `app_api`: Application API Server (required=True, port=8000, optionally embeds static web bundle in production)
+  * `mcp_discovery`: MCP Discovery & Snapshot (required=True)
+  * `durable_worker`: Durable Background Workers (required=True)
+  * `telegram`: Telegram Platform Adapter (required=False)
+  * `web_ui`: Frontend development server child process in development mode (required=False, port=3000)
+- Prohibited raw secret values from argv across all process specifications (only env key names referenced).
+- Created `hermes_personal/runtime/__init__.py` with public package exports.
+- Created `tests/hermes_personal/runtime/test_processes.py` with 6 unit tests.
+- Verified all 272 tests across runtime, learning, gateway, and capabilities suites.
 
 Files Changed:
-- `hermes_personal/observability/__init__.py`
-- `hermes_personal/observability/redaction.py`
-- `tests/hermes_personal/runtime/test_observability.py`
+- `hermes_personal/runtime/__init__.py`
+- `hermes_personal/runtime/config.py`
+- `hermes_personal/runtime/processes.py`
+- `tests/hermes_personal/runtime/test_processes.py`
 
-Commit: `afd843c0fc` (`feat(observability): support configured value fingerprints and regex patterns in redaction`) / Task 1 Range: `3f4e2f9eb2..afd843c0fc`
+Commit: `73ff7f89c7` (`feat(runtime): define process topology and environment contract for hermes start`) / Task 2 Range: `afd843c0fc..73ff7f89c7`
 
 Verification:
-- `uv run pytest tests/hermes_personal/runtime/test_observability.py -q` -> 17 passed in 0.60s
-- `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 266 passed in 15.03s
-- `uv run ruff check hermes_personal/observability tests/hermes_personal/runtime/test_observability.py` -> All checks passed!
+- `uv run pytest tests/hermes_personal/runtime/test_processes.py -q` -> 6 passed in 0.73s
+- `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 272 passed in 14.15s
+- `uv run ruff check hermes_personal/runtime tests/hermes_personal/runtime/test_processes.py` -> All checks passed!
 - `git diff --check` -> Clean (0 whitespace/diff errors)
 - `git status --short` -> Clean for all project files (only local runtime helper scripts remain):
   ```
@@ -115,40 +119,43 @@ Risks/Blockers:
 
 ## Last Planner Review
 
-Iteration: 61
+Iteration: 62
 
 Decision:
-REWORK: Phase 7 Task 1 is not accepted. Focused tests and Ruff pass, but the implementation does not satisfy the Gate 7 redaction contract for configured value fingerprints.
+CONTINUE: Phase 7 Task 1 is accepted after rework; Phase 7 remains IN_PROGRESS and Worker is authorized for Phase 7 Task 2.
 
 Assessment:
-- Reviewed Worker Report Iteration 61 and commit `3f4e2f9eb2` against Gate 7 Task 1.
-- `CorrelationContext` preserves owner/session/turn/workflow/job/approval/tool IDs and supports child context inheritance.
-- `ComponentHealth` and `HealthReport` define the required status vocabulary and readiness/liveness aggregation for required vs optional components.
-- `redact()` recursively handles dict/list/tuple/set structures and masks values when the key name is sensitive.
-- Acceptance gap: Gate 7 Task 1 explicitly requires redaction "by normalized key and configured value fingerprints before serialization." Current `redact()` has no configured value-fingerprint parameter/path and returns primitive string values unchanged under safe-looking keys, so a known secret value can leak if the key is not classified as sensitive. The focused tests also do not cover this requirement.
+- Reviewed Worker Report Iteration 62 and commit `afd843c0fc` against Gate 7 Task 1 and the prior Planner REWORK.
+- The redaction gap is closed: `redact()` now accepts configured `value_fingerprints` as literal substrings or compiled regex patterns and applies them recursively under safe-looking keys across dict/list/tuple/set payloads.
+- Existing key-based redaction, correlation context propagation, health status vocabulary, readiness gating, and optional dependency liveness behavior remain covered by the focused observability suite.
+- Phase 7 has remaining work, so the correct decision is CONTINUE to Task 2 rather than NEXT_PHASE.
 
 Evidence/Findings:
-- `hermes_personal/observability/redaction.py` exposes `redact(data, sensitive_keys=...)` only; it has no configured sensitive-value/fingerprint input and no primitive value matching branch.
-- `tests/hermes_personal/runtime/test_observability.py` verifies key-based masking and primitive pass-through, but not value-fingerprint masking.
-- Fresh verification: `uv run pytest tests/hermes_personal/runtime/test_observability.py -q` -> 14 passed in 0.89s.
+- `git show --stat --oneline afd843c0fc` shows targeted changes to `hermes_personal/observability/__init__.py`, `hermes_personal/observability/redaction.py`, and `tests/hermes_personal/runtime/test_observability.py` only.
+- `tests/hermes_personal/runtime/test_observability.py` includes regressions for raw secret values under innocent keys, nested dict/list/tuple/set structures, regex API-key patterns, and direct `redact_string()` behavior.
+- Fresh verification: `uv run pytest tests/hermes_personal/runtime/test_observability.py -q` -> 17 passed in 0.88s.
+- Fresh verification: `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 266 passed in 13.34s.
 - Fresh verification: `uv run ruff check hermes_personal/observability tests/hermes_personal/runtime/test_observability.py` -> All checks passed.
 - Fresh verification: `git diff --check` -> clean.
 - `git status --short` shows only local untracked helper/runtime files (`build/`, `coord.txt`, `create_shortcut.vbs`, `launch_gui.vbs`, `run_worker.bat`, `update_coord.py`, `worker-prompt.txt`, `worker-scheduler.ps1`, `worker.ps1`).
 
 Plan Adjustment:
-Reason: Worker Report claimed redaction completion, but the implementation/tests cover key-based recursion only and miss Gate 7's configured value-fingerprint requirement.
-Impact: Phase 7 Task 1 remains incomplete; Task 2 must not start because later runtime logs/health/process specs depend on safe redaction.
-Affected phases/tasks: Phase 7 Task 1 redaction contract; Phase 7 Task 2 process topology.
-Proposed correction: Add configured value-fingerprint matching to `redact()`, add focused tests proving raw secret values are masked under safe-looking keys and nested structures, rerun verification, and hand off with a new commit/range.
+None. The prior Task 1 value-fingerprint redaction drift is closed, and execution returns to the Gate 7 task sequence with Task 2 next.
 
-Reviewed Worker Iteration: 61
-Reviewed Commit/Range: `3f4e2f9eb2` / `d57157b8f9..3f4e2f9eb2` (coordination handoff at `6e00d6f27b`)
+Reviewed Worker Iteration: 62
+Reviewed Commit/Range: `afd843c0fc` / `3f4e2f9eb2..afd843c0fc` (coordination handoff at `7b6b23292e`)
 
 Next Step:
-Worker to implement configured value-fingerprint redaction and tests, then re-handoff Phase 7 Task 1.
+Worker to implement Phase 7 Task 2 runtime process topology and environment contract.
 ---
 
 ## History
+
+### Iteration 63
+Antigravity Worker implemented Phase 7 Task 2: runtime process topology and environment contract for hermes start, with 6 unit tests and 272 total passing tests (commit 73ff7f89c7). Handed off to Planner for Task 2 acceptance.
+
+### Iteration 62 Planner
+Planner accepted Phase 7 Task 1 rework at commit afd843c0fc after verifying value-fingerprint redaction, 17 focused tests, 266 broad tests, Ruff, and diff-check. Phase 7 remains IN_PROGRESS and Worker is assigned Task 2 runtime process topology.
 
 ### Iteration 62
 Antigravity Worker reworked Phase 7 Task 1: added configured value fingerprints (literal substrings and regex patterns) to `redact()` with 17 unit tests and 266 total passing tests (commit afd843c0fc). Handed off to Planner for Task 1 acceptance.
