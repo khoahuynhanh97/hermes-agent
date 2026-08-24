@@ -411,6 +411,68 @@ class LearningRepository:
             for r in cur.fetchall()
         ]
 
+    def update_version_status(self, version_id: str, new_status: VersionStatus) -> None:
+        version = self.get_version(version_id)
+        if not version:
+            raise InvalidVersion(f"Version '{version_id}' not found")
+        with self._conn:
+            self._conn.execute(
+                "UPDATE learning_version SET status = ? WHERE version_id = ?",
+                (new_status, version_id),
+            )
+            self._conn.execute(
+                """
+                INSERT INTO learning_event (event_id, candidate_id, version_id, event_type, payload_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"evt_{uuid.uuid4().hex[:12]}",
+                    version.candidate_id,
+                    version_id,
+                    f"version_{new_status}",
+                    json.dumps({"old_status": version.status, "new_status": new_status}),
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+
+    def get_active_versions_for_owner(
+        self, owner_user_id: str, kind: LearningKind | None = None
+    ) -> list[LearningVersion]:
+        if kind:
+            cur = self._conn.execute(
+                """
+                SELECT v.version_id, v.candidate_id, v.owner_user_id, v.version, v.content, v.digest, v.status, v.created_at
+                FROM learning_version v
+                JOIN learning_candidate c ON v.candidate_id = c.candidate_id
+                WHERE v.owner_user_id = ? AND v.status = 'active' AND c.kind = ?
+                ORDER BY v.created_at DESC
+                """,
+                (owner_user_id, kind),
+            )
+        else:
+            cur = self._conn.execute(
+                """
+                SELECT version_id, candidate_id, owner_user_id, version, content, digest, status, created_at
+                FROM learning_version
+                WHERE owner_user_id = ? AND status = 'active'
+                ORDER BY created_at DESC
+                """,
+                (owner_user_id,),
+            )
+        return [
+            LearningVersion(
+                version_id=r["version_id"],
+                candidate_id=r["candidate_id"],
+                owner_user_id=r["owner_user_id"],
+                version=r["version"],
+                content=r["content"],
+                digest=r["digest"],
+                status=r["status"],
+                created_at=r["created_at"],
+            )
+            for r in cur.fetchall()
+        ]
+
     def get_events(self, candidate_id: str) -> list[LearningEvent]:
         cur = self._conn.execute(
             "SELECT event_id, candidate_id, version_id, event_type, payload_json, created_at FROM learning_event WHERE candidate_id = ? ORDER BY created_at ASC",
@@ -427,3 +489,4 @@ class LearningRepository:
             )
             for r in cur.fetchall()
         ]
+

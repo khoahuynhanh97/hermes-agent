@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from .evaluator import CandidateEvaluator
 from .models import (
-
     CandidateEvaluation,
     CandidateStatus,
     EvaluationDecision,
@@ -18,12 +17,16 @@ from .models import (
     TaskOutcomeStatus,
     VersionStatus,
 )
+from .promotion import (
+    PromotionRequestResult,
+    PromotionService,
+    RollbackResult,
+)
 from .repository import LearningRepository
 
 __all__ = [
     "CandidateEvaluation",
     "CandidateEvaluator",
-
     "CandidateStatus",
     "EvaluationDecision",
     "EvidenceRef",
@@ -35,7 +38,11 @@ __all__ = [
     "LearningRepository",
     "LearningRepositoryError",
     "LearningVersion",
+    "PromotionRequestResult",
+    "PromotionService",
+    "RollbackResult",
     "TaskOutcome",
     "TaskOutcomeStatus",
     "VersionStatus",
 ]
+
