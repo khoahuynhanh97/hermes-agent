@@ -1,4 +1,4 @@
 name: hermes-personal
 kind: standalone
 version: 1.0.0
-description: Canonical personal Hermes ingress normalization and lifecycle wiring.
+description: Canonical personal Hermes ingress normalization, start CLI, and lifecycle wiring.

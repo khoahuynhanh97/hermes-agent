@@ -12971,6 +12971,13 @@ def main():
             # so its register_cli_command side effect runs before we read
             # _cli_commands (issue #54678).
             _resolve_deferred_platform_cli_command(_first_positional_argv())
+            if _first_positional_argv() == "start" and "start" not in get_plugin_manager()._cli_commands:
+                try:
+                    mgr = get_plugin_manager()
+                    if "hermes-personal" in mgr._plugins:
+                        mgr._load_plugin(mgr._plugins["hermes-personal"].manifest)
+                except Exception:
+                    pass
             for cmd_info in get_plugin_manager()._cli_commands.values():
                 if cmd_info["name"] in seen_plugin_commands:
                     continue
