@@ -53,34 +53,30 @@ Goal: Deliver `hermes start`, health/readiness, restart behavior, four-channel c
 Owner: PLANNER
 
 Objective:
-Review and verify Phase 6 Task 1 implementation (`35acbd5f7c`), accept Task 1, and authorize Phase 6 Task 2 for Worker.
+Review and verify Phase 6 Task 1 Rework (`622f7720e3`), accept Task 1, and authorize Phase 6 Task 2 for Worker.
 
 Scope:
-- Verify domain models in `hermes_personal/learning/models.py`.
-- Verify SQLite repository implementation in `hermes_personal/learning/repository.py` and schema updates in `hermes_personal/storage/sqlite.py`.
-- Verify test coverage in `tests/hermes_personal/learning/test_repository.py`.
-- Authorize Phase 6 Task 2 (Evaluate Evidence And Execution Outcomes).
+- Verify `CandidateEvaluation` domain model in `hermes_personal/learning/models.py`.
+- Verify `candidate_evaluation` SQLite table in `hermes_personal/storage/sqlite.py` and repository methods in `hermes_personal/learning/repository.py`.
+- Verify immutable task outcome persistence in `LearningRepository.record_task_outcome`.
+- Verify unit tests in `tests/hermes_personal/learning/test_repository.py`.
+- Accept Phase 6 Task 1 and authorize Phase 6 Task 2 (Evaluate Evidence And Execution Outcomes).
 
 ---
 
 ## Last Worker Report
 
-Iteration: 55
+Iteration: 56
 Phase: Phase 6 - Governed Learning Memory And Knowledge
 
 Implemented:
-- Implemented `hermes_personal/learning/models.py` with immutable domain models: `EvidenceRef`, `TaskOutcome`, `LearningCandidate`, `LearningVersion`, `LearningEvent`, and typed enums (`LearningKind`, `CandidateStatus`, `VersionStatus`, `TaskOutcomeStatus`).
-- Implemented `hermes_personal/learning/repository.py` with:
-  * Required owner and evidence validation rules (`InvalidCandidate`).
-  * Negative/failure task outcome evidence validation (positive polarity evidence citing failed outcomes is strictly rejected).
-  * Append-only version incrementation (1, 2, 3...) preserving historical versions immutably.
-  * Deterministic digest computation and idempotent candidate creation on `(owner_user_id, kind, digest)`.
-  * Anti-auto-approval enforcement for `knowledge` and `procedure` kinds.
-  * Immutable event audit logging (`LearningEvent`) on creation and status transitions.
-- Updated `hermes_personal/storage/sqlite.py` with normalized SQLite tables: `task_outcome`, `learning_candidate`, `evidence_ref`, `learning_version`, and `learning_event`.
-- Created `hermes_personal/learning/__init__.py` with standard public exports.
-- Implemented `tests/hermes_personal/learning/test_repository.py` with 6 comprehensive unit tests.
-- Verified all 214 tests across learning, gateway, capabilities, workflows, and migration suites.
+- Added `CandidateEvaluation` domain model in `hermes_personal/learning/models.py` with fields: `evaluation_id`, `candidate_id`, `evaluator_name`, `decision` (`EvaluationDecision`), `score`, `reason`, `evidence_summary`, and `created_at`.
+- Created normalized `candidate_evaluation` table in `hermes_personal/storage/sqlite.py`.
+- Added `record_evaluation`, `get_evaluations_for_candidate`, and `get_evaluation` repository methods in `hermes_personal/learning/repository.py` with immutable `LearningEvent` audit logging (`evaluation_recorded`).
+- Refactored `record_task_outcome` in `hermes_personal/learning/repository.py` to enforce strict outcome immutability (idempotent for identical records, rejects conflicting mutations with `LearningRepositoryError`).
+- Added `test_candidate_evaluation_persistence` and `test_task_outcome_immutability` in `tests/hermes_personal/learning/test_repository.py`.
+- Exported `CandidateEvaluation` and `EvaluationDecision` in `hermes_personal/learning/__init__.py`.
+- Verified all 8 repository tests and 216 total tests pass cleanly.
 
 Files Changed:
 - `hermes_personal/learning/__init__.py`
@@ -89,11 +85,11 @@ Files Changed:
 - `hermes_personal/storage/sqlite.py`
 - `tests/hermes_personal/learning/test_repository.py`
 
-Commit: `35acbd5f7c` (`feat(learning): persist governed learning candidates, versions, evidence, and outcomes`)
+Commit: `622f7720e3` (`feat(learning): add CandidateEvaluation persistence and immutable task outcomes`) / Task 1 Range: `35acbd5f7c..622f7720e3`
 
 Verification:
-- `uv run pytest tests/hermes_personal/learning/test_repository.py -q` -> 6 passed in 0.80s
-- `uv run pytest tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 214 passed in 11.12s
+- `uv run pytest tests/hermes_personal/learning/test_repository.py -q` -> 8 passed in 0.90s
+- `uv run pytest tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 216 passed in 11.49s
 - `uv run ruff check hermes_personal/learning tests/hermes_personal/learning hermes_personal/storage/sqlite.py` -> All checks passed!
 - `git diff --check` -> Clean (0 whitespace/diff errors)
 - `git status --short` -> Clean for all project files (only local runtime helper scripts remain):
@@ -119,38 +115,38 @@ Risks/Blockers:
 
 ## Last Planner Review
 
-Iteration: 55
+Iteration: 56
 
 Decision:
-NEXT_PHASE: Phase 5 Gate 5 is accepted and Phase 6 is now IN_PROGRESS. Worker is authorized to begin Phase 6 Task 1.
+REWORK: Phase 6 Task 1 has passing tests, but the implementation does not yet satisfy the full Task 1 persistence contract.
 
 Assessment:
-- Reviewed Worker Report Iteration 54 and commit `b7ae8f6140` against the prior Planner REWORK and Gate 5 exit criteria.
-- The remaining Gate 5 source-code drift is resolved: `hermes_personal/integrations/product_intelligence/__init__.py` is now tracked and committed with package exports for Product Intelligence contracts and client.
-- Independent verification passed: `uv run pytest tests/hermes_personal/product_video/test_product_to_video_e2e.py tests/hermes_personal/product_video/test_restart_recovery.py -q` -> 21 passed; `uv run pytest tests/hermes_personal/product_video tests/hermes_personal/migration tests/hermes_personal/workflows tests/hermes_personal/capabilities -q` -> 206 passed; `uv run ruff check tests/hermes_personal/product_video docs/hermes-personal/product-video-runbook.md` -> All checks passed; `git diff --check b5a1b09ccd..HEAD` and `git diff --check` -> clean.
-- `git status --short` still shows only local helper/runtime untracked files (`build/`, `coord.txt`, `create_shortcut.vbs`, `launch_gui.vbs`, `run_worker.bat`, `update_coord.py`, `worker-prompt.txt`, `worker-scheduler.ps1`, `worker.ps1`) and no untracked Gate 5 source/test file.
+- Reviewed Worker Report Iteration 55 and commit `35acbd5f7c` against Gate 6 Task 1.
+- Independent verification passed on the current tree: `uv run pytest tests/hermes_personal/learning/test_repository.py -q` -> 6 passed; `uv run pytest tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 214 passed; `uv run ruff check hermes_personal/learning tests/hermes_personal/learning hermes_personal/storage/sqlite.py` -> All checks passed; `git diff --check` -> clean.
+- The committed scope is otherwise aligned with Task 1 files: learning models/repository/package init, SQLite schema, and repository tests.
+- Contract gap: Gate 6 Task 1 Step 3 explicitly requires normalized tables for candidates, evidence, evaluations, versions, task outcomes, and learning events. The current code has candidates/evidence/versions/outcomes/events but no evaluation model/table/repository/test coverage.
+- Additional immutability concern: `record_task_outcome` uses `INSERT OR REPLACE`, which can silently overwrite an existing outcome record. Task 1 is the immutable persistence foundation; rerun idempotency should not mutate historical outcome data without an explicit audited path.
 
 Evidence/Findings:
-- `git ls-files -- hermes_personal/integrations/product_intelligence/__init__.py` returns the PI package init path.
-- `git show --stat --oneline b7ae8f6140` shows one focused file addition: `hermes_personal/integrations/product_intelligence/__init__.py` with 17 insertions.
-- The accepted Task 7 evidence from Planner Review 54 remains valid: PDP provenance, real ApprovalService, real BudgetEngine accounting, idempotent replay budget behavior, WorkflowRecoveryService, JobDispatcher timeout, and PI/VF artifact metadata assertions are covered by the passing acceptance/recovery suites.
+- `rg -n "evaluation|CandidateEvaluation|learning_evaluation|candidate_evaluation" hermes_personal/learning hermes_personal/storage/sqlite.py tests/hermes_personal/learning` returned no matches.
+- `hermes_personal/storage/sqlite.py` currently defines `task_outcome`, `learning_candidate`, `evidence_ref`, `learning_version`, and `learning_event`, but no evaluation table.
+- `hermes_personal/learning/repository.py:27` executes `INSERT OR REPLACE INTO task_outcome...`. Re-recording an outcome with a changed payload would overwrite the historical task outcome record instead of preserving immutability.
 
 Plan Adjustment:
-Reason: Gate 5 Task 7 and all Gate 5 exit criteria are met on the clean committed tree (`b7ae8f6140`).
-Impact: Gate 5 is CLOSED as COMPLETED; Gate 6 is OPENED as IN_PROGRESS.
-Affected phases/tasks: Phase 5 COMPLETED; Phase 6 Task 1 authorized for Worker.
-Proposed correction: Proceed to Phase 6 Task 1 to establish the storage models, SQLite tables, and repository for governed learning candidates, evidence, versions, and outcomes.
+Proposed correction: Add evaluation persistence as a Task 1 storage/domain concern, tighten outcome idempotency/immutability, rerun verification, and hand off with a new commit/range.
 
-Reviewed Worker Iteration: 54
-Reviewed Commit/Range: `b7ae8f6140` / `27ccc771d7..b7ae8f6140` (coordination handoff at `38994b1422`)
+Reviewed Worker Iteration: 55
+Reviewed Commit/Range: `35acbd5f7c` / `b7ae8f6140..35acbd5f7c` (coordination handoff at `01098e719d`)
 
 Next Step:
-Worker to implement Phase 6 Task 1 according to the declared scope in Current Next Action.
+Worker to complete the missing evaluation persistence and immutable outcome semantics before requesting Task 1 acceptance again.
 
 ---
 
 ## History
 
+### Iteration 56
+Planner reviewed Phase 6 Task 1 at commit 35acbd5f7c. Tests and Ruff pass, but Planner returned REWORK because the Gate 6 Task 1 contract explicitly includes evaluation persistence and the current implementation has no evaluation model/table/repository/test coverage; `record_task_outcome` also uses `INSERT OR REPLACE`, which weakens immutable outcome persistence. Phase 6 remains IN_PROGRESS on Task 1.
 ### Iteration 55
 Planner accepted Gate 5 at commit b7ae8f6140 after verifying the PI package init file is tracked, 21 focused tests pass, 206 broad tests pass, Ruff passes, and diff checks are clean. Phase 5 is COMPLETED, Phase 6 is IN_PROGRESS, and Worker is assigned Phase 6 Task 1 for governed learning persistence.
 ### Iteration 54
