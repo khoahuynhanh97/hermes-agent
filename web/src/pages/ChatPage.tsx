@@ -35,6 +35,8 @@ import { ChatSessionList } from "@/components/ChatSessionList";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { useI18n } from "@/i18n";
 import { api } from "@/lib/api";
+import { useHermesEventStream } from "@/hooks/useHermesEventStream";
+import { useHermesOperator } from "@/hooks/useHermesOperator";
 import { latchChatActivation } from "@/lib/chat-activation";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { normalizeSessionTitle } from "@/lib/chat-title";
@@ -204,6 +206,13 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     setHasActivated((prev) => latchChatActivation(prev, isActive));
   }, [isActive]);
   const [searchParams, setSearchParams] = useSearchParams();
+  const activeSessionId = searchParams.get("session") || "default_user";
+  const { events: hermesEvents } = useHermesEventStream({
+    ownerId: activeSessionId,
+  });
+  const { submitCommand: submitHermesOperatorCommand } = useHermesOperator({
+    ownerId: activeSessionId,
+  });
   // Lazy-init: the missing-token check happens at construction so the effect
   // body doesn't have to setState (React 19's set-state-in-effect rule).
   // In gated (OAuth) mode the server intentionally omits the session token —

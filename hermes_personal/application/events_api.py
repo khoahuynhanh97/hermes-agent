@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterator, Mapping, Protocol
+
+from fastapi import APIRouter, Header, Query, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from hermes_personal.contracts.events import AgentEvent
 from hermes_personal.contracts.operator import OperatorCommand, OperatorCommandType
@@ -34,25 +37,58 @@ class ArtifactRecord:
         }
 
 
+class DurableEventStore(Protocol):
+    """Interface for durable committed Agent Events repository."""
+
+    def get_events_for_owner(self, owner_id: str, after_seq: int = 0, limit: int = 100) -> list[AgentEvent]: ...
+    def save_event(self, event: AgentEvent) -> None: ...
+
+
+class InMemoryEventStore:
+    """Durable in-memory fallback implementation for committed Agent Events."""
+
+    def __init__(self, initial_events: list[AgentEvent] | None = None) -> None:
+        self._events: list[AgentEvent] = list(initial_events or [])
+
+    def save_event(self, event: AgentEvent) -> None:
+        self._events.append(event)
+
+    def get_events_for_owner(self, owner_id: str, after_seq: int = 0, limit: int = 100) -> list[AgentEvent]:
+        matched = [
+            e
+            for e in self._events
+            if (e.principal_id == owner_id or getattr(e, "owner_user_id", None) == owner_id)
+            and e.sequence > after_seq
+        ]
+        matched.sort(key=lambda e: e.sequence)
+        return matched[:limit]
+
+
 class EventsAPI:
     """Events, Operator Command, and Artifact Metadata API service for Web and Omni ingress."""
 
     def __init__(
         self,
-        event_store: list[AgentEvent] | None = None,
+        event_store: DurableEventStore | list[AgentEvent] | None = None,
         artifact_store: dict[str, ArtifactRecord] | None = None,
         command_handler: Callable[[OperatorCommand], dict[str, Any]] | None = None,
         auth_validator: Callable[[str, str], bool] | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
-        self._events: list[AgentEvent] = event_store if event_store is not None else []
+        if event_store is None:
+            self._store: DurableEventStore = InMemoryEventStore()
+        elif isinstance(event_store, list):
+            self._store = InMemoryEventStore(event_store)
+        else:
+            self._store = event_store
+
         self._artifacts: dict[str, ArtifactRecord] = artifact_store if artifact_store is not None else {}
         self._command_handler = command_handler
         self._auth_validator = auth_validator or (lambda token, owner: bool(token and token.strip()))
         self._clock = clock
 
     def add_event(self, event: AgentEvent) -> None:
-        self._events.append(event)
+        self._store.save_event(event)
 
     def add_artifact(self, artifact: ArtifactRecord) -> None:
         self._artifacts[artifact.artifact_id] = artifact
@@ -68,14 +104,7 @@ class EventsAPI:
         if not self._auth_validator(auth_token, owner_id):
             return 403, {"error": "unauthorized", "message": "Invalid authentication credentials"}
 
-        matched = [
-            e
-            for e in self._events
-            if (e.principal_id == owner_id or getattr(e, "owner_user_id", None) == owner_id)
-            and e.sequence > after_seq
-        ]
-        matched.sort(key=lambda e: e.sequence)
-        slice_events = matched[:limit]
+        slice_events = self._store.get_events_for_owner(owner_id=owner_id, after_seq=after_seq, limit=limit)
 
         events_data = [
             {
@@ -121,6 +150,23 @@ class EventsAPI:
         """Format a separate SSE heartbeat ping."""
         data_payload = json.dumps({"timestamp": self._clock()})
         return f"event: heartbeat\ndata: {data_payload}\n\n"
+
+    def stream_events_generator(
+        self,
+        owner_id: str,
+        after_seq: int = 0,
+        auth_token: str = "",
+    ) -> Iterator[str]:
+        """Generator streaming committed events followed by a separate heartbeat."""
+        if not self._auth_validator(auth_token, owner_id):
+            yield "event: error\ndata: {\"error\": \"unauthorized\"}\n\n"
+            return
+
+        events = self._store.get_events_for_owner(owner_id=owner_id, after_seq=after_seq, limit=500)
+        for event in events:
+            yield self.format_sse_event(event)
+
+        yield self.format_sse_heartbeat()
 
     def handle_operator_command(
         self,
@@ -179,3 +225,70 @@ class EventsAPI:
             return 403, {"error": "forbidden", "message": "Access denied to foreign artifact"}
 
         return 200, artifact.as_dict()
+
+
+def create_events_router(events_api: EventsAPI | None = None) -> APIRouter:
+    """Create FastAPI router for /api/events, /api/operator/command, and /api/artifacts endpoints."""
+    router = APIRouter(prefix="/api", tags=["events"])
+    api = events_api or EventsAPI()
+
+    @router.get("/events")
+    def stream_events(
+        owner_id: str = Query(...),
+        after_seq: int = Query(0),
+        auth_token: str = Query(""),
+        authorization: str | None = Header(None),
+    ) -> StreamingResponse:
+        token = auth_token or (authorization.replace("Bearer ", "") if authorization else "")
+        return StreamingResponse(
+            api.stream_events_generator(owner_id=owner_id, after_seq=after_seq, auth_token=token),
+            media_type="text/event-stream",
+        )
+
+    @router.get("/events/replay")
+    def replay_events(
+        owner_id: str = Query(...),
+        after_seq: int = Query(0),
+        limit: int = Query(100),
+        auth_token: str = Query(""),
+        authorization: str | None = Header(None),
+    ) -> JSONResponse:
+        token = auth_token or (authorization.replace("Bearer ", "") if authorization else "")
+        status_code, body = api.get_events(owner_id=owner_id, after_seq=after_seq, limit=limit, auth_token=token)
+        return JSONResponse(status_code=status_code, content=body)
+
+    @router.post("/operator/command")
+    async def submit_operator_command(
+        request: Request,
+        authorization: str | None = Header(None),
+    ) -> JSONResponse:
+        data = await request.json()
+        token = data.get("auth_token") or (authorization.replace("Bearer ", "") if authorization else "")
+        owner_id = data.get("owner_id", "")
+        command_type = data.get("command_type", "")
+        target_id = data.get("target_id", "")
+        expected_version = data.get("expected_version", 1)
+        payload = data.get("payload", {})
+
+        status_code, body = api.handle_operator_command(
+            auth_token=token,
+            owner_id=owner_id,
+            command_type=command_type,
+            target_id=target_id,
+            expected_version=expected_version,
+            payload=payload,
+        )
+        return JSONResponse(status_code=status_code, content=body)
+
+    @router.get("/artifacts/{artifact_id}")
+    def get_artifact_metadata(
+        artifact_id: str,
+        owner_id: str = Query(...),
+        auth_token: str = Query(""),
+        authorization: str | None = Header(None),
+    ) -> JSONResponse:
+        token = auth_token or (authorization.replace("Bearer ", "") if authorization else "")
+        status_code, body = api.get_artifact(artifact_id=artifact_id, owner_id=owner_id, auth_token=token)
+        return JSONResponse(status_code=status_code, content=body)
+
+    return router

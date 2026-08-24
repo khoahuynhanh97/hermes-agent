@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from typing import Any
+from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 
 from hermes_personal.runtime.readiness import ReadinessProbe, ReadinessState
 
@@ -59,3 +61,26 @@ class HealthAPI:
             "component": component_name,
             "status": status,
         }
+
+
+def create_health_router(health_api: HealthAPI | None = None) -> APIRouter:
+    """Create FastAPI router for /health endpoints."""
+    router = APIRouter(prefix="/health", tags=["health"])
+    api = health_api or HealthAPI()
+
+    @router.get("/live")
+    def get_live() -> JSONResponse:
+        status_code, body = api.handle_live()
+        return JSONResponse(status_code=status_code, content=body)
+
+    @router.get("/ready")
+    def get_ready() -> JSONResponse:
+        status_code, body = api.handle_ready()
+        return JSONResponse(status_code=status_code, content=body)
+
+    @router.get("/components/{name}")
+    def get_component(name: str) -> JSONResponse:
+        status_code, body = api.handle_component(name)
+        return JSONResponse(status_code=status_code, content=body)
+
+    return router
