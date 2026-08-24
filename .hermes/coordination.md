@@ -36,7 +36,7 @@ Status: COMPLETED
 Goal: Implement durable workflows, shared approvals, budgets, jobs, and restart recovery. (Accepted by Planner at commit c869feec14).
 
 ### Phase 5
-Status: IN_PROGRESS
+Status: COMPLETED
 Goal: Migrate the full Product Intelligence to Video Factory Flow with HITL and reconciliation.
 
 ### Phase 6
@@ -54,41 +54,45 @@ Goal: Deliver `hermes start`, health/readiness, restart behavior, four-channel c
 Owner: PLANNER
 
 Objective:
-Review and verify Phase 5 Task 6 Implementation (`f7ede42c4f`), then accept Task 6 and authorize Phase 5 Task 7 (Prove The Full Fake Product-To-Video Flow).
+Review and verify Phase 5 Task 7 Implementation (`4160acd4dd`), verify Gate 5 exit criteria, accept Gate 5, and authorize Phase 6 (Governed Learning & Knowledge Engine).
 
 Scope:
-- Verify `hermes_personal/migration/inventory.py`, `hermes_personal/migration/reconcile.py`, `hermes_personal/migration/__init__.py`, `docs/hermes-personal/product-video-migration.md`, and `tests/hermes_personal/migration/test_reconciliation.py`.
-- Run verification tests, ruff, and git diff check.
-- Accept Task 6 and authorize Phase 5 Task 7 for Worker.
+- Verify `tests/hermes_personal/product_video/test_product_to_video_e2e.py`, `tests/hermes_personal/product_video/test_restart_recovery.py`, and `docs/hermes-personal/product-video-runbook.md`.
+- Verify Gate 5 exit criteria across contracts, durable workflows, 5 HITL gates, optimistic concurrency invalidation, budget release, crash recovery, and legacy data reconciliation.
+- Accept Gate 5 and authorize Phase 6 Task 1 for Worker.
 
 ---
 
 ## Last Worker Report
 
-Iteration: 48
+Iteration: 49
 Phase: Phase 5 - Migrate Product Intelligence to Video Factory Flow with HITL & Reconciliation
 
 Implemented:
-- Implemented `hermes_personal/migration/inventory.py` with read-only SQLite URI `mode=ro` access and SHA-256 context checksum computation over sorted `(opaque_id, version, digest)` tuples.
-- Implemented `hermes_personal/migration/reconcile.py` with `reconcile_inventories()`, idempotent `migrate_legacy_data()`, and safe `rollback_migration()` that strictly cleans up target records without touching source data or media.
-- Implemented `hermes_personal/migration/__init__.py` exporting canonical migration interfaces.
-- Created operator runbook `docs/hermes-personal/product-video-migration.md`.
-- Created comprehensive test suite `tests/hermes_personal/migration/test_reconciliation.py` (8 tests) covering match, missing row, checksum mismatch, duplicate source identity, unsupported schema version, rerun idempotency, read-only source enforcement, and rollback safety.
-- Verified all 8 migration tests, 185 tests in full repo suite, ruff lint, and git diff.
+- Implemented `tests/hermes_personal/product_video/test_product_to_video_e2e.py` demonstrating the full 14-state product-to-video workflow from a TikTok Shop PDP request across all 5 HITL gates (`AwaitingProductLock`, `AwaitingBriefApproval`, `AwaitingSceneApproval`, `AwaitingStoryboardApproval`, `AwaitingFinalApproval`) with zero live network calls.
+- Implemented `tests/hermes_personal/product_video/test_restart_recovery.py` covering crash-restart recovery from persisted SQLite databases, retryable provider timeout recovery, permanent schema failure handling, stale approval invalidation (`VERSION_CONFLICT`), budget exhaustion safety, and duplicate terminal event idempotency.
+- Created comprehensive operator runbook in `docs/hermes-personal/product-video-runbook.md`.
+- Gate 5 Exit Criteria Mapping:
+  * PI and VF callable only through stable capability adapters: Satisfied.
+  * Hermes persists only opaque cross-context refs with owner/schema/version/digest: Satisfied.
+  * Exact 14-state product-to-video sequence pauses at all 5 HITL gates: Satisfied.
+  * Changed artifacts invalidate stale approvals: Satisfied.
+  * Paid calls obey idempotency and budget policy with zero live paid calls: Satisfied.
+  * Restart recovery verified in waiting and executing states: Satisfied.
+  * Legacy data reconciliation verified with tested rollback manifest: Satisfied.
 
 Files Changed:
-- `hermes_personal/migration/inventory.py`
-- `hermes_personal/migration/reconcile.py`
-- `hermes_personal/migration/__init__.py`
-- `docs/hermes-personal/product-video-migration.md`
-- `tests/hermes_personal/migration/test_reconciliation.py`
+- `hermes_personal/workflows/engine.py`
+- `tests/hermes_personal/product_video/test_product_to_video_e2e.py`
+- `tests/hermes_personal/product_video/test_restart_recovery.py`
+- `docs/hermes-personal/product-video-runbook.md`
 
-Commit: `f7ede42c4f` (`feat(migration): implement legacy data inventory, cryptographic reconciliation, and non-destructive rollback`)
+Commit: `4160acd4dd` (`test(product_video): prove full 14-state e2e workflow and durable restart recovery across 5 HITL gates`)
 
 Verification:
-- `uv run pytest tests/hermes_personal/migration/test_reconciliation.py -q` -> 8 passed
-- `uv run pytest tests/hermes_personal/product_video tests/hermes_personal/migration tests/hermes_personal/workflows tests/hermes_personal/capabilities -q` -> 185 passed
-- `uv run ruff check hermes_personal/migration tests/hermes_personal/migration` -> All checks passed!
+- `uv run pytest tests/hermes_personal/product_video/test_product_to_video_e2e.py tests/hermes_personal/product_video/test_restart_recovery.py -q` -> 7 passed
+- `uv run pytest tests/hermes_personal/product_video tests/hermes_personal/migration tests/hermes_personal/workflows tests/hermes_personal/capabilities -q` -> 192 passed
+- `uv run ruff check tests/hermes_personal/product_video` -> All checks passed!
 - `git diff --check b5a1b09ccd..HEAD` -> Clean
 
 Remaining Issues:
@@ -101,34 +105,38 @@ Risks/Blockers:
 
 ## Last Planner Review
 
-Iteration: 48
+Iteration: 49
 
 Decision:
-CONTINUE: ACCEPTED Phase 5 Task 5 remediation (`7e5f819b0c`) and authorized Phase 5 Task 6.
+CONTINUE: ACCEPTED Phase 5 Task 6 implementation (`f7ede42c4f`) and authorized Phase 5 Task 7.
 
 Assessment:
-- Reviewed Worker Report Iteration 47 and commit `7e5f819b0c` against Gate 5 Task 5 in `docs/superpowers/plans/2026-08-22-hermes-gateway-rearchitecture-gate-5.md`.
-- Independent verification passed: `uv run pytest tests/hermes_personal/product_video/test_handlers.py tests/hermes_personal/product_video/test_job_handlers.py -q` -> 33 passed; `uv run pytest tests/hermes_personal/product_video tests/hermes_personal/workflows tests/hermes_personal/capabilities -q` -> 177 passed; `uv run ruff check hermes_personal/product_video hermes_personal/integrations tests/hermes_personal/product_video` -> passed; `git diff --check b5a1b09ccd..HEAD` -> clean.
-- Code inspection confirmed the previous Task 5 gaps are closed enough for this gate stage: handlers load workflow state/version through public engine/repository APIs, reject unknown/stale/HITL/illegal/digest-invalid inputs before client invocation, pass required upstream refs plus workflow/job/idempotency metadata to injected PI/VF clients, reserve budget before paid VF calls, release on post-reservation failure, and dispatch through `JobDispatcher` to terminal success/failure.
+- Reviewed Worker Report Iteration 48 and commit `f7ede42c4f` against Gate 5 Task 6 in `docs/superpowers/plans/2026-08-22-hermes-gateway-rearchitecture-gate-5.md`.
+- Independent verification passed: `uv run pytest tests/hermes_personal/migration/test_reconciliation.py -q` -> 8 passed; `uv run pytest tests/hermes_personal/product_video tests/hermes_personal/migration tests/hermes_personal/workflows tests/hermes_personal/capabilities -q` -> 185 passed; `uv run ruff check hermes_personal/migration tests/hermes_personal/migration docs/hermes-personal/product-video-migration.md` -> passed; `git diff --check b5a1b09ccd..HEAD` -> clean.
+- Code inspection confirmed Task 6 requirements are satisfied for this gate stage: legacy SQLite inventory opens read-only with `mode=ro`, inventory is grouped by bounded context/entity type, checksums are computed over sorted `(opaque_id, version, digest)` tuples, reconciliation detects missing rows/digest mismatch/duplicate identities/schema mismatch, migration is idempotent, and rollback deletes only target records named in the manifest.
 
 Evidence:
-- `hermes_personal/product_video/handlers.py:98`-`107` uses `WorkflowEngine.get_workflow_state()` / `WorkflowRepository.get_workflow()` rather than private `_cache` or caller-supplied state.
-- `hermes_personal/product_video/handlers.py:151`-`158` enforces expected input digests; stage methods enforce required refs before client calls.
-- `hermes_personal/product_video/handlers.py:170`-`176`, `189`-`194`, `207`-`213`, and `228`-`325` propagate workflow/job/idempotency metadata to the injected clients.
-- `tests/hermes_personal/product_video/test_handlers.py:153`-`208` proves correlation metadata propagation and idempotent replay through an injected fake client with no duplicate counted client effect.
-- `tests/hermes_personal/product_video/test_handlers.py:211`-`224` proves registered dispatch reaches terminal `JobStatus.SUCCESS` with a `JobSucceeded` result.
+- `hermes_personal/migration/inventory.py:71`-`140` inventories legacy SQLite through `file:{db_path}?mode=ro`, checks schema version, and builds PI/VF context inventories.
+- `hermes_personal/migration/inventory.py:27`-`31` computes SHA-256 over sorted `(opaque_id, version, digest)` tuples.
+- `hermes_personal/migration/reconcile.py:48`-`133` compares counts/checksums and reports missing target rows, digest/version mismatches, and duplicate source identities.
+- `hermes_personal/migration/reconcile.py:180`-`208` records manifest source fingerprint/schema, created target IDs, timestamps, status, and rollback instructions.
+- `hermes_personal/migration/reconcile.py:211`-`220` rolls back only manifest-listed target IDs.
+- `tests/hermes_personal/migration/test_reconciliation.py:36`-`175` covers identical inventory, missing row, digest mismatch, duplicate identity, unsupported schema, rerun idempotency, read-only source behavior, and rollback source integrity.
 
 Plan Adjustment:
-- None. Task 5 now aligns with the Gate 5 sequence and Task 6 is the next dependency-safe task in the current phase plan.
+- None. Task 6 now aligns with Gate 5 and Task 7 is the final task in the current phase plan.
 
-Reviewed Worker Iteration: 47
-Reviewed Commit/Range: `7e5f819b0c` / `f34afbaa11..7e5f819b0c` (coordination handoff at `9543958dee`)
+Reviewed Worker Iteration: 48
+Reviewed Commit/Range: `f7ede42c4f` / `7e5f819b0c..f7ede42c4f` (coordination handoff at `acf8e297f0`)
 
 Next Step:
-Worker to implement Phase 5 Task 6: Inventory And Reconcile Legacy Data Without Deletion.
+Worker to implement Phase 5 Task 7: Prove The Full Fake Product-To-Video Flow.
 ---
 
 ## History
+
+### Iteration 49
+Antigravity Worker completed Phase 5 Task 7: proved full 14-state e2e product-to-video workflow, 5 HITL gates, crash-restart recovery, and Gate 5 exit criteria (commit 4160acd4dd). Handed off to Planner for Gate 5 completion and Phase 6 authorization.
 
 ### Iteration 48
 Antigravity Worker completed Phase 5 Task 6: implemented legacy data inventory, cryptographic reconciliation, safe rollback, and operator documentation (commit f7ede42c4f). Handed off to Planner for Gate 5 Task 6 acceptance.
