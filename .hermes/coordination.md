@@ -53,42 +53,43 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 Owner: PLANNER
 
 Objective:
-Review and accept Phase 7 Task 1 implementation (`3f4e2f9eb2`), accept Task 1, and authorize Phase 7 Task 2 (Runtime Process Topology And Environment Contract) for Worker.
+Review and accept Phase 7 Task 1 Rework (`afd843c0fc`), accept Task 1, and authorize Phase 7 Task 2 (Define Runtime Process Topology And Environment Contract) for Worker.
 
 Scope:
-- Verify `CorrelationContext` in `hermes_personal/observability/context.py`.
-- Verify recursive secret redaction in `hermes_personal/observability/redaction.py`.
-- Verify component/readiness/liveness health model in `hermes_personal/observability/health.py`.
-- Verify unit tests in `tests/hermes_personal/runtime/test_observability.py`.
-- Authorize Phase 7 Task 2 for Worker.
+- Verify `redact()` in `hermes_personal/observability/redaction.py` supporting `value_fingerprints: Sequence[str | Pattern[str]]`.
+- Verify value fingerprint regression tests in `tests/hermes_personal/runtime/test_observability.py`.
+- Accept Phase 7 Task 1 and authorize Phase 7 Task 2 for Worker.
 
 ---
 
 ## Last Worker Report
 
-Iteration: 61
+Iteration: 62
 Phase: Phase 7 - Runtime Supervision, Multi-Channel Cutover, and Legacy Retirement
 
 Implemented:
-- Implemented `CorrelationContext` in `hermes_personal/observability/context.py` with immutable context propagation, `as_log_fields()`, and `with_child()` inheritance.
-- Implemented `redact()` in `hermes_personal/observability/redaction.py` with recursive key/substring secret masking (`[REDACTED]`) across dicts, lists, tuples, and sets.
-- Implemented `ComponentHealth` and `HealthReport` in `hermes_personal/observability/health.py` with required dependency readiness gating, optional degraded non-blocking behavior, stopping liveness tracking, and machine-readable `as_dict()` serializations.
-- Created `hermes_personal/observability/__init__.py` with standard exports.
-- Created `tests/hermes_personal/runtime/test_observability.py` with 14 comprehensive unit tests.
-- Verified all 263 tests across runtime, learning, gateway, and capabilities suites.
+- Updated `hermes_personal/observability/redaction.py`:
+  * API Shape: `redact(data: Any, sensitive_keys: Sequence[str] = DEFAULT_SECRET_KEY_PATTERNS, value_fingerprints: Sequence[str | Pattern[str]] = ()) -> Any`
+  * API Shape: `redact_string(value: str, value_fingerprints: Sequence[str | Pattern[str]] = ()) -> str`
+  * Supports string substring matches as well as compiled regex `re.Pattern` value fingerprints.
+  * Recursively redacts across dict values, list items, tuple elements, and set members.
+- Exported `redact_string` in `hermes_personal/observability/__init__.py`.
+- Added focused regression tests in `tests/hermes_personal/runtime/test_observability.py`:
+  * `test_configured_value_fingerprint_redaction_under_safe_keys`: validates secret tokens under innocent keys like `description`, `nested_item.stdout`, `log_lines`, `tuple_items`, `set_items` are masked.
+  * `test_configured_value_fingerprint_regex_patterns`: validates regex pattern matching for API key formats (`sk-...`).
+  * `test_redact_string_directly`: validates standalone string redaction helper.
+- Verified all 17 observability unit tests and 266 total repository tests pass cleanly.
 
 Files Changed:
 - `hermes_personal/observability/__init__.py`
-- `hermes_personal/observability/context.py`
-- `hermes_personal/observability/health.py`
 - `hermes_personal/observability/redaction.py`
 - `tests/hermes_personal/runtime/test_observability.py`
 
-Commit: `3f4e2f9eb2` (`feat(observability): standardize correlation, redaction, and health records`)
+Commit: `afd843c0fc` (`feat(observability): support configured value fingerprints and regex patterns in redaction`) / Task 1 Range: `3f4e2f9eb2..afd843c0fc`
 
 Verification:
-- `uv run pytest tests/hermes_personal/runtime/test_observability.py -q` -> 14 passed in 0.81s
-- `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 263 passed in 13.55s
+- `uv run pytest tests/hermes_personal/runtime/test_observability.py -q` -> 17 passed in 0.60s
+- `uv run pytest tests/hermes_personal/runtime tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 266 passed in 15.03s
 - `uv run ruff check hermes_personal/observability tests/hermes_personal/runtime/test_observability.py` -> All checks passed!
 - `git diff --check` -> Clean (0 whitespace/diff errors)
 - `git status --short` -> Clean for all project files (only local runtime helper scripts remain):
@@ -114,37 +115,45 @@ Risks/Blockers:
 
 ## Last Planner Review
 
-Iteration: 60
+Iteration: 61
 
 Decision:
-NEXT_PHASE: Phase 6 / Gate 6 is accepted and Phase 7 is now IN_PROGRESS. Worker is authorized to begin Phase 7 Task 1.
+REWORK: Phase 7 Task 1 is not accepted. Focused tests and Ruff pass, but the implementation does not satisfy the Gate 7 redaction contract for configured value fingerprints.
 
 Assessment:
-- Reviewed Worker Report Iteration 59 and commit `d57157b8f9` against Gate 6 exit criteria and the prior Planner REWORK.
-- The approved-only retrieval remediation is present: `ApprovedLearningRetriever` now requires `cand.status == "approved"`, `v.status == "active"`, and matching `owner_user_id`; `draft`, `evaluated`, `pending_approval`, and `rejected` candidates are excluded even when active versions exist.
-- Independent verification passed on the current tree: `uv run pytest tests/hermes_personal/learning/test_retrieval.py tests/hermes_personal/learning/test_context_integration.py tests/hermes_personal/learning/test_learning_e2e.py -q` -> 11 passed; `uv run pytest tests/hermes_personal/learning tests/hermes_personal/gateway tests/hermes_personal/capabilities -q` -> 249 passed; `uv run ruff check hermes_personal/learning tests/hermes_personal/learning hermes_personal/storage/sqlite.py` -> All checks passed; `git diff --check` -> clean.
-- Gate 6 files cover persistence, evaluation, promotion/rollback, approved retrieval/context assembly, preference memory governance, safe skill publication, metrics, E2E acceptance, and operator documentation.
-- `git status --short` shows only unrelated local helper/runtime untracked files and no uncommitted source/test files.
+- Reviewed Worker Report Iteration 61 and commit `3f4e2f9eb2` against Gate 7 Task 1.
+- `CorrelationContext` preserves owner/session/turn/workflow/job/approval/tool IDs and supports child context inheritance.
+- `ComponentHealth` and `HealthReport` define the required status vocabulary and readiness/liveness aggregation for required vs optional components.
+- `redact()` recursively handles dict/list/tuple/set structures and masks values when the key name is sensitive.
+- Acceptance gap: Gate 7 Task 1 explicitly requires redaction "by normalized key and configured value fingerprints before serialization." Current `redact()` has no configured value-fingerprint parameter/path and returns primitive string values unchanged under safe-looking keys, so a known secret value can leak if the key is not classified as sensitive. The focused tests also do not cover this requirement.
 
 Evidence/Findings:
-- `git show --stat --oneline d57157b8f9` shows targeted changes across `retrieval.py`, `test_retrieval.py`, and `test_context_integration.py`.
-- Tests prove that active versions linked to unapproved candidate statuses (`draft`, `evaluated`, `pending_approval`, `rejected`) are not returned by `ApprovedLearningRetriever` and cannot leak into turn context assembly.
-- Phase 6 exit criteria are fully satisfied by the test and implementation evidence on current `main`/worktree.
+- `hermes_personal/observability/redaction.py` exposes `redact(data, sensitive_keys=...)` only; it has no configured sensitive-value/fingerprint input and no primitive value matching branch.
+- `tests/hermes_personal/runtime/test_observability.py` verifies key-based masking and primitive pass-through, but not value-fingerprint masking.
+- Fresh verification: `uv run pytest tests/hermes_personal/runtime/test_observability.py -q` -> 14 passed in 0.89s.
+- Fresh verification: `uv run ruff check hermes_personal/observability tests/hermes_personal/runtime/test_observability.py` -> All checks passed.
+- Fresh verification: `git diff --check` -> clean.
+- `git status --short` shows only local untracked helper/runtime files (`build/`, `coord.txt`, `create_shortcut.vbs`, `launch_gui.vbs`, `run_worker.bat`, `update_coord.py`, `worker-prompt.txt`, `worker-scheduler.ps1`, `worker.ps1`).
 
 Plan Adjustment:
-None. The prior approved-only retrieval drift is closed, and the program advances from Phase 6 to Phase 7 per the master Phase 0-7 sequence.
+Reason: Worker Report claimed redaction completion, but the implementation/tests cover key-based recursion only and miss Gate 7's configured value-fingerprint requirement.
+Impact: Phase 7 Task 1 remains incomplete; Task 2 must not start because later runtime logs/health/process specs depend on safe redaction.
+Affected phases/tasks: Phase 7 Task 1 redaction contract; Phase 7 Task 2 process topology.
+Proposed correction: Add configured value-fingerprint matching to `redact()`, add focused tests proving raw secret values are masked under safe-looking keys and nested structures, rerun verification, and hand off with a new commit/range.
 
-Reviewed Worker Iteration: 59
-Reviewed Commit/Range: `d57157b8f9` / `0d03694715..d57157b8f9` (Gate 6 full range from `622f7720e3..d57157b8f9`)
+Reviewed Worker Iteration: 61
+Reviewed Commit/Range: `3f4e2f9eb2` / `d57157b8f9..3f4e2f9eb2` (coordination handoff at `6e00d6f27b`)
 
 Next Step:
-Worker to implement Phase 7 Task 1: runtime correlation, redaction, and health/readiness records.
-
+Worker to implement configured value-fingerprint redaction and tests, then re-handoff Phase 7 Task 1.
 ---
 
 ## History
 
-### Iteration 60
+### Iteration 62
+Antigravity Worker reworked Phase 7 Task 1: added configured value fingerprints (literal substrings and regex patterns) to `redact()` with 17 unit tests and 266 total passing tests (commit afd843c0fc). Handed off to Planner for Task 1 acceptance.
+
+### Iteration 61
 Planner accepted Phase 6 / Gate 6 at commit d57157b8f9 after verifying approved-only retrieval remediation, 11 focused tests, 249 broad tests, Ruff, and diff-check. Phase 6 is COMPLETED, Phase 7 is IN_PROGRESS, and Worker is assigned Phase 7 Task 1 for runtime observability contracts.
 ### Iteration 59
 Worker remediated approved-only retrieval in `hermes_personal/learning/retrieval.py` (commit `d57157b8f9`), requiring `cand.status == "approved"` and excluding `draft`, `evaluated`, `pending_approval`, and `rejected` candidates. Added unit regression tests in `test_retrieval.py` and turn context integration test in `test_context_integration.py`. Verified 249 tests passing across learning, gateway, and capabilities suites. Handed off to Planner for Gate 6 acceptance.
