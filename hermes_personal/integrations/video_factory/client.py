@@ -46,22 +46,22 @@ class VideoFactoryClient:
             "digest": request.digest(),
         }
 
-    def create_creative_brief(self) -> dict:
+    def create_creative_brief(self, brief_config: dict | None = None, **kwargs: Any) -> dict:
         req = CreativeBriefRequest()
         return self._wrap(req)
 
-    def create_scene_plan(self) -> dict:
+    def create_scene_plan(self, brief_ref: Any = None, **kwargs: Any) -> dict:
         req = ScenePlanRequest()
         return self._wrap(req)
 
-    def create_storyboard(self) -> dict:
+    def create_storyboard(self, scene_ref: Any = None, **kwargs: Any) -> dict:
         req = StoryboardRequest()
         return self._wrap(req)
 
-    def render_video(self) -> dict:
+    def render_video(self, story_ref: Any = None, **kwargs: Any) -> dict:
         req = RenderRequest()
         return self._wrap(req)
 
-    def export_video(self) -> dict:
+    def export_video(self, render_ref: Any = None, **kwargs: Any) -> dict:
         req = ExportRequest()
         return self._wrap(req)

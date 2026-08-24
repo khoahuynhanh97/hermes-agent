@@ -87,6 +87,32 @@ class WorkflowEngine:
         self._cache[wf_id]["version"] = result.new_version
         return CommandResult(workflow_id=wf_id, new_version=result.new_version)
 
+    def get_workflow_state(self, workflow_id: str) -> tuple[str, int] | None:
+        """Get state and version from cache or underlying repository."""
+        if workflow_id in self._cache:
+            entry = self._cache[workflow_id]
+            return entry.get("state", "initial"), entry.get("version", 0)
+        wf_data = self.repo.get_workflow(workflow_id)
+        if wf_data is not None:
+            aggregate_dict, version = wf_data
+            state = aggregate_dict.get("state", "initial")
+            self._cache[workflow_id] = {"state": state, "version": version}
+            return state, version
+        return None
+
+    def set_workflow_state(self, workflow_id: str, state: str, version: int = 1) -> None:
+        """Helper to register/update workflow state directly for tests or execution."""
+        self._cache[workflow_id] = {"state": state, "version": version}
+        try:
+            self.repo.commit_workflow(
+                workflow_id=workflow_id,
+                aggregate_json=json.dumps({"state": state}),
+                events=[],
+                expected_version=None,
+            )
+        except Exception:
+            pass
+
     # ---------------------------------------------------------------------
     # Internal helpers
     # ---------------------------------------------------------------------

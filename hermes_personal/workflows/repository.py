@@ -108,3 +108,12 @@ class WorkflowRepository:
                     (workflow_id, outbox_message),
                 )
             return CommitResult(workflow_id=workflow_id, new_version=new_version)
+
+    def get_workflow(self, workflow_id: str) -> tuple[dict, int] | None:
+        """Fetch current aggregate dict and version for a workflow."""
+        cur = self.conn.cursor()
+        cur.execute("SELECT aggregate_json, version FROM workflow WHERE workflow_id = ?", (workflow_id,))
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return json.loads(row["aggregate_json"]), row["version"]
