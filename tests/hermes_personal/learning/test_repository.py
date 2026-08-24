@@ -17,86 +17,17 @@ from hermes_personal.learning.models import (
     VersionStatus,
 )
 from hermes_personal.learning.repository import LearningRepository
+from hermes_personal.storage.sqlite import connect as sqlite_connect
 
 
 @pytest.fixture
 def db_conn(tmp_path):
-    conn = sqlite3.connect(str(tmp_path / "learning.db"))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS global_user_identity (
-            owner_user_id TEXT PRIMARY KEY,
-            display_name TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS task_outcome (
-            outcome_id TEXT PRIMARY KEY,
-            source_type TEXT NOT NULL,
-            source_id TEXT NOT NULL,
-            status TEXT NOT NULL,
-            details_json TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS learning_candidate (
-            candidate_id TEXT PRIMARY KEY,
-            owner_user_id TEXT NOT NULL,
-            kind TEXT NOT NULL,
-            title TEXT NOT NULL,
-            content TEXT NOT NULL,
-            digest TEXT NOT NULL,
-            source_outcome_id TEXT,
-            status TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            UNIQUE(owner_user_id, kind, digest)
-        );
-        CREATE TABLE IF NOT EXISTS evidence_ref (
-            evidence_id TEXT PRIMARY KEY,
-            candidate_id TEXT NOT NULL,
-            source_type TEXT NOT NULL,
-            source_id TEXT NOT NULL,
-            digest TEXT NOT NULL,
-            excerpt TEXT NOT NULL,
-            polarity TEXT NOT NULL DEFAULT 'positive',
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (candidate_id) REFERENCES learning_candidate(candidate_id) ON DELETE CASCADE
-        );
-        CREATE TABLE IF NOT EXISTS candidate_evaluation (
-            evaluation_id TEXT PRIMARY KEY,
-            candidate_id TEXT NOT NULL REFERENCES learning_candidate(candidate_id) ON DELETE CASCADE,
-            evaluator_name TEXT NOT NULL,
-            decision TEXT NOT NULL,
-            score REAL NOT NULL,
-            reason TEXT NOT NULL,
-            evidence_summary TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS learning_version (
-            version_id TEXT PRIMARY KEY,
-            candidate_id TEXT NOT NULL,
-            owner_user_id TEXT NOT NULL,
-            version INTEGER NOT NULL,
-            content TEXT NOT NULL,
-            digest TEXT NOT NULL,
-            status TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            UNIQUE(candidate_id, version)
-        );
-        CREATE TABLE IF NOT EXISTS learning_event (
-            event_id TEXT PRIMARY KEY,
-            candidate_id TEXT NOT NULL,
-            version_id TEXT,
-            event_type TEXT NOT NULL,
-            payload_json TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
-        """
-    )
+    conn = sqlite_connect(tmp_path / "learning.db")
     conn.execute("INSERT OR IGNORE INTO global_user_identity (owner_user_id, display_name, created_at) VALUES ('user1', 'User One', '2026-08-24T00:00:00Z')")
     conn.commit()
     yield conn
     conn.close()
+
 
 
 @pytest.fixture
@@ -325,3 +256,59 @@ def test_event_audit_logging(repository):
     repository.update_candidate_status("cand_audit", "approved")
     events_after = repository.get_events("cand_audit")
     assert any(e.event_type == "status_updated" for e in events_after)
+
+
+def test_production_sqlite_schema_compatible_with_repository(tmp_path):
+    """Assert production sqlite schema path creates canonical tables and works directly with repository."""
+    db_file = tmp_path / "prod_test.db"
+    conn = sqlite_connect(db_file)
+    try:
+        # Verify candidate_evaluation columns match repository expectations exactly
+        columns = [row["name"] for row in conn.execute("PRAGMA table_info(candidate_evaluation)").fetchall()]
+        assert "evaluation_id" in columns
+        assert "candidate_id" in columns
+        assert "evaluator_name" in columns
+        assert "decision" in columns
+        assert "score" in columns
+        assert "reason" in columns
+        assert "evidence_summary" in columns
+        assert "created_at" in columns
+        assert "outcome_id" not in columns
+        assert "details_json" not in columns
+
+        # Insert user identity and verify repository works on production DB
+        conn.execute(
+            "INSERT INTO global_user_identity (owner_user_id, display_name, created_at) VALUES (?, ?, ?)",
+            ("prod_user", "Prod User", "2026-08-24T00:00:00Z"),
+        )
+        conn.commit()
+
+        repo = LearningRepository(conn)
+        cand = LearningCandidate(
+            candidate_id="cand_prod_1",
+            owner_user_id="prod_user",
+            kind="preference",
+            title="Prod Title",
+            content="Prod Content",
+            evidence=(sample_evidence(),),
+        )
+        created = repo.create_candidate(cand)
+        assert created.candidate_id == "cand_prod_1"
+
+        eval_rec = CandidateEvaluation(
+            evaluation_id="eval_prod_1",
+            candidate_id="cand_prod_1",
+            evaluator_name="test_evaluator",
+            decision="needs_approval",
+            score=0.9,
+            reason="valid evidence",
+            evidence_summary="summary",
+        )
+        saved_eval = repo.record_evaluation(eval_rec)
+        assert saved_eval.evaluation_id == "eval_prod_1"
+        loaded_evals = repo.get_evaluations_for_candidate("cand_prod_1")
+        assert len(loaded_evals) == 1
+        assert loaded_evals[0].evaluator_name == "test_evaluator"
+    finally:
+        conn.close()
+
