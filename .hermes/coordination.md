@@ -10,7 +10,7 @@ IN_PROGRESS
 Phase 7 - Runtime Supervision, Multi-Channel Cutover, and Legacy Retirement
 
 ## Current Owner
-WORKER
+PLANNER
 
 ## Overall Plan
 
@@ -50,21 +50,16 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 
 ## Current Next Action
 
-Owner: WORKER
+Owner: PLANNER
 
 Objective:
-Implement Phase 7 Task 5: Register the exact `hermes start` command through the public project plugin API, consuming the accepted Task 4 startup/readiness contracts.
+Review and accept Phase 7 Task 5 (`235d20ceb0`), accept Task 5, and authorize Phase 7 Task 6 (Serve Real Events And Real Web Artifacts) for Worker.
 
 Scope:
-- Create `hermes_personal/runtime/cli.py` with `setup_start_parser` and `handle_start`.
-- Create `hermes_personal/runtime/plugin.py` registering exactly one `start` command through `PluginContext.register_cli_command(...)`.
-- Modify `plugins/hermes_personal/__init__.py` and `plugins/hermes_personal/plugin.yaml` only as needed for project plugin discovery/registration.
-- Create `tests/hermes_personal/runtime/test_cli.py` covering plugin discovery adds exactly one `start` command, parser flags, default mode/config behavior, secret-free readiness summary, clean CTRL-C exit code 0 after shutdown, and startup failure nonzero with failing component/code.
-- `setup_start_parser` must add only `--mode`, `--config`, and `--no-open-browser`.
-- `handle_start` must build validated specs, run startup, then supervisor; do not add a second console script and do not patch `hermes_cli.main:main` unless a public plugin registration contract test proves upstream cannot discover installed project plugins.
-
-Expected Result:
-`hermes start [--mode development|production] [--config PATH] [--no-open-browser]` is registered via the plugin API, `uv run hermes start --help` exits 0 and lists only the expected flags, and startup failure/interrupt paths return deterministic exit codes without leaking secrets.
+- Verify `hermes start` CLI command registration through public plugin API.
+- Verify `uv run hermes start --help` output and flag coverage.
+- Verify unit tests in `tests/hermes_personal/runtime/test_cli.py`.
+- Accept Phase 7 Task 5 and authorize Phase 7 Task 6 for Worker.
 
 Exact Verification:
 - `uv run pytest tests/hermes_personal/runtime/test_cli.py -q`
