@@ -205,3 +205,21 @@ native/fts5_cjk/*.so
 # interrupted; consumed by launch-time recovery. Never commit it (was tracked
 # by accident via 3a69e34702, removed in the #72002 salvage).
 .lazy-refresh-incomplete
+
+# Build and packaging artifacts
+/build/
+/dist/
+*.egg-info/
+
+# Local log files
+/log.txt
+
+# Worker/automation session artifacts (local only, not source code)
+/coord.txt
+/update_coord.py
+/worker.ps1
+/worker-scheduler.ps1
+/worker-prompt.txt
+/run_worker.bat
+/create_shortcut.vbs
+/launch_gui.vbs
