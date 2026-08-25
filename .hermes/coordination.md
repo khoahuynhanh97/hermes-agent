@@ -4,12 +4,12 @@
 Implement the Hermes Upstream Gateway Rearchitecture program: converge Telegram, CLI, Web, and Omni natural-language ingress onto one canonical Hermes Agent Turn path; add stable capabilities, durable workflows, shared approvals/budgets, governed learning, and one-command runtime supervision while preserving legacy data and avoiding live paid-provider calls in verification.
 
 ## Overall Status
-IN_PROGRESS
+DONE
 ## Current Phase
 Phase 7 - Runtime Supervision, Multi-Channel Cutover, and Legacy Retirement
 
 ## Current Owner
-PLANNER
+NONE
 ## Overall Plan
 
 ### Phase 0
@@ -34,29 +34,26 @@ Goal: Implement durable workflows, shared approvals, budgets, jobs, and restart 
 
 ### Phase 5
 Status: COMPLETED
-Goal: Build governed personal knowledge capture, verification pipelines, skill generation, and human-in-the-loop review.
+Goal: Product Intelligence to Video Factory with HITL, artifact ownership, reconciliation, and fake-provider E2E.
 
 ### Phase 6
 Status: COMPLETED
-Goal: Unify Web, CLI, and Omni ingress into the personal gateway runtime.
+Goal: Governed learning, approved retrieval, skill publication, rollback, and metrics.
 
 ### Phase 7
-Status: IN_PROGRESS
+Status: COMPLETED
 Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cutover, and legacy retirement guards.
 
 ---
 
 ## Current Next Action
-Owner: PLANNER
+Owner: NONE
 
 Objective:
-Perform final Gate 7 and program-level acceptance review with the approved offline plan adjustment: production Vite/TypeScript bundle build (`npm --prefix web run build` -> `hermes_cli/web_dist/`) and Starlette `TestClient` route tests are accepted as offline substitute for Playwright headless browser screenshots.
+Program complete. Gate 7 and the full Hermes Upstream Gateway Rearchitecture program are DONE after final Planner acceptance with the approved offline visual verification adjustment.
 
-Scope:
-- Evaluate Gate 7 Task 8 offline smoke evidence (`test_runtime_smoke.py` proving Web natural-language turn execution via `HermesTurnService` and FastAPI HTTP endpoints `/health/live`, `/health/ready`, `/api/operator/command`, `/api/events/replay`, `/api/artifacts/{id}`).
-- Carry forward approved packaging and offline visual verification plan adjustments.
-- Complete Gate 7 acceptance and finalize the Gateway Rearchitecture program status.
-
+Result:
+All phases 0-7 are completed. No further autonomous Worker action is scheduled.
 ## Last Worker Report
 
 Iteration: 81
@@ -101,34 +98,46 @@ Risks/Blockers:
 ---
 
 ## Last Planner Review
-Iteration: 81
+Iteration: 82
 
 Decision:
-BLOCKED: Phase 7 Task 8 cannot be accepted or safely reworked further in the current environment because the required Playwright desktop/mobile visual acceptance evidence is unavailable.
+DONE: Gate 7 and the full Hermes Upstream Gateway Rearchitecture program are accepted with the user-approved offline visual verification adjustment.
 
 Assessment:
-- Reviewed Worker Report Iteration 81 and commit/range `4ffc781ea5..26e5c9008d` against Gate 7 Task 8 Step 5 and master final acceptance.
-- The latest smoke test now includes a canonical Web natural-language `HermesTurnService.handle(AgentTurnRequest(channel="web"))` path plus production FastAPI `TestClient` checks for `/health/live`, `/health/ready`, `/api/operator/command`, `/api/events/replay`, and `/api/artifacts/{id}`. This resolves the prior overclaim around deterministic operator command being the only submitted path.
-- The remaining missing item is explicit and external to code review: Gate 7 Task 8 Step 5 requires Playwright desktop/mobile screenshots. Playwright is absent from this offline environment, so screenshot evidence cannot be produced by the Worker as currently configured.
-- Because this is a final Gate 7 acceptance criterion, Planner cannot mark Gate 7 complete or DONE without either the dependency being installed/provided or an approved plan adjustment substituting another visual acceptance method.
+- Reviewed current coordination handoff at `fb968f3a9e`, Worker Iteration 81 commit `26e5c9008d`, Gate 7 Task 8, the master program plan, and design acceptance criteria.
+- The previously blocking Playwright desktop/mobile screenshot requirement has an approved offline substitute: production Vite/TypeScript build into `hermes_cli/web_dist/` plus Starlette `TestClient` route coverage and runtime smoke evidence.
+- Gate 7 Task 8 now proves Web natural-language turn execution through `HermesTurnService`, production FastAPI HTTP route behavior, durable event replay, artifact owner isolation, clean supervisor shutdown, CLI availability, package build, and broad offline regression health.
+- All Phases 0-7 are complete; no live paid-provider calls were used in verification.
 
 Evidence/Findings:
-- `tests/hermes_personal/e2e/test_runtime_smoke.py` now proves Web natural-language turn execution via `HermesTurnService` and production HTTP health/operator/event/artifact routes via Starlette `TestClient`.
-- Fresh Playwright checks: root/web `node_modules/playwright` and `node_modules/@playwright` are absent; `uv run python -c "import playwright"` fails with `ModuleNotFoundError: No module named 'playwright'`.
-- Fresh `uv run pytest tests/hermes_personal/e2e -q` -> 23 passed in 16.16s from the prior Planner verification after Iteration 80, and Worker reports 23 passed in 16.34s for Iteration 81.
-- Worker reports `npm --prefix web run build` passes with 2,225 modules transformed and `HERMES_NIX_BUILD=1 uv build --wheel` builds `dist\hermes_agent-0.20.5-py3-none-any.whl`.
-- Current `git status --short` has only untracked generated/local helper artifacts (`build/`, `coord.txt`, `create_shortcut.vbs`, `launch_gui.vbs`, `run_worker.bat`, `update_coord.py`, `worker-prompt.txt`, `worker-scheduler.ps1`, `worker.ps1`).
+- `git show --stat fb968f3a9e` confirms coordination unblock and Planner handoff.
+- `git show --stat 26e5c9008d` confirms Task 8 E2E runtime smoke expansion in `tests/hermes_personal/e2e/test_runtime_smoke.py`.
+- Static inspection confirms `HermesTurnService`, `AgentTurnRequest(channel="web")`, `/health/live`, `/health/ready`, `/api/operator/command`, `/api/events/replay`, `/api/artifacts/{id}`, and no-orphan shutdown checks are covered.
+- `git diff --check` -> clean.
+- `uv run pytest tests/hermes_personal/e2e -q` -> 23 passed in 17.69s.
+- `uv run pytest tests/hermes_personal/runtime/test_application_api.py -q` -> 3 passed in 1.30s.
+- `uv run pytest tests/hermes_personal -q` -> 464 passed in 39.75s.
+- `uv run pytest tests/tools/test_registry.py tests/tools/test_mcp_capability_gating.py tests/gateway/test_session.py -q` -> 120 passed in 11.31s.
+- `uv run hermes start --help` -> clean exit 0 with `--mode`, `--config`, and `--no-open-browser` flags.
+- `npm --prefix web run build` -> 2,225 modules transformed, output under `hermes_cli/web_dist/`, built in 11.00s.
+- `$env:HERMES_NIX_BUILD="1"; uv build --wheel` -> successfully built `dist\hermes_agent-0.20.5-py3-none-any.whl`.
+- `git status --short` contains only untracked generated/local helper artifacts: `build/`, `coord.txt`, `create_shortcut.vbs`, `launch_gui.vbs`, `run_worker.bat`, `update_coord.py`, `worker-prompt.txt`, `worker-scheduler.ps1`, `worker.ps1`.
 
 Plan Adjustment:
-No automatic adjustment applied. Human decision is required because replacing the explicit Playwright screenshot requirement changes Gate 7 acceptance evidence.
+Reason: Gate 7 Task 8 Step 5 originally required Playwright desktop/mobile screenshots, but the offline environment lacks Playwright package and Chromium/browser binaries.
+Impact: Visual acceptance evidence is represented by production frontend compilation and HTTP/Web workflow route tests rather than browser screenshots.
+Affected phases/tasks: Phase 7 Task 8 Step 5 and final program acceptance evidence.
+Approved correction: User-approved substitution of `npm --prefix web run build` production `web_dist/` evidence plus Starlette `TestClient` route suite and Web natural-language runtime smoke evidence.
 
 Reviewed Worker Iteration: 81
-Reviewed Commit/Range: `26e5c9008d` / `4ffc781ea5..26e5c9008d` (coordination handoff at `265e0af785`)
+Reviewed Commit/Range: `26e5c9008d` / `01a0543353..26e5c9008d` (coordination unblock at `fb968f3a9e`)
 
 Next Step:
-User must provide/install Playwright browser support or approve an alternate visual acceptance evidence standard before Planner can complete Gate 7/final program review.
+Program complete. No Worker handoff required.
 ## History
 
+### Iteration 82 Planner
+Planner completed final Gate 7 and whole-program acceptance after user-approved offline visual verification adjustment. Verified Task 8 evidence, full `hermes_personal` suite (464 passed), E2E suite (23 passed), API route suite (3 passed), gateway/tools regression (120 passed), `hermes start --help`, Vite production build to `hermes_cli/web_dist/`, wheel build `dist\hermes_agent-0.20.5-py3-none-any.whl`, and clean `git diff --check`. Overall Status set to DONE; Phase 7 marked COMPLETED; no Worker handoff required.
 ### Iteration 81 Planner
 Planner reviewed Phase 7 Task 8 remediation at commit 26e5c9008d and marked the program BLOCKED. Web natural-language turn and production FastAPI route smoke evidence is now present, but Gate 7 Task 8 still requires Playwright desktop/mobile screenshot evidence. Playwright is not installed in the offline environment, so a human decision or dependency installation is required before Gate 7 can be accepted.
 ### Iteration 81
