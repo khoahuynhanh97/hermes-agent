@@ -97,3 +97,36 @@ class ApprovalService:
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
+
+    def invalidate_for_artifact(self, artifact_id: str) -> int:
+        """Reject all PENDING approval requests whose payload contains the
+        given artifact_id under any key.
+
+        Returns the number of requests invalidated.  This is called
+        automatically by ProductVideoBindingService when a binding chain
+        replacement clears a downstream artifact ref, ensuring that stale
+        approvals cannot be accidentally committed after the artifact they
+        reference has been superseded.
+        """
+        now = datetime.utcnow().isoformat() + "Z"
+        with self.conn:
+            cur = self.conn.cursor()
+            cur.execute(
+                "SELECT request_id, payload_json FROM approval_request WHERE status = ?",
+                (ApprovalStatus.PENDING.value,),
+            )
+            rows = cur.fetchall()
+            invalidated = 0
+            for row in rows:
+                try:
+                    payload = json.loads(row["payload_json"] or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    payload = {}
+                if artifact_id in json.dumps(payload):
+                    cur.execute(
+                        "UPDATE approval_request SET status = ?, updated_at = ? WHERE request_id = ?",
+                        (ApprovalStatus.REJECTED.value, now, row["request_id"]),
+                    )
+                    invalidated += 1
+        return invalidated
+
