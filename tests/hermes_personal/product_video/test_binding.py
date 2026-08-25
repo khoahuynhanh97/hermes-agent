@@ -1,4 +1,4 @@
-﻿"""tests/hermes_personal/product_video/test_binding_invalidation.py
+"""tests/hermes_personal/product_video/test_binding.py
 
 Gate 5 Task 4 -- versioned dependency chain and approval invalidation tests.
 
@@ -106,6 +106,46 @@ def test_binding_rejects_blank_product_id():
 def test_binding_rejects_zero_version():
     with pytest.raises(ValueError, match="positive"):
         ProductVideoBinding(product_id="p", version=0)
+
+
+# ---------------------------------------------------------------------------
+# Owner enforcement per chain position (MEDIUM finding)
+# ---------------------------------------------------------------------------
+
+def test_create_rejects_vf_owner_for_lock():
+    """lock_ref must be product_intelligence, not video_factory."""
+    svc = ProductVideoBindingService()
+    vf_ref = _vf_ref("lock-wrong")
+    with pytest.raises(ValueError, match="product_intelligence"):
+        svc.create("prod-1", vf_ref)
+
+
+def test_replace_product_lock_rejects_vf_owner():
+    svc = ProductVideoBindingService()
+    b = ProductVideoBinding(product_id="p", version=1, lock_ref=_pi_ref("lock-1"))
+    with pytest.raises(ValueError, match="product_intelligence"):
+        svc.replace_product_lock(b, _vf_ref("lock-bad"))
+
+
+def test_replace_brief_rejects_pi_owner():
+    svc = ProductVideoBindingService()
+    b = _full_binding()
+    with pytest.raises(ValueError, match="video_factory"):
+        svc.replace_brief(b, _pi_ref("brief-bad"))
+
+
+def test_replace_scene_plan_rejects_pi_owner():
+    svc = ProductVideoBindingService()
+    b = _full_binding()
+    with pytest.raises(ValueError, match="video_factory"):
+        svc.replace_scene_plan(b, _pi_ref("scene-bad"))
+
+
+def test_set_export_rejects_pi_owner():
+    svc = ProductVideoBindingService()
+    b = _full_binding()
+    with pytest.raises(ValueError, match="video_factory"):
+        svc.set_export(b, _pi_ref("export-bad"))
 
 
 # ---------------------------------------------------------------------------
@@ -266,13 +306,24 @@ def test_invalidate_for_artifact_returns_count():
     assert count == 2
 
 
-def test_invalidate_for_artifact_only_affects_pending():
+def test_invalidate_for_artifact_also_rejects_approved():
+    """Gate 5 contract (line 190): invalidation must cover pending AND approved approvals."""
     approvals = _approval_service()
     req = approvals.submit_request({"artifact_id": "a-1"})
     approvals.approve(req)  # move to APPROVED
 
     count = approvals.invalidate_for_artifact("a-1")
-    assert count == 0  # APPROVED should not be touched
+    assert count == 1  # APPROVED must be invalidated too
+    assert approvals.get_request(req).status == ApprovalStatus.REJECTED
+
+
+def test_invalidate_for_artifact_skips_already_rejected():
+    approvals = _approval_service()
+    req = approvals.submit_request({"artifact_id": "a-1"})
+    approvals.reject(req)
+
+    count = approvals.invalidate_for_artifact("a-1")
+    assert count == 0  # REJECTED is terminal, no change
 
 
 # ---------------------------------------------------------------------------
@@ -307,10 +358,10 @@ def test_invalid_transition_raises():
     with pytest.raises(WorkflowTransitionError):
         transition(
             ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK,
-            ProductVideoWorkflowState.DONE,
+            ProductVideoWorkflowState.COMPLETED,
         )
 
 
-def test_done_state_has_no_transitions():
+def test_completed_state_has_no_transitions():
     with pytest.raises(WorkflowTransitionError):
-        transition(ProductVideoWorkflowState.DONE, ProductVideoWorkflowState.RENDERING)
+        transition(ProductVideoWorkflowState.COMPLETED, ProductVideoWorkflowState.RENDERING)

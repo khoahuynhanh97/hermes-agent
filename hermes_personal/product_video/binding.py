@@ -1,4 +1,4 @@
-﻿"""hermes_personal/product_video/binding.py
+"""hermes_personal/product_video/binding.py
 
 Gate 5 Task 4 -- canonical Product-to-Video binding with versioned artifact
 chain and automatic downstream invalidation.
@@ -101,6 +101,11 @@ class ProductVideoBindingService:
     All mutating operations return a *new* binding with an incremented version.
     Callers are responsible for persisting the returned binding.
 
+    Owner contract (Gate 5 architecture):
+    - ``lock_ref`` must belong to ``product_intelligence``
+    - ``brief_ref``, ``scene_plan_ref``, ``storyboard_ref``, ``render_ref``,
+      ``export_ref`` must all belong to ``video_factory``
+
     ``approval_service`` is optional; when provided, any pending/approved
     approval whose ``artifact_id`` matches a cleared ref is invalidated via
     ``ApprovalService.invalidate_for_artifact``.
@@ -109,8 +114,23 @@ class ProductVideoBindingService:
     def __init__(self, approval_service: Any | None = None) -> None:
         self._approvals = approval_service
 
+    @staticmethod
+    def _require_pi(ref: ArtifactRef, field: str) -> None:
+        if ref.owner != "product_intelligence":
+            raise ValueError(
+                f"{field} must be owned by 'product_intelligence', got {ref.owner!r}"
+            )
+
+    @staticmethod
+    def _require_vf(ref: ArtifactRef, field: str) -> None:
+        if ref.owner != "video_factory":
+            raise ValueError(
+                f"{field} must be owned by 'video_factory', got {ref.owner!r}"
+            )
+
     def create(self, product_id: str, lock_ref: ArtifactRef) -> ProductVideoBinding:
         """Create a brand-new binding at version 1 with only the product lock set."""
+        self._require_pi(lock_ref, "lock_ref")
         return ProductVideoBinding(
             product_id=product_id,
             version=1,
@@ -123,6 +143,7 @@ class ProductVideoBindingService:
         new_lock_ref: ArtifactRef,
     ) -> ProductVideoBinding:
         """Replace the product lock; clears brief, scene_plan, storyboard, render, export."""
+        self._require_pi(new_lock_ref, "new_lock_ref")
         cleared = binding._descendants_of_lock()
         self._invalidate_cleared(binding, cleared)
         return replace(
@@ -138,6 +159,7 @@ class ProductVideoBindingService:
         new_brief_ref: ArtifactRef,
     ) -> ProductVideoBinding:
         """Replace the creative brief; clears scene_plan, storyboard, render, export."""
+        self._require_vf(new_brief_ref, "new_brief_ref")
         cleared = binding._descendants_of_brief()
         self._invalidate_cleared(binding, cleared)
         return replace(
@@ -153,6 +175,7 @@ class ProductVideoBindingService:
         new_scene_plan_ref: ArtifactRef,
     ) -> ProductVideoBinding:
         """Replace the scene plan; clears storyboard, render, export; brief is preserved."""
+        self._require_vf(new_scene_plan_ref, "new_scene_plan_ref")
         cleared = binding._descendants_of_scene_plan()
         self._invalidate_cleared(binding, cleared)
         return replace(
@@ -168,6 +191,7 @@ class ProductVideoBindingService:
         new_storyboard_ref: ArtifactRef,
     ) -> ProductVideoBinding:
         """Replace the storyboard; clears render, export."""
+        self._require_vf(new_storyboard_ref, "new_storyboard_ref")
         cleared = binding._descendants_of_storyboard()
         self._invalidate_cleared(binding, cleared)
         return replace(
@@ -183,6 +207,7 @@ class ProductVideoBindingService:
         new_render_ref: ArtifactRef,
     ) -> ProductVideoBinding:
         """Replace the render; clears export."""
+        self._require_vf(new_render_ref, "new_render_ref")
         cleared = binding._descendants_of_render()
         self._invalidate_cleared(binding, cleared)
         return replace(
@@ -198,6 +223,7 @@ class ProductVideoBindingService:
         export_ref: ArtifactRef,
     ) -> ProductVideoBinding:
         """Attach the export artifact; does not clear any upstream refs."""
+        self._require_vf(export_ref, "export_ref")
         return replace(
             binding,
             version=binding.version + 1,

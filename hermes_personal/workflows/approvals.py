@@ -99,21 +99,27 @@ class ApprovalService:
         )
 
     def invalidate_for_artifact(self, artifact_id: str) -> int:
-        """Reject all PENDING approval requests whose payload contains the
-        given artifact_id under any key.
+        """Reject all PENDING and APPROVED approval requests whose payload
+        contains the given artifact_id under any key.
 
-        Returns the number of requests invalidated.  This is called
-        automatically by ProductVideoBindingService when a binding chain
-        replacement clears a downstream artifact ref, ensuring that stale
-        approvals cannot be accidentally committed after the artifact they
-        reference has been superseded.
+        Gate 5 contract (line 190): any upstream change in the dependency
+        chain ``product_lock -> brief -> scene_plan -> storyboard -> render ->
+        export`` clears every descendant reference AND invalidates corresponding
+        **pending/approved** approvals.  REJECTED approvals are already terminal
+        and are skipped.
+
+        Returns the number of requests invalidated.  Called automatically by
+        ProductVideoBindingService when a binding chain replacement clears a
+        downstream artifact ref.
         """
         now = datetime.utcnow().isoformat() + "Z"
+        invalidated_statuses = (ApprovalStatus.PENDING.value, ApprovalStatus.APPROVED.value)
         with self.conn:
             cur = self.conn.cursor()
             cur.execute(
-                "SELECT request_id, payload_json FROM approval_request WHERE status = ?",
-                (ApprovalStatus.PENDING.value,),
+                "SELECT request_id, payload_json FROM approval_request"
+                " WHERE status IN (?, ?)",
+                invalidated_statuses,
             )
             rows = cur.fetchall()
             invalidated = 0
@@ -124,9 +130,9 @@ class ApprovalService:
                     payload = {}
                 if artifact_id in json.dumps(payload):
                     cur.execute(
-                        "UPDATE approval_request SET status = ?, updated_at = ? WHERE request_id = ?",
+                        "UPDATE approval_request SET status = ?, updated_at = ?"
+                        " WHERE request_id = ?",
                         (ApprovalStatus.REJECTED.value, now, row["request_id"]),
                     )
                     invalidated += 1
         return invalidated
-
