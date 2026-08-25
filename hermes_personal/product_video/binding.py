@@ -137,6 +137,10 @@ class ProductVideoBindingService:
             lock_ref=lock_ref,
         )
 
+    def create_binding(self, product_id: str, lock_ref: ArtifactRef) -> ProductVideoBinding:
+        """Deprecated compatibility method. Use `create()` instead."""
+        return self.create(product_id, lock_ref)
+
     def replace_product_lock(
         self,
         binding: ProductVideoBinding,

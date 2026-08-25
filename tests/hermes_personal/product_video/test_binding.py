@@ -365,3 +365,146 @@ def test_invalid_transition_raises():
 def test_completed_state_has_no_transitions():
     with pytest.raises(WorkflowTransitionError):
         transition(ProductVideoWorkflowState.COMPLETED, ProductVideoWorkflowState.RENDERING)
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for Gate 5 Task 4 findings
+# ---------------------------------------------------------------------------
+
+def test_researching_to_building_resource_pack_is_blocked():
+    """FINDING 1: Direct RESEARCHING -> BUILDING_RESOURCE_PACK must raise WorkflowTransitionError.
+
+    The HITL gate at AWAITING_PRODUCT_LOCK must not be bypassed.
+    """
+    with pytest.raises(WorkflowTransitionError):
+        transition(
+            ProductVideoWorkflowState.RESEARCHING,
+            ProductVideoWorkflowState.BUILDING_RESOURCE_PACK,
+        )
+
+
+def test_researching_to_awaiting_product_lock_to_building_resource_pack_works():
+    """FINDING 1: Valid path through AWAITING_PRODUCT_LOCK must work."""
+    # RESEARCHING -> AWAITING_PRODUCT_LOCK
+    result = transition(
+        ProductVideoWorkflowState.RESEARCHING,
+        ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK,
+    )
+    assert result == ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK
+
+    # AWAITING_PRODUCT_LOCK -> BUILDING_RESOURCE_PACK
+    result = transition(
+        ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK,
+        ProductVideoWorkflowState.BUILDING_RESOURCE_PACK,
+    )
+    assert result == ProductVideoWorkflowState.BUILDING_RESOURCE_PACK
+
+
+def test_invalidate_for_artifact_exact_match_no_false_positive():
+    """FINDING 2: invalidate_for_artifact must not match artifact-1 in artifact-10.
+
+    The old code used `artifact_id in json.dumps(payload)` which does substring matching.
+    This test ensures exact matching on the artifact_id field only.
+    """
+    approvals = _approval_service()
+    svc = ProductVideoBindingService(approval_service=approvals)
+
+    # Create a binding with artifact-10 (not artifact-1)
+    b = ProductVideoBinding(
+        product_id="prod-1",
+        version=1,
+        lock_ref=_pi_ref("lock-1"),
+        brief_ref=_vf_ref("brief-10"),
+        scene_plan_ref=_vf_ref("scene-10"),
+    )
+
+    # Submit approval for artifact-10
+    req_10 = approvals.submit_request({"artifact_id": "brief-10", "stage": "brief"})
+
+    # Replace product lock (this should clear brief_ref which is "brief-10")
+    svc.replace_product_lock(b, _pi_ref("lock-2", version=2))
+
+    # The approval for "brief-10" should be invalidated
+    assert approvals.get_request(req_10).status == ApprovalStatus.REJECTED
+
+    # Now test that artifact-1 does NOT match artifact-10
+    approvals2 = _approval_service()
+    svc2 = ProductVideoBindingService(approval_service=approvals2)
+
+    b2 = ProductVideoBinding(
+        product_id="prod-2",
+        version=1,
+        lock_ref=_pi_ref("lock-1"),
+        brief_ref=_vf_ref("brief-10"),  # Note: brief-10, not brief-1
+        scene_plan_ref=_vf_ref("scene-10"),
+    )
+
+    # Submit approval for artifact-1 (different from brief-10)
+    req_1 = approvals2.submit_request({"artifact_id": "brief-1", "stage": "brief"})
+
+    # Replace product lock (clears brief-10)
+    svc2.replace_product_lock(b2, _pi_ref("lock-2", version=2))
+
+    # The approval for "brief-1" should NOT be invalidated (no match)
+    assert approvals2.get_request(req_1).status == ApprovalStatus.PENDING
+
+
+def test_legacy_create_binding_method_on_service():
+    """FINDING 3: ProductVideoBindingService.create_binding must exist and delegate to create."""
+    svc = ProductVideoBindingService()
+
+    lock_ref = _pi_ref("lock-123", version=1)
+
+    # Call the legacy method
+    binding = svc.create_binding("prod-456", lock_ref)
+
+    # Should be equivalent to create()
+    assert binding.product_id == "prod-456"
+    assert binding.version == 1
+    assert binding.lock_ref == lock_ref
+    assert binding.brief_ref is None
+    assert binding.scene_plan_ref is None
+
+
+def test_legacy_create_binding_via_integration_shim():
+    """FINDING 3: Integration shim create_binding must work via service.create_binding."""
+    from hermes_personal.integrations.product_video.binding import create_binding as shim_create_binding
+
+    resource_pack = {"name": "Test Product", "features": ["a", "b"]}
+
+    # This should work through the shim -> service.create_binding -> service.create
+    binding = shim_create_binding("prod-789", resource_pack)
+
+    assert binding.product_id == "prod-789"
+    assert binding.version == 1
+    assert binding.lock_ref is not None
+    assert binding.lock_ref.owner == "product_intelligence"
+    # Digest should be computed from resource_pack
+    assert binding.lock_ref.digest.startswith("sha256:")
+
+
+def test_legacy_verify_binding_integrity_match():
+    """FINDING 3: verify_binding_integrity must return True when digest matches."""
+    from hermes_personal.integrations.product_video.binding import verify_binding_integrity, create_binding as shim_create_binding
+
+    resource_pack = {"name": "Test Product", "version": 1}
+
+    # Create binding via shim
+    binding = shim_create_binding("prod-999", resource_pack)
+
+    # Same resource_pack should match
+    assert verify_binding_integrity(binding, resource_pack) is True
+
+
+def test_legacy_verify_binding_integrity_mismatch():
+    """FINDING 3: verify_binding_integrity must return False when digest mismatches."""
+    from hermes_personal.integrations.product_video.binding import verify_binding_integrity, create_binding as shim_create_binding
+
+    resource_pack = {"name": "Test Product", "version": 1}
+    different_pack = {"name": "Different Product", "version": 2}
+
+    # Create binding via shim
+    binding = shim_create_binding("prod-999", resource_pack)
+
+    # Different resource_pack should NOT match
+    assert verify_binding_integrity(binding, different_pack) is False

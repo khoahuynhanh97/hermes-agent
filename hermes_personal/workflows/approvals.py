@@ -7,6 +7,26 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict
 
+
+def _contains_artifact_id(obj: Any, artifact_id: str) -> bool:
+    """Recursively check if any string value in the nested structure equals artifact_id.
+
+    Matches only exact string values, not substrings, keys, or prefixes.
+    """
+    if isinstance(obj, dict):
+        for value in obj.values():
+            if _contains_artifact_id(value, artifact_id):
+                return True
+    elif isinstance(obj, list) or isinstance(obj, tuple):
+        for item in obj:
+            if _contains_artifact_id(item, artifact_id):
+                return True
+    elif isinstance(obj, str):
+        return obj == artifact_id
+    # int, float, bool, None don't match
+    return False
+
+
 class ApprovalStatus(str, Enum):
     PENDING = "pending"
     APPROVED = "approved"
@@ -128,7 +148,7 @@ class ApprovalService:
                     payload = json.loads(row["payload_json"] or "{}")
                 except (json.JSONDecodeError, TypeError):
                     payload = {}
-                if artifact_id in json.dumps(payload):
+                if _contains_artifact_id(payload, artifact_id):
                     cur.execute(
                         "UPDATE approval_request SET status = ?, updated_at = ?"
                         " WHERE request_id = ?",

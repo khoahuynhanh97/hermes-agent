@@ -22,7 +22,7 @@ def create_binding(product_id: str, resource_pack: dict) -> ProductVideoBinding:
         json.dumps(resource_pack, sort_keys=True).encode()
     ).hexdigest()
     lock_ref = ArtifactRef(artifact_id=product_id, version=1, digest=digest, owner="product_intelligence")
-    return ProductVideoBindingService().create(product_id, lock_ref)
+    return ProductVideoBindingService().create_binding(product_id, lock_ref)
 
 
 def verify_binding_integrity(binding: ProductVideoBinding, current_resource_pack: dict) -> bool:

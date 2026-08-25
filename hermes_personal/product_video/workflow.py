@@ -33,7 +33,6 @@ _TRANSITIONS: dict[ProductVideoWorkflowState, frozenset[ProductVideoWorkflowStat
     }),
     ProductVideoWorkflowState.RESEARCHING: frozenset({
         ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK,
-        ProductVideoWorkflowState.BUILDING_RESOURCE_PACK,
     }),
     ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK: frozenset({
         ProductVideoWorkflowState.BUILDING_RESOURCE_PACK,
