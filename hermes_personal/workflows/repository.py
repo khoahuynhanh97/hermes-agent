@@ -77,11 +77,21 @@ class WorkflowRepository:
                     raise DuplicateCommandError()
             # Increment version
             new_version = current_version + 1
-            # Update workflow aggregate and version
-            cur.execute(
-                "UPDATE workflow SET aggregate_json = ?, version = ? WHERE workflow_id = ?",
-                (aggregate_json, new_version, workflow_id),
-            )
+            # Keep the version check in the write itself so a concurrent
+            # commit cannot overwrite an aggregate after the initial read.
+            if expected_version is None:
+                cur.execute(
+                    "UPDATE workflow SET aggregate_json = ?, version = ? WHERE workflow_id = ?",
+                    (aggregate_json, new_version, workflow_id),
+                )
+            else:
+                cur.execute(
+                    "UPDATE workflow SET aggregate_json = ?, version = ? "
+                    "WHERE workflow_id = ? AND version = ?",
+                    (aggregate_json, new_version, workflow_id, expected_version),
+                )
+                if cur.rowcount != 1:
+                    raise VersionConflict()
             # Insert processed commands
             for e in events:
                 cmd_id = e.get("command_id")

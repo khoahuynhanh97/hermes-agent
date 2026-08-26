@@ -31,9 +31,10 @@ class WorkflowEngine:
         "started": ["approval_requested", "cancelled", "expired"],
         "approval_requested": ["approved", "rejected", "cancelled", "expired"],
         "approved": ["job_dispatched", "cancelled", "expired"],
-        "job_dispatched": ["job_succeeded", "job_failed", "cancelled", "expired"],
+        "job_dispatched": ["completed", "job_failed", "cancelled", "expired"],
         "job_failed": ["job_retried", "cancelled", "expired"],
-        "job_retried": ["job_succeeded", "job_failed", "cancelled", "expired"],
+        "job_retried": ["completed", "job_failed", "cancelled", "expired"],
+        "completed": [],
         "cancelled": [],
         "expired": [],
     }
@@ -62,29 +63,45 @@ class WorkflowEngine:
         if not cmd_id or not cmd_type:
             raise ValueError("command_id and type are required")
 
-        # Duplicate detection – repository will raise DuplicateCommandError.
+        # The repository is canonical. Refresh before both validation and the
+        # optimistic commit so a restarted or long-lived engine cannot use a
+        # stale cache entry.
+        aggregate, current_version = self._load_workflow(wf_id)
+
         try:
             events = self._build_events(wf_id, cmd_id, cmd_type, args)
+            current_state = aggregate.get("state", "initial")
+            next_state = self._next_state(current_state, cmd_type)
+            next_aggregate = dict(aggregate)
+            next_aggregate["state"] = next_state
         except DuplicateCommandError:
-            # Fetch current version without mutating state.
-            version = self._cache.get(wf_id, {}).get("version", 0)
-            return CommandResult(workflow_id=wf_id, new_version=version, message="duplicate")
+            _, persisted_version = self._load_workflow(wf_id)
+            return CommandResult(
+                workflow_id=wf_id,
+                new_version=persisted_version,
+                message="duplicate",
+            )
 
-        # Persist via repository.
-        aggregate_json = json.dumps(self._cache.get(wf_id, {}))
         try:
             result = self.repo.commit_workflow(
                 workflow_id=wf_id,
-                aggregate_json=aggregate_json,
+                aggregate_json=json.dumps(next_aggregate),
                 events=events,
-                expected_version=self._cache.get(wf_id, {}).get("version"),
+                expected_version=current_version,
             )
-        except VersionConflict as exc:
-            raise exc
-        # Update in‑memory cache.
-        self._cache.setdefault(wf_id, {"state": "initial", "version": 0})
-        self._apply_state_transition(wf_id, cmd_type, args)
-        self._cache[wf_id]["version"] = result.new_version
+        except DuplicateCommandError:
+            _, persisted_version = self._load_workflow(wf_id)
+            return CommandResult(
+                workflow_id=wf_id,
+                new_version=persisted_version,
+                message="duplicate",
+            )
+        except VersionConflict:
+            self._load_workflow(wf_id)
+            raise
+
+        # Only publish the new cache entry after the atomic repository commit.
+        self._cache[wf_id] = {"state": next_state, "version": result.new_version}
         return CommandResult(workflow_id=wf_id, new_version=result.new_version)
 
     def get_workflow_state(self, workflow_id: str) -> tuple[str, int] | None:
@@ -102,17 +119,14 @@ class WorkflowEngine:
 
     def set_workflow_state(self, workflow_id: str, state: str, version: int = 1) -> None:
         """Helper to register/update workflow state directly for tests or execution."""
+        with self.repo.conn:
+            cur = self.repo.conn.cursor()
+            cur.execute(
+                "INSERT INTO workflow (workflow_id, aggregate_json, version) VALUES (?, ?, ?) "
+                "ON CONFLICT(workflow_id) DO UPDATE SET aggregate_json=excluded.aggregate_json, version=excluded.version",
+                (workflow_id, json.dumps({"state": state}), version),
+            )
         self._cache[workflow_id] = {"state": state, "version": version}
-        try:
-            with self.repo.conn:
-                cur = self.repo.conn.cursor()
-                cur.execute(
-                    "INSERT INTO workflow (workflow_id, aggregate_json, version) VALUES (?, ?, ?) "
-                    "ON CONFLICT(workflow_id) DO UPDATE SET aggregate_json=excluded.aggregate_json, version=excluded.version",
-                    (workflow_id, json.dumps({"state": state}), version),
-                )
-        except Exception:
-            pass
 
     # ---------------------------------------------------------------------
     # Internal helpers
@@ -145,6 +159,20 @@ class WorkflowEngine:
         }
         return [event]
 
+    def _load_workflow(self, workflow_id: str) -> tuple[dict[str, Any], int]:
+        """Load the canonical aggregate and mirror its state in the cache."""
+        wf_data = self.repo.get_workflow(workflow_id)
+        if wf_data is None:
+            aggregate: dict[str, Any] = {"state": "initial"}
+            version = 0
+        else:
+            aggregate, version = wf_data
+        self._cache[workflow_id] = {
+            "state": aggregate.get("state", "initial"),
+            "version": version,
+        }
+        return aggregate, version
+
     def _event_type_for_command(self, cmd_type: str) -> str:
         mapping = {
             "start": "WorkflowStarted",
@@ -162,7 +190,13 @@ class WorkflowEngine:
         return mapping.get(cmd_type, "Unknown")
 
     def _apply_state_transition(self, wf_id: str, cmd_type: str, args: Dict[str, Any]) -> None:
-        # Simple state machine mapping command to new state.
+        current_state = self._cache.get(wf_id, {}).get("state", "initial")
+        self._cache.setdefault(wf_id, {"state": current_state, "version": 0})[
+            "state"
+        ] = self._next_state(current_state, cmd_type)
+
+    def _next_state(self, current_state: str, cmd_type: str) -> str:
+        """Validate a command and return its next state without side effects."""
         transition_map = {
             "start": "started",
             "record_artifact": "started",
@@ -170,7 +204,7 @@ class WorkflowEngine:
             "approve": "approved",
             "reject": "cancelled",
             "dispatch_job": "job_dispatched",
-            "job_succeeded": "job_dispatched",  # stay in dispatched until further cmds
+            "job_succeeded": "completed",
             "job_failed": "job_failed",
             "retry": "job_retried",
             "cancel": "cancelled",
@@ -178,10 +212,8 @@ class WorkflowEngine:
         }
         new_state = transition_map.get(cmd_type)
         if new_state is None:
-            raise IllegalTransition(self._cache.get(wf_id, {}).get("state", "initial"), "unknown", "unsupported command")
-        current_state = self._cache.get(wf_id, {}).get("state", "initial")
+            raise IllegalTransition(current_state, "unknown", "unsupported command")
         allowed = self._state_machine.get(current_state, [])
         if new_state not in allowed:
             raise IllegalTransition(current_state, new_state, f"command {cmd_type} not allowed")
-        # Update state.
-        self._cache.setdefault(wf_id, {"state": "initial", "version": 0})["state"] = new_state
+        return new_state
