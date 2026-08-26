@@ -17,6 +17,7 @@ redacted `details`. General turn exceptions become terminal `failed`
 | Optimistic concurrency | workflow/binding `VERSION_CONFLICT` | Reload current version, reconcile, retry with same logical command semantics |
 | HITL/precondition | `HITL_APPROVAL_REQUIRED`, `unmet_precondition` | Wait for explicit human action |
 | Capability policy | unavailable binding, unauthorized skill/workflow, budget exceeded | Follow actionable recovery; do not blind retry |
+| Budget accounting | `BudgetError`, `BudgetConflict` (idempotency key reused with mismatched payload) | Fail closed. Conflict requires new idempotency key or matching parameters. |
 | Input integrity | `DIGEST_MISMATCH`, missing input ref, foreign artifact owner | Reconcile refs; no retry unchanged input |
 | Transient provider/stage | PI/VF `*_FAILED` marked retryable | Retry within bounded budget with same idempotency key |
 | Startup | `*_FAILED`, no readiness report/probe | Keep ingress closed; repair dependency, rerun startup |

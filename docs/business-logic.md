@@ -42,10 +42,21 @@ structured `CapabilityError` with recovery guidance.
 | Skill | Calling skill must be in `allowed_skills` when restricted |
 | Workflow | Active workflow must be in `allowed_workflows` when restricted |
 | Health | `unavailable` is denied; `degraded` is conditional |
-| Schema | Input/output schema versions must match the active binding |
 | Approval | Enforce `none`, `review_required`, `approved_only`, `hitl`, or named precondition policy |
-| Budget | Metered/paid calls require positive available budget |
+| Budget | Metered/paid calls require durable atomic budget reservation check (`BudgetRepository.reserve_budget`) |
 | Degraded mode | Only low-risk, free, non-approval work may continue with a warning |
+
+## Durable Budget Reservation Rules
+
+All metered or paid operations require durable budget authorization managed by `BudgetRepository` in `hermes_personal/workflows/budgets.py`:
+
+- **Atomic Reservation (`reserve_budget`)**: Executed inside a SQLite `BEGIN IMMEDIATE` transaction to atomically check total and per-channel budget limits (`total_used + amount <= max_total` and `channel_used + amount <= per_channel_limit`) before writing a new reservation with `state = 'reserved'`.
+- **Idempotency & Replay**: Re-submitting an identical reservation request (`owner_user_id`, `scope_id`, `idempotency_key`, request digest) returns the existing `BudgetAllocation` record without double-deducting budget. A key reuse with mismatched parameters raises `BudgetConflict`.
+- **Lifecycle & Deduplication**:
+  - `commit_budget(alloc)` moves state to `'committed'`. Retrying commit is idempotent and does not double-count.
+  - `release_budget(alloc)` moves state to `'released'`. Retrying release is idempotent. Releasing a committed allocation is forbidden.
+- **Durable Persistence**: State survives process restarts via the SQLite `budget_reservation` table. Active (`reserved`) and `committed` allocations count toward total consumption; `released` allocations do not.
+- **Fail Closed**: Database or backend failures during budget authorization immediately fail closed with `BudgetError`. Read-only `check_budget` operations do not mutate database state.
 
 ## Operator command rules
 

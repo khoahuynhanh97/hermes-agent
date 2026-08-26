@@ -63,11 +63,12 @@ recursive `artifact_id` match.
 
 ## Budgets
 
-`BudgetEngine` enforces total and per-channel limits with reserve, commit, and
-release operations. It is process-local memory in the current implementation;
-it is not restart-durable. Its idempotency key suppresses duplicate commit only,
-not duplicate reservation. A production paid-provider path needs a durable,
-atomic reservation claim and reconciliation before external side effects.
+`BudgetEngine` and `BudgetRepository` in `hermes_personal/workflows/budgets.py` enforce total and per-channel limits with `reserve_budget`, `commit_budget`, and `release_budget` operations:
+
+- **Durable Persistence**: Backed by the SQLite `budget_reservation` table. Active (`reserved`) and `committed` allocations count toward budget consumption; `released` allocations do not. State survives process restarts.
+- **Atomic Reservation**: Uses `BEGIN IMMEDIATE` SQLite transactions to prevent race conditions across concurrent callers.
+- **Idempotency**: `(owner_user_id, scope_id, idempotency_key)` combined with SHA-256 request digest deduplicates reservation retries without double deducting budget. Re-committing or re-releasing is idempotent. Key reuse with conflicting parameters raises `BudgetConflict`.
+- **Isolation**: Owner and scope boundaries ensure distinct users/workflows operate under isolated budget pools.
 
 ## Background jobs
 

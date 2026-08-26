@@ -182,6 +182,23 @@ CREATE TABLE IF NOT EXISTS learning_event (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS budget_reservation (
+  reservation_id TEXT PRIMARY KEY,
+  owner_user_id TEXT NOT NULL,
+  scope_id TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  amount INTEGER NOT NULL CHECK(amount > 0),
+  currency TEXT NOT NULL DEFAULT 'USD',
+  idempotency_key TEXT NOT NULL,
+  request_digest TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('reserved', 'committed', 'released')),
+  external_reference TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(owner_user_id, scope_id, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS budget_reservation_owner_scope_idx
+  ON budget_reservation(owner_user_id, scope_id, state, channel);
 
 """
 
@@ -231,6 +248,31 @@ def _migrate_schema(connection: sqlite3.Connection) -> None:
               active_snapshot_id TEXT NOT NULL REFERENCES capability_snapshot(snapshot_id) ON DELETE RESTRICT,
               activated_at TEXT NOT NULL
             );
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS budget_reservation (
+              reservation_id TEXT PRIMARY KEY,
+              owner_user_id TEXT NOT NULL,
+              scope_id TEXT NOT NULL,
+              channel TEXT NOT NULL,
+              amount INTEGER NOT NULL CHECK(amount > 0),
+              currency TEXT NOT NULL DEFAULT 'USD',
+              idempotency_key TEXT NOT NULL,
+              request_digest TEXT NOT NULL,
+              state TEXT NOT NULL CHECK(state IN ('reserved', 'committed', 'released')),
+              external_reference TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              UNIQUE(owner_user_id, scope_id, idempotency_key)
+            );
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS budget_reservation_owner_scope_idx
+              ON budget_reservation(owner_user_id, scope_id, state, channel);
             """
         )
 

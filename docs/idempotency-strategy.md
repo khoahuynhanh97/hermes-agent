@@ -43,6 +43,28 @@ Claim uses `BEGIN IMMEDIATE` so concurrent callers cannot both create the same
 owner/key execution. Event uniqueness is `(turn_id, sequence)` plus globally
 unique `event_id`.
 
+## Budget reservations
+
+### Scope and key
+
+The durable uniqueness scope for budget reservations is:
+
+```text
+(owner_user_id, scope_id, idempotency_key)
+```
+
+### Semantic digest
+
+The request calculates SHA-256 over `(owner_user_id, scope_id, channel, amount, currency)`.
+
+### Claim & Lifecycle outcomes
+
+- **Reserve Retry**:
+  - Same key + same digest: returns existing `BudgetAllocation` without double deducting budget.
+  - Same key + different digest: raises `BudgetConflict`.
+- **Commit Retry**: Idempotent. Re-committing an already committed allocation updates local state and returns cleanly without double counting.
+- **Release Retry**: Idempotent. Re-releasing an already released allocation returns cleanly without modifying balance. Releasing a committed allocation raises `BudgetError`.
+
 ## Workflow commands
 
 The workflow repository stores `(workflow_id, command_id)` in

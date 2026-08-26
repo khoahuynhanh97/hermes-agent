@@ -169,6 +169,22 @@ optional refs `lock_ref`, `brief_ref`, `scene_plan_ref`, `storyboard_ref`,
 `render_ref`, `export_ref`. Mutations return a new binding and clear stale
 descendants.
 
+## BudgetAllocation and BudgetPolicy Contracts
+
+Durable budget accounting uses integer minor units (e.g. cents/tokens):
+
+- **`BudgetPolicy`**: `max_total` (integer), `per_channel` (dictionary mapping channel names to integer limits).
+- **`BudgetAllocation`**:
+  - `channel` (string): channel / cost category.
+  - `amount` (positive integer): minor cost units reserved/committed.
+  - `idempotency_key` (string): client-provided or auto-generated idempotency key.
+  - `reservation_id` (string): unique SQLite reservation identifier (`res_<hex>`).
+  - `owner_user_id` (string): canonical owner context.
+  - `scope_id` (string): scope identifier (e.g. `workflow_id` or owner scope).
+  - `currency` (string): default `"USD"`.
+  - `state` (string): `"reserved"`, `"committed"`, or `"released"`.
+  - `_committed` (boolean property): returns `state == "committed"` for backwards compatibility.
+
 ## Compatibility and evolution
 
 - Additive optional fields may retain schema version 1 when old consumers safely

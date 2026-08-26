@@ -33,7 +33,7 @@ The main table groups are:
 - capabilities: `capability_snapshot`, `capability_snapshot_binding`,
   `capability_catalog_state`;
 - workflows: `workflow`, `workflow_event`, `processed_command`,
-  `workflow_outbox`;
+  `workflow_outbox`, `budget_reservation`;
 - learning: `task_outcome`, `learning_candidate`, `evidence_ref`,
   `learning_version`, `candidate_evaluation`, `learning_event`;
 - approvals: `approval_request`, created by `ApprovalService`.
