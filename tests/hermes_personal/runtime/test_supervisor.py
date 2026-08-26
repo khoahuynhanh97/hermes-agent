@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 import socket
 from unittest.mock import patch
@@ -63,12 +64,14 @@ class FakeChildProcess(ChildProcess):
 class FakeProcessRunner(ProcessRunner):
     def __init__(self):
         self.started: list[ProcessSpec] = []
+        self.environments: list[dict[str, str] | None] = []
         self.active_processes: dict[str, list[FakeChildProcess]] = {}
         self._next_pid = 1000
         self.stubborn_names: set[str] = set()
 
     def start(self, spec: ProcessSpec, env: dict[str, str] | None = None) -> FakeChildProcess:
         self.started.append(spec)
+        self.environments.append(env)
         self._next_pid += 1
         stubborn = spec.name in self.stubborn_names
         child = FakeChildProcess(name=spec.name, pid=self._next_pid, stubborn=stubborn)
@@ -142,6 +145,54 @@ def test_ordered_start_of_processes(fake_runner, fake_clock):
     assert [s.name for s in fake_runner.started] == ["p1", "p2", "p3"]
     assert len(events) == 3
     assert all(e.event_type == "started" for e in events)
+
+
+def test_supervisor_passes_declared_runtime_environment(fake_runner, fake_clock, monkeypatch):
+    monkeypatch.setenv("HERMES_API_KEY", "runtime-secret")
+    spec = replace(make_spec("gateway"), env_keys=("HERMES_API_KEY",))
+
+    Supervisor(
+        specs=(spec,),
+        runner=fake_runner,
+        clock=fake_clock.time,
+        sleep_fn=fake_clock.sleep,
+    ).start_all()
+
+    assert fake_runner.environments[0]["HERMES_API_KEY"] == "runtime-secret"
+
+
+def test_builtin_http_probe_retries_until_service_is_ready(fake_runner, fake_clock):
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    spec = make_spec(
+        "http_service",
+        probe=ProbeSpec(
+            probe_type="http",
+            endpoint="http://127.0.0.1/healthz",
+            initial_delay_seconds=0.0,
+            interval_seconds=0.001,
+            timeout_seconds=0.1,
+        ),
+    )
+    with patch(
+        "urllib.request.urlopen",
+        side_effect=[ConnectionRefusedError(), Response()],
+    ) as probe:
+        Supervisor(
+            specs=(spec,),
+            runner=fake_runner,
+            clock=fake_clock.time,
+            sleep_fn=lambda _: None,
+        ).start_all()
+
+    assert probe.call_count == 2
 
 
 def test_default_runner_inherits_child_streams_without_shell(monkeypatch):

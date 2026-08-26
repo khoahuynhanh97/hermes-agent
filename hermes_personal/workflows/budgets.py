@@ -27,9 +27,6 @@ class BudgetEngine:
         self.policy = policy
         self._allocated: Dict[str, int] = {}
         self._pending: List[BudgetAllocation] = []
-        # Track checks without reservation to enforce cumulative total limits
-        self._checked_total: int = 0
-        self._checked_channel: Dict[str, int] = {}
         # Track committed idempotency keys to avoid double commits
         self._committed_keys: set[str] = set()
 
@@ -43,16 +40,11 @@ class BudgetEngine:
         channel_used = (
             self._allocated.get(channel, 0)
             + sum(a.amount for a in self._pending if a.channel == channel)
-            + self._checked_channel.get(channel, 0)
         )
         if channel_used + amount > channel_limit:
             raise BudgetError(f"channel '{channel}' exceeds its limit")
-        # Include previously checked amounts in total limit calculation
-        if self._total_allocated() + self._checked_total + amount > self.policy.max_total:
+        if self._total_allocated() + amount > self.policy.max_total:
             raise BudgetError("total budget exceeds max_total")
-        # Record this check for future cumulative checks
-        self._checked_total += amount
-        self._checked_channel[channel] = self._checked_channel.get(channel, 0) + amount
 
     def reserve_budget(self, channel: str, amount: int, idempotency_key: str | None = None) -> BudgetAllocation:
         self.check_budget(channel, amount)

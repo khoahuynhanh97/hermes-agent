@@ -1,0 +1,10 @@
+runtime:
+  mode: development
+  provider_mode: fake
+  gateway_port: 8642
+  app_api_port: 8000
+  web_port: 3000
+  enable_web: true
+  enable_telegram: false
+  enable_workers: false
+  enable_mcp: false

@@ -170,6 +170,34 @@ This branch also contains the source-backed documentation for the
 behavior from design-plan targets and links architecture, contracts, security,
 operations, integration, error, and idempotency references.
 
+### Run the rearchitected local runtime
+
+The checked-in local profile starts the canonical Gateway, the public App API,
+and the Vite Web UI with a deterministic fake provider. It performs no paid
+provider calls. From PowerShell:
+
+```powershell
+uv sync --extra web --extra dev
+npm --prefix web install
+$env:HERMES_HOME = Join-Path $PWD ".runtime\hermes"
+$env:HERMES_API_KEY = [Convert]::ToHexString(
+  [Security.Cryptography.RandomNumberGenerator]::GetBytes(32)
+).ToLowerInvariant()
+$env:HERMES_OWNER_ID = "local-owner"
+uv run hermes start --config .\runtime-config.local.yaml.example --no-open-browser
+```
+
+Open `http://127.0.0.1:3000/omni`. Gateway state is persisted at
+`$env:HERMES_HOME\hermes.db`. Stop with `Ctrl+C`; the supervisor reaps child
+processes in reverse startup order.
+
+The profile intentionally disables the not-yet-packaged standalone MCP,
+durable-worker, and Telegram runner processes. To use the configured upstream
+Hermes model instead of the fake provider, complete `hermes setup`, copy the
+example profile, and set `runtime.provider_mode: configured`. That mode can
+make live provider/tool calls and should only be used with explicit credentials
+and budget controls. See the local [operations runbook](docs/hermes-personal/operations.md).
+
 | Section                                                                                             | What's Covered                                             |
 | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
 | [Quickstart](https://hermes-agent.nousresearch.com/docs/getting-started/quickstart)                 | Install → setup → first conversation in 2 minutes          |

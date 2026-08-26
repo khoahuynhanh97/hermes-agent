@@ -158,6 +158,13 @@ class EventRepository:
                 (event.turn_id, event.sequence, event.event_id, payload_json),
             )
             now_iso = datetime.now(timezone.utc).isoformat()
+            self._connection.execute(
+                """
+                INSERT INTO owner_event_cursor (owner_user_id, event_id, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (event.principal_id, event.event_id, now_iso),
+            )
             if event.event_type in {"completed", "failed"}:
                 self._connection.execute(
                     """
@@ -414,6 +421,46 @@ class EventRepository:
             (session_id,),
         ).fetchall()
         return tuple(_deserialize_event(row) for row in rows)
+
+    def get_event_records_for_owner(
+        self,
+        owner_id: str,
+        after_cursor: int = 0,
+        limit: int = 100,
+    ) -> list[tuple[int, AgentEvent]]:
+        """Return committed events using an owner-global durable cursor."""
+        if not owner_id.strip():
+            raise ValueError("owner_id must not be blank")
+        if after_cursor < 0:
+            raise ValueError("after_cursor must be non-negative")
+        if limit < 1 or limit > 500:
+            raise ValueError("limit must be between 1 and 500")
+        rows = self._connection.execute(
+            """
+            SELECT c.cursor, e.sequence, e.event_id, e.payload_json
+            FROM owner_event_cursor c
+            JOIN turn_event e ON e.event_id = c.event_id
+            WHERE c.owner_user_id = ? AND c.cursor > ?
+            ORDER BY c.cursor
+            LIMIT ?
+            """,
+            (owner_id, after_cursor, limit),
+        ).fetchall()
+        return [(row["cursor"], _deserialize_event(row)) for row in rows]
+
+    def get_events_for_owner(
+        self,
+        owner_id: str,
+        after_seq: int = 0,
+        limit: int = 100,
+    ) -> list[AgentEvent]:
+        """Compatibility projection; ``after_seq`` is an owner cursor here."""
+        return [
+            event
+            for _, event in self.get_event_records_for_owner(
+                owner_id, after_cursor=after_seq, limit=limit
+            )
+        ]
 
     def _load_events(self, turn_id: str) -> tuple[AgentEvent, ...]:
         rows = self._connection.execute(

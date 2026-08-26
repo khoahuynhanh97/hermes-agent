@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Iterator, Mapping, Protocol
+from typing import Any, Callable, Iterator, Mapping, Protocol, get_args
 
 from fastapi import APIRouter, Header, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -41,6 +41,9 @@ class DurableEventStore(Protocol):
     """Interface for durable committed Agent Events repository."""
 
     def get_events_for_owner(self, owner_id: str, after_seq: int = 0, limit: int = 100) -> list[AgentEvent]: ...
+    def get_event_records_for_owner(
+        self, owner_id: str, after_cursor: int = 0, limit: int = 100
+    ) -> list[tuple[int, AgentEvent]]: ...
     def save_event(self, event: AgentEvent) -> None: ...
 
 
@@ -48,20 +51,34 @@ class InMemoryEventStore:
     """Durable in-memory fallback implementation for committed Agent Events."""
 
     def __init__(self, initial_events: list[AgentEvent] | None = None) -> None:
-        self._events: list[AgentEvent] = list(initial_events or [])
+        self._events: list[AgentEvent] = []
+        self._records: list[tuple[int, AgentEvent]] = []
+        self._next_cursor_by_owner: dict[str, int] = {}
+        for event in initial_events or []:
+            self.save_event(event)
 
     def save_event(self, event: AgentEvent) -> None:
         self._events.append(event)
+        cursor = self._next_cursor_by_owner.get(event.principal_id, 0) + 1
+        self._next_cursor_by_owner[event.principal_id] = cursor
+        self._records.append((cursor, event))
+
+    def get_event_records_for_owner(
+        self, owner_id: str, after_cursor: int = 0, limit: int = 100
+    ) -> list[tuple[int, AgentEvent]]:
+        return [
+            (cursor, event)
+            for cursor, event in self._records
+            if event.principal_id == owner_id and cursor > after_cursor
+        ][:limit]
 
     def get_events_for_owner(self, owner_id: str, after_seq: int = 0, limit: int = 100) -> list[AgentEvent]:
-        matched = [
-            e
-            for e in self._events
-            if (e.principal_id == owner_id or getattr(e, "owner_user_id", None) == owner_id)
-            and e.sequence > after_seq
+        return [
+            event
+            for _, event in self.get_event_records_for_owner(
+                owner_id, after_cursor=after_seq, limit=limit
+            )
         ]
-        matched.sort(key=lambda e: e.sequence)
-        return matched[:limit]
 
 
 class EventsAPI:
@@ -84,7 +101,7 @@ class EventsAPI:
 
         self._artifacts: dict[str, ArtifactRecord] = artifact_store if artifact_store is not None else {}
         self._command_handler = command_handler
-        self._auth_validator = auth_validator or (lambda token, owner: bool(token and token.strip()))
+        self._auth_validator = auth_validator or (lambda token, owner: False)
         self._clock = clock
 
     def add_event(self, event: AgentEvent) -> None:
@@ -104,10 +121,19 @@ class EventsAPI:
         if not self._auth_validator(auth_token, owner_id):
             return 403, {"error": "unauthorized", "message": "Invalid authentication credentials"}
 
-        slice_events = self._store.get_events_for_owner(owner_id=owner_id, after_seq=after_seq, limit=limit)
+        if after_seq < 0 or limit < 1 or limit > 500:
+            return 400, {
+                "error": "bad_request",
+                "message": "after_seq must be non-negative and limit must be between 1 and 500",
+            }
+
+        records = self._store.get_event_records_for_owner(
+            owner_id=owner_id, after_cursor=after_seq, limit=limit
+        )
 
         events_data = [
             {
+                "cursor": cursor,
                 "event_id": e.event_id,
                 "event_type": e.event_type,
                 "principal_id": e.principal_id,
@@ -120,18 +146,19 @@ class EventsAPI:
                 "approval_id": e.approval_id,
                 "occurred_at": e.occurred_at.isoformat(),
             }
-            for e in slice_events
+            for cursor, e in records
         ]
-        next_seq = slice_events[-1].sequence if slice_events else after_seq
+        next_seq = records[-1][0] if records else after_seq
         return 200, {
             "events": events_data,
             "next_cursor": next_seq,
             "count": len(events_data),
         }
 
-    def format_sse_event(self, event: AgentEvent) -> str:
+    def format_sse_event(self, event: AgentEvent, cursor: int) -> str:
         """Format an AgentEvent into a Server-Sent Event frame."""
         data_payload = json.dumps({
+            "cursor": cursor,
             "event_id": event.event_id,
             "event_type": event.event_type,
             "principal_id": event.principal_id,
@@ -144,7 +171,7 @@ class EventsAPI:
             "approval_id": event.approval_id,
             "occurred_at": event.occurred_at.isoformat(),
         })
-        return f"id: {event.sequence}\nevent: {event.event_type}\ndata: {data_payload}\n\n"
+        return f"id: {cursor}\nevent: {event.event_type}\ndata: {data_payload}\n\n"
 
     def format_sse_heartbeat(self) -> str:
         """Format a separate SSE heartbeat ping."""
@@ -162,9 +189,14 @@ class EventsAPI:
             yield "event: error\ndata: {\"error\": \"unauthorized\"}\n\n"
             return
 
-        events = self._store.get_events_for_owner(owner_id=owner_id, after_seq=after_seq, limit=500)
-        for event in events:
-            yield self.format_sse_event(event)
+        if after_seq < 0:
+            yield "event: error\ndata: {\"error\": \"bad_request\"}\n\n"
+            return
+        records = self._store.get_event_records_for_owner(
+            owner_id=owner_id, after_cursor=after_seq, limit=500
+        )
+        for cursor, event in records:
+            yield self.format_sse_event(event, cursor)
 
         yield self.format_sse_heartbeat()
 
@@ -183,6 +215,10 @@ class EventsAPI:
 
         if not target_id:
             return 400, {"error": "bad_request", "message": "target_id required"}
+        if command_type not in get_args(OperatorCommandType):
+            return 400, {"error": "bad_request", "message": "unsupported command_type"}
+        if not isinstance(expected_version, int) or expected_version < 0:
+            return 400, {"error": "bad_request", "message": "expected_version must be non-negative"}
 
         principal = PrincipalContext(
             actor_id=owner_id,
@@ -235,7 +271,7 @@ def create_events_router(events_api: EventsAPI | None = None) -> APIRouter:
     @router.get("/events")
     def stream_events(
         owner_id: str = Query(...),
-        after_seq: int = Query(0),
+        after_seq: int = Query(0, ge=0),
         auth_token: str = Query(""),
         authorization: str | None = Header(None),
     ) -> StreamingResponse:
@@ -248,8 +284,8 @@ def create_events_router(events_api: EventsAPI | None = None) -> APIRouter:
     @router.get("/events/replay")
     def replay_events(
         owner_id: str = Query(...),
-        after_seq: int = Query(0),
-        limit: int = Query(100),
+        after_seq: int = Query(0, ge=0),
+        limit: int = Query(100, ge=1, le=500),
         auth_token: str = Query(""),
         authorization: str | None = Header(None),
     ) -> JSONResponse:
@@ -263,7 +299,7 @@ def create_events_router(events_api: EventsAPI | None = None) -> APIRouter:
         authorization: str | None = Header(None),
     ) -> JSONResponse:
         data = await request.json()
-        token = data.get("auth_token") or (authorization.replace("Bearer ", "") if authorization else "")
+        token = (authorization.replace("Bearer ", "") if authorization else "") or data.get("auth_token")
         owner_id = data.get("owner_id", "")
         command_type = data.get("command_type", "")
         target_id = data.get("target_id", "")

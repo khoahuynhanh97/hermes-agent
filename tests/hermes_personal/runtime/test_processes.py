@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import pytest
 
@@ -36,6 +37,11 @@ def test_development_topology_contains_all_specs(repo_root):
     assert "durable_worker" in names
     assert "telegram" in names
     assert "web_ui" in names
+    web = next(spec for spec in specs if spec.name == "web_ui")
+    assert "HERMES_DASHBOARD_URL" in web.env_keys
+    assert "VITE_API_URL" not in web.env_keys
+    assert web.argv[-4:] == ("--host", "127.0.0.1", "--port", "3000")
+    assert web.argv[0] == ("npm.cmd" if os.name == "nt" else "npm")
 
 
 def test_production_topology_serves_web_from_app_api(repo_root):
@@ -49,7 +55,7 @@ def test_production_topology_serves_web_from_app_api(repo_root):
         gateway_port=8642,
         app_api_port=8000,
         web_static_dir=dist_dir,
-        web_static_digest="sha256:fedcba9876543210",
+        web_static_digest="sha256:" + "a" * 64,
     )
     specs = build_process_topology(config)
     names = [s.name for s in specs]
@@ -166,7 +172,7 @@ def test_fake_provider_is_explicit_and_development_only(repo_root):
             repo_root=repo_root,
             provider_mode="fake",
             web_static_dir=repo_root,
-            web_static_digest="sha256:test",
+            web_static_digest="sha256:" + "0" * 64,
         )
 
 

@@ -18,13 +18,16 @@ def test_recover_pending_workflows():
     ids = service.recover_pending_workflows()
     assert set(ids) == {'wf1', 'wf2'}
 
-def test_replay_outbox_idempotent():
+def test_replay_outbox_remains_durable_until_acknowledged():
     service, conn = setup_recovery()
     msgs = service.replay_outbox()
     assert msgs == [('wf1', 'msg1'), ('wf2', 'msg2')]
-    # Outbox cleared
+    # A crash before ACK must replay the same messages.
+    assert service.replay_outbox() == msgs
+    service.ack_outbox('wf1', 'msg1')
+    assert service.replay_outbox() == [('wf2', 'msg2')]
+    service.ack_outbox('wf2', 'msg2')
     cur = conn.cursor()
     cur.execute('SELECT COUNT(*) as cnt FROM workflow_outbox')
     assert cur.fetchone()['cnt'] == 0
-    # Second replay returns empty
     assert service.replay_outbox() == []

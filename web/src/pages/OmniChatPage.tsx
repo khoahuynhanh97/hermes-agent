@@ -4,22 +4,25 @@ import { useHermesOperator } from '../hooks/useHermesOperator';
 import type { HermesEvent } from '../types/hermes';
 
 export function OmniChatPage() {
-  const [ownerId] = useState<string>('default_user');
+  const [ownerId] = useState<string>(() => window.__HERMES_OWNER_ID__ ?? 'local-owner');
+  const authToken = window.__HERMES_SESSION_TOKEN__ ?? '';
   const [inputMessage, setInputMessage] = useState<string>('');
   const [isSending, setIsSending] = useState<boolean>(false);
 
   const { events, isConnected, lastHeartbeat, error: streamError } = useHermesEventStream({
     ownerId,
+    authToken,
   });
 
   const { submitCommand, isSubmitting, lastCommandId, error: operatorError } = useHermesOperator({
     ownerId,
+    authToken,
   });
 
   const textDeltas = useMemo(() => {
     return events
       .filter((e: HermesEvent) => e.event_type === 'text_delta')
-      .map((e: HermesEvent) => (e.data.delta as string) || '')
+      .map((e: HermesEvent) => (e.data.text as string) || '')
       .join('');
   }, [events]);
 
@@ -33,15 +36,20 @@ export function OmniChatPage() {
 
     setIsSending(true);
     try {
-      await fetch('/api/turn', {
+      const response = await fetch('/api/omni/turn', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`,
+        },
         body: JSON.stringify({
-          principal_id: ownerId,
-          channel: 'omni',
-          text: inputMessage,
+          conversation_id: 'omni-web',
+          message: inputMessage,
         }),
       });
+      if (!response.ok) {
+        throw new Error(`Turn failed with status ${response.status}`);
+      }
       setInputMessage('');
     } catch (err) {
       console.error('Failed to submit turn:', err);

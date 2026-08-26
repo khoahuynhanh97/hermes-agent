@@ -17,7 +17,8 @@ flowchart LR
     T --> P[Capability policy]
     P --> X[Tool/provider boundary]
     T --> E[(Event/workflow store)]
-    W[Web operator] -->|Bearer/query token| API[FastAPI EventsAPI]
+    W[Web operator] -->|ephemeral session token/cookie| APP[Public App API]
+    APP -->|Gateway Bearer key over loopback| API[Gateway FastAPI]
     API --> E
 ```
 
@@ -37,16 +38,22 @@ and both sessions belong to the same owner.
 
 ## HTTP authentication
 
-The application accepts a token either from `Authorization: Bearer <token>` or
-the `auth_token` query/body field. The query token exists for current clients but
-is discouraged because URLs are commonly logged.
+The runnable topology has two credentials with separate trust scopes:
 
-Critical limitation: the default `EventsAPI` validator accepts any non-empty
-token. Production composition must inject an `auth_validator(token, owner_id)`
-that validates the credential, binds it to `owner_id`, enforces expiry and
-revocation, and uses constant-time comparison where applicable. Until that
-wiring exists, the default application factory is suitable for tests/local
-integration only and must not be exposed to an untrusted network.
+- The Gateway accepts `HERMES_API_KEY`, binds it to `HERMES_OWNER_ID`, and uses
+  constant-time comparison. It listens on loopback by default.
+- The public App API generates a random process-lifetime browser session token,
+  injects it into bootstrap HTML, and sets a `SameSite=Strict` cookie. It strips
+  compatibility query credentials and adds the Gateway key only on the
+  server-to-server request.
+
+The browser never receives `HERMES_API_KEY`. The direct Gateway router still
+accepts `auth_token` query/body input for compatibility, so the Gateway must
+remain on loopback or behind a trusted internal boundary. New clients must use
+the Bearer header or the App API cookie and must not put credentials in URLs.
+
+An unconfigured `EventsAPI` now fails closed. Custom composition must inject an
+owner-bound validator; a non-empty token by itself is not accepted.
 
 ## Authorization model
 
@@ -80,7 +87,8 @@ Minimum production controls:
 3. rotate API and platform tokens without rebuilding images;
 4. redact tokens before structured logging or telemetry export;
 5. never return provider credentials in `details`, health responses, or failures;
-6. disable query-string authentication when all clients support headers.
+6. remove direct-Gateway query compatibility when all internal clients support
+   headers.
 
 ## Capability and provider access
 
@@ -113,7 +121,7 @@ content.
 
 Do not expose the application until all of these are true:
 
-- a real HTTP auth validator is injected and tested for owner mismatch;
+- the owner-bound Gateway validator and browser-session boundary are enabled;
 - TLS terminates at the service or a trusted reverse proxy;
 - database/artifact/log ACLs are verified;
 - required startup callbacks and dependency probes are wired;
@@ -121,4 +129,3 @@ Do not expose the application until all of these are true:
 - rate limits and request-size limits are enforced at the edge or application;
 - `/api/turn` is mounted only with the same identity and idempotency controls;
 - secret redaction and negative authorization tests pass.
-

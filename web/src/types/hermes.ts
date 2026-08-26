@@ -12,6 +12,7 @@ export type HermesEventType =
   | 'heartbeat';
 
 export interface HermesEvent {
+  cursor?: number;
   event_id: string;
   event_type: HermesEventType;
   principal_id: string;

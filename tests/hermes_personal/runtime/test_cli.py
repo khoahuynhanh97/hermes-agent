@@ -80,7 +80,7 @@ def test_handle_start_with_custom_config_file_and_default_mode(tmp_path):
 runtime:
   mode: production
   web_static_dir: "{static_dir.as_posix()}"
-  web_static_digest: "digest123"
+  web_static_digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   gateway_port: 9000
   app_api_port: 9001
 """,
@@ -122,7 +122,7 @@ def test_handle_start_explicit_mode_overrides_config_file(tmp_path):
 runtime:
   mode: production
   web_static_dir: "{static_dir.as_posix()}"
-  web_static_digest: "digest123"
+  web_static_digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   gateway_port: 9000
 """,
         encoding="utf-8",

@@ -28,6 +28,7 @@ const BACKEND = process.env.HERMES_DASHBOARD_URL ?? "http://127.0.0.1:9119";
  */
 function hermesDevToken(): Plugin {
   const TOKEN_RE = /window\.__HERMES_SESSION_TOKEN__\s*=\s*"([^"]+)"/;
+  const OWNER_RE = /window\.__HERMES_OWNER_ID__\s*=\s*"([^"]+)"/;
   const EMBEDDED_RE =
     /window\.__HERMES_DASHBOARD_EMBEDDED_CHAT__\s*=\s*(true|false)/;
 
@@ -47,6 +48,7 @@ function hermesDevToken(): Plugin {
           return;
         }
         const embeddedMatch = html.match(EMBEDDED_RE);
+        const ownerMatch = html.match(OWNER_RE);
         const embeddedJs = embeddedMatch ? embeddedMatch[1] : "true";
         return [
           {
@@ -54,6 +56,8 @@ function hermesDevToken(): Plugin {
             injectTo: "head",
             children:
               `window.__HERMES_SESSION_TOKEN__="${match[1]}";` +
+              `window.__HERMES_OWNER_ID__="${ownerMatch?.[1] ?? "local-owner"}";` +
+              `document.cookie="hermes_session=${match[1]}; SameSite=Strict; Path=/";` +
               `window.__HERMES_DASHBOARD_EMBEDDED_CHAT__=${embeddedJs};`,
           },
         ];

@@ -61,6 +61,14 @@ CREATE TABLE IF NOT EXISTS turn_event (
   payload_json TEXT NOT NULL,
   PRIMARY KEY (turn_id, sequence)
 );
+CREATE TABLE IF NOT EXISTS owner_event_cursor (
+  cursor INTEGER PRIMARY KEY AUTOINCREMENT,
+  owner_user_id TEXT NOT NULL REFERENCES global_user_identity(owner_user_id) ON DELETE RESTRICT,
+  event_id TEXT NOT NULL UNIQUE REFERENCES turn_event(event_id) ON DELETE RESTRICT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS owner_event_cursor_replay_idx
+  ON owner_event_cursor(owner_user_id, cursor);
 CREATE TABLE IF NOT EXISTS legacy_session_cutover (
   session_id TEXT PRIMARY KEY REFERENCES conversation_session(session_id) ON DELETE CASCADE,
   cutover_turn_id TEXT NOT NULL,

@@ -4,16 +4,34 @@ This runbook covers the implemented operational surfaces and the checks required
 before deployment. Read [Infrastructure](../infrastructure.md) for topology and
 storage details and [Security](../security-and-auth.md) before exposing HTTP.
 
-## Current operational status
+## Supported local runtime
 
-The runtime configuration, startup coordinator, process topology, supervisor,
-readiness model, FastAPI router factory, and tests exist. The complete
-`hermes start` process set is not launchable from this checkout because five
-declared child modules are absent. Do not use a successful topology/supervisor
-unit test as production startup evidence.
+The core `hermes start` process set is launchable from this checkout: canonical
+Gateway, public App API, durable SQLite replay, and the development Web UI. The
+standalone MCP discovery, durable-worker, and Telegram runner modules are not
+packaged yet. The checked-in local profile disables them rather than simulating
+success.
 
-Missing modules are listed in
-[Infrastructure: Known runtime gaps](../infrastructure.md#known-runtime-gaps).
+Start the deterministic no-cost profile from PowerShell:
+
+```powershell
+uv sync --extra web --extra dev
+npm --prefix web install
+$env:HERMES_HOME = Join-Path $PWD ".runtime\hermes"
+$env:HERMES_API_KEY = [Convert]::ToHexString(
+  [Security.Cryptography.RandomNumberGenerator]::GetBytes(32)
+).ToLowerInvariant()
+$env:HERMES_OWNER_ID = "local-owner"
+uv run hermes start --config .\runtime-config.local.yaml.example --no-open-browser
+```
+
+Open `http://127.0.0.1:3000/omni`. The fake provider emits deterministic
+`AgentEvent` records and does not call a paid provider. State is persisted at
+`$env:HERMES_HOME\hermes.db`. Stop with `Ctrl+C`.
+
+To use the configured upstream agent, complete `uv run hermes setup`, copy the
+example profile, and set `runtime.provider_mode: configured`. That mode can run
+tools and incur provider cost; it is not used for automated acceptance.
 
 ## Safe offline verification
 
@@ -38,18 +56,17 @@ Use actual paths returned by `rg --files tests/hermes_personal` if a focused
 directory has been renamed. Before an upstream PR, run `scripts/run_tests.sh`
 from a supported shell for CI parity.
 
-## FastAPI composition smoke
+## HTTP composition
 
-The application factory can be tested in process with a configured
-`ReadinessProbe`, owner-bound `auth_validator`, durable event-store adapter,
-artifact store, and command handler. The default composition is local/test only:
+The Gateway composes `HermesTurnService` with SQLite identity, session, turn,
+event, and owner-global cursor stores. The App API is a thin reverse proxy; it
+does not construct a second agent runtime. It injects a random browser session
+token and keeps `HERMES_API_KEY` server-side for loopback requests.
 
-- no readiness probe means `/health/ready` returns 503;
-- default auth accepts any non-empty token;
-- default event store is process-local memory;
-- missing command handler returns `accepted` without durable processing.
-
-Do not expose that default composition to an untrusted network.
+The generic `create_application()` factory remains suitable for tests and
+custom composition only: without injected readiness, auth, durable stores, and
+handlers it fails closed or reports unavailable. Do not expose an unconfigured
+factory to an untrusted network.
 
 Implemented routes:
 
@@ -61,14 +78,15 @@ GET  /api/events
 GET  /api/events/replay
 POST /api/operator/command
 GET  /api/artifacts/{artifact_id}
+POST /api/turn
+POST /api/omni/turn
 ```
-
-`/api/turn` and `/api/omni/turn` are not currently mounted.
 
 ## Startup gate
 
-Production composition must inject real callbacks for every mandatory startup
-step:
+Production composition must supply real callbacks for every mandatory startup
+step; the local profile performs the implemented config, database, recovery,
+and process-readiness path:
 
 1. config validation and required-secret presence;
 2. SQLite migration;
@@ -79,23 +97,22 @@ step:
 7. mandatory dependency probes;
 8. ingress readiness.
 
-A missing callback is currently a completed no-op. Verify step details, not only
-the final `is_ready` flag.
+A missing custom callback remains a completed no-op. Verify step details, not
+only the final `is_ready` flag, before production exposure.
 
 ## Supervisor behavior
 
 The supervisor starts children in declared order and stops them in reverse.
 `SIGINT`/`SIGTERM` requests graceful shutdown. Each child gets its configured
-timeout, then is killed if still alive. Required restart exhaustion returns
-non-zero and triggers shutdown; optional exhaustion reports degraded.
-
-Current gaps: child readiness probes are declared but not executed; status is set
-to healthy immediately after process creation. Captured stdout/stderr are not
-drained. These must be fixed before treating supervisor health as readiness.
+timeout, then is killed and reaped if still alive. HTTP/TCP/file readiness probes
+retry until their deadline; required probe or restart exhaustion returns
+non-zero. Child stdout/stderr are inherited, so verbose services cannot fill an
+unread pipe. Child environments contain only platform essentials and the keys
+declared by each `ProcessSpec`.
 
 Before enabling the launcher, perform a real smoke test that verifies:
 
-- every module imports and binds its configured port;
+- every enabled module imports and binds its configured port;
 - readiness reflects dependency state, not PID existence;
 - no secret appears in argv or logs;
 - repeated child crashes respect attempt windows/backoff;
@@ -109,7 +126,11 @@ Before enabling the launcher, perform a real smoke test that verifies:
 - Back up using a SQLite-consistent mechanism.
 - Test restore with owner-scoped event replay and workflow version reads.
 - Treat `workflow_outbox` as an outbox, not a broker or DLQ.
-- Reconcile delivery before deleting/replaying failed external work.
+- Replay only peeks. Delete a row through `ack_outbox` after confirmed delivery.
+- `BudgetEngine` is still in-memory; do not authorize paid work from it after a
+  restart until durable atomic reservations exist.
+- Timed-out Python job threads cannot be forcibly killed. Automatic overlap is
+  blocked, but handlers still require reconciliation.
 
 ## Incident triage
 
@@ -122,7 +143,7 @@ Before enabling the launcher, perform a real smoke test that verifies:
 | HITL blocked | current state and approval record | Obtain explicit approval; never bypass |
 | digest mismatch | input ref/version/digest and binding chain | Replace stale input and invalidate descendants |
 | child restart exhausted | stderr, exit code, restart history | Keep required ingress down; fix root cause |
-| SSE appears idle | replay cursor, owner auth, committed event store | Inspect by turn; current cursor is not owner-global and must not drive production resume |
+| SSE appears idle | replay cursor, owner auth, committed event store | Replay from `next_cursor`; the cursor is durable and owner-global |
 
 ## Packaging
 

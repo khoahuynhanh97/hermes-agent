@@ -250,6 +250,34 @@ def test_terminal_replay_survives_sqlite_reopen_with_exact_immutable_events(
         replay[0].data["nested"]["items"].append("mutated")
 
 
+def test_owner_event_cursor_is_global_ordered_and_survives_sqlite_reopen(
+    repository_environment,
+):
+    database_path, connection, repository, owner, session, _ = repository_environment
+    first_request = make_request(owner.owner_user_id, session.session_id)
+    second_request = replace(
+        first_request,
+        idempotency_key="transport:8",
+        turn_id="turn_second",
+    )
+    repository.claim(first_request)
+    repository.claim(second_request)
+    repository.append_event(make_event(first_request, 0))
+    repository.append_event(make_event(second_request, 0))
+    connection.close()
+
+    reopened = connect(database_path)
+    try:
+        records = EventRepository(reopened).get_event_records_for_owner(
+            owner.owner_user_id, after_cursor=0, limit=10
+        )
+    finally:
+        reopened.close()
+
+    assert [cursor for cursor, _ in records] == [1, 2]
+    assert [event.turn_id for _, event in records] == ["turn_original", "turn_second"]
+
+
 def test_concurrent_same_claim_has_one_winner_and_typed_in_progress_duplicate(
     repository_environment,
 ):

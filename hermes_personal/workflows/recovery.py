@@ -12,8 +12,8 @@ class WorkflowRecoveryService:
 
     - ``recover_pending_workflows`` returns workflow IDs present in the
       ``workflow`` table. In a real system this would rebuild in‑memory state.
-    - ``replay_outbox`` returns a list of ``(workflow_id, message)`` tuples
-      from ``workflow_outbox`` and clears the table, providing idempotent replay.
+    - ``replay_outbox`` returns unacknowledged messages without deleting them.
+    - ``ack_outbox`` deletes a message only after downstream delivery succeeds.
     """
 
     def __init__(self, connection: sqlite3.Connection) -> None:
@@ -34,7 +34,21 @@ class WorkflowRecoveryService:
         messages: List[Tuple[str, str]] = [
             (row["workflow_id"], row["message"]) for row in rows
         ]
-        # Clear outbox after replay.
-        cur.execute("DELETE FROM workflow_outbox")
-        self.conn.commit()
         return messages
+
+    def ack_outbox(self, workflow_id: str, message: str) -> None:
+        """Acknowledge one delivered outbox record using its stable payload."""
+        with self.conn:
+            row = self.conn.execute(
+                """
+                SELECT outbox_id FROM workflow_outbox
+                WHERE workflow_id = ? AND message = ?
+                ORDER BY outbox_id LIMIT 1
+                """,
+                (workflow_id, message),
+            ).fetchone()
+            if row is not None:
+                self.conn.execute(
+                    "DELETE FROM workflow_outbox WHERE outbox_id = ?",
+                    (row["outbox_id"],),
+                )

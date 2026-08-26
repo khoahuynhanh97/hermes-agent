@@ -53,8 +53,9 @@ The implemented core uses a single upstream `AIAgent` through
 job threads, and a subprocess supervisor abstraction. RabbitMQ, Kafka, Redis,
 and a dead-letter queue are not part of the current implementation.
 
-The declared `hermes start` topology references child modules that are not
-present in this checkout. Treat that topology as a validated specification, not
-as a production-ready launcher, until the modules listed in
-[Infrastructure](infrastructure.md#known-runtime-gaps) exist and pass a real
-startup smoke test.
+The core `hermes start` topology is runnable: Gateway, App API, durable SQLite
+event replay, and the development Web UI have real startup/readiness/shutdown
+smoke coverage. The standalone MCP discovery, durable-worker, and Telegram
+runner commands remain optional gaps and must be disabled in the local profile.
+See [Operations](hermes-personal/operations.md) for the exact command and
+[Known gaps](known-gaps.md) for the remaining production boundary.

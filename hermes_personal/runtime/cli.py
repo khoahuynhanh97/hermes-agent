@@ -87,6 +87,13 @@ def handle_start(args: argparse.Namespace) -> int:
         print(f"Process topology error: {ex}", file=sys.stderr)
         return 1
 
+    # Non-secret child environment derives from the validated runtime config.
+    # ProcessSpec.env_keys then limits which child receives each value.
+    os.environ["HERMES_PORT"] = str(config.gateway_port)
+    os.environ["HERMES_API_PORT"] = str(config.app_api_port)
+    os.environ["HERMES_DASHBOARD_URL"] = f"http://127.0.0.1:{config.app_api_port}"
+    os.environ["PORT"] = str(config.web_port)
+
     supervisor = Supervisor(
         specs=specs,
         runner=DefaultProcessRunner(),

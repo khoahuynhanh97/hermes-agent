@@ -171,6 +171,22 @@ class HermesTurnService:
                     return
 
                 if output is None:
+                    if not terminal_emitted:
+                        failed = AgentEvent(
+                            event_type="failed",
+                            principal_id=request.principal.owner_user_id,
+                            session_id=request.session_id,
+                            turn_id=request.turn_id,
+                            sequence=next_sequence,
+                            data={
+                                "error": "upstream agent ended without a terminal event",
+                                "code": "UPSTREAM_TERMINAL_EVENT_MISSING",
+                            },
+                            workflow_id=request.workflow_id,
+                        )
+                        self._persist_event(transcript, failed)
+                        terminal_emitted = True
+                        yield failed
                     return
 
                 try:

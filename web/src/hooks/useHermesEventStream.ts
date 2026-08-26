@@ -43,7 +43,7 @@ export function useHermesEventStream({
     url.searchParams.set('owner_id', ownerId);
     url.searchParams.set('after_seq', String(cursorRef.current));
     if (authToken) {
-      url.searchParams.set('auth_token', authToken);
+      document.cookie = `hermes_session=${authToken}; SameSite=Strict; Path=/`;
     }
 
     const es = new EventSource(url.toString());
@@ -81,8 +81,9 @@ export function useHermesEventStream({
         try {
           const parsedEvent: HermesEvent = JSON.parse(e.data);
           setEvents((prev) => [...prev, parsedEvent]);
-          if (parsedEvent.sequence > cursorRef.current) {
-            setCursor(parsedEvent.sequence);
+          const nextCursor = parsedEvent.cursor ?? parsedEvent.sequence;
+          if (nextCursor > cursorRef.current) {
+            setCursor(nextCursor);
           }
         } catch (err) {
           console.error('Failed to parse SSE event:', err);

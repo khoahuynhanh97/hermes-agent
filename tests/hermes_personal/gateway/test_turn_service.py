@@ -360,22 +360,22 @@ async def test_same_idempotency_key_with_changed_request_fails_before_side_effec
 
 
 @pytest.mark.asyncio
-async def test_in_progress_duplicate_is_typed_and_does_not_call_agent_again(
+async def test_unterminated_agent_output_is_failed_and_replayed_without_second_call(
     turn_environment, request_factory
 ):
     service, _, _, _, _, transcript_factory, agent = turn_environment
     agent.output = [AgentOutput("text_delta", {"text": "partial"})]
     request = request_factory()
-    [event async for event in service.handle(request)]
+    original = [event async for event in service.handle(request)]
 
-    with pytest.raises(TurnInProgress):
-        [
-            event
-            async for event in service.handle(
-                replace(request, turn_id="turn_concurrent")
-            )
-        ]
+    replay = [
+        event
+        async for event in service.handle(replace(request, turn_id="turn_concurrent"))
+    ]
 
+    assert [event.event_type for event in original] == ["text_delta", "failed"]
+    assert original[-1].data["code"] == "UPSTREAM_TERMINAL_EVENT_MISSING"
+    assert replay == original
     assert len(agent.calls) == 1
     assert transcript_factory.transcript.user_turns == [request.message]
 

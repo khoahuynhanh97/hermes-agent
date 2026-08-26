@@ -10,11 +10,13 @@
 
 ## HTTP application
 
-The FastAPI factory is `hermes_personal.application.app.create_application`.
-It mounts the health and events routers below. Authentication accepts
-`Authorization: Bearer <token>`; compatibility query/body `auth_token` is also
-accepted. Production must inject a real owner-bound validator as described in
-[Security and auth](security-and-auth.md#http-authentication).
+The canonical Gateway composition is
+`hermes_personal.runtime.gateway_server.create_gateway_application`; its router
+factory is `hermes_personal.application.app.create_application`. The public App
+API at `hermes_personal.api.server` authenticates a process-lifetime browser
+session and forwards the owner-bound Gateway key over loopback. Direct Gateway
+compatibility query/body `auth_token` input remains internal-only; new clients
+use `Authorization: Bearer <token>` or the App API cookie.
 
 No application-level rate limiter is implemented. Deployments must enforce
 request rate, connection count, body size, and SSE limits at a trusted edge until
@@ -42,7 +44,7 @@ Query parameters:
 | `owner_id` | string | required |
 | `after_seq` | integer | `0` |
 | `limit` | integer | `100` |
-| `auth_token` | string | empty; prefer Bearer header |
+| `auth_token` | string | direct-Gateway compatibility only |
 
 Success response:
 
@@ -51,6 +53,7 @@ Success response:
   "events": [
     {
       "event_id": "evt_123",
+      "cursor": 2,
       "event_type": "completed",
       "principal_id": "owner-7",
       "session_id": "session-9",
@@ -68,11 +71,10 @@ Success response:
 }
 ```
 
-The cursor is the last returned event sequence in the current store interface.
-However, `AgentEvent.sequence` is scoped to a turn and restarts at zero; it is not
-an owner-global offset. The in-memory API store therefore cannot provide correct
-multi-turn cursor replay. Production must introduce a durable owner-global cursor
-and test resume across interleaved turns before clients rely on `next_cursor`.
+`cursor` and `next_cursor` are owner-global offsets allocated transactionally
+with each durable event. They are distinct from `AgentEvent.sequence`, which is
+turn-scoped. The cursor survives SQLite reopen and is safe for multi-turn resume.
+`after_seq` must be non-negative and `limit` is bounded to `1..500`.
 
 ### Server-sent events
 
@@ -86,9 +88,9 @@ data: {"event_id":"evt_123", ...}
 
 ```
 
-The current generator emits all available events, then one separate `heartbeat`
-frame and ends. It is not a permanent broker subscription, and it shares the
-per-turn cursor limitation above.
+The generator emits the currently available events, then one separate
+`heartbeat` frame and ends. It is not a permanent broker subscription; clients
+reconnect with the last durable cursor.
 
 ### Operator command
 
@@ -100,8 +102,7 @@ per-turn cursor limitation above.
   "command_type": "approve",
   "target_id": "approval-8",
   "expected_version": 3,
-  "payload": {},
-  "auth_token": "compatibility-only"
+  "payload": {}
 }
 ```
 
@@ -110,10 +111,9 @@ Supported command types: `approve`, `reject`, `retry`, `cancel`, `upload`, and
 result}`. Without a handler, the current composable API returns `accepted`; this
 does not mean a durable command was processed.
 
-Known validation gap: `OperatorCommandType` is a static `Literal`, but the
-dataclass does not perform a runtime membership check. The raw HTTP route can
-therefore pass an unknown command string to a configured handler. Production
-wiring must validate the enum and bound `after_seq`, `limit`, and request size.
+Unknown command types are rejected before the configured handler. Replay cursor
+and limit bounds are enforced at both the HTTP and service boundaries. Request
+body size and application-level rate limits remain an edge/deployment control.
 
 ### Artifact metadata
 
@@ -121,19 +121,31 @@ wiring must validate the enum and bound `after_seq`, `limit`, and request size.
 only when the authenticated owner matches the artifact owner. Responses are 404
 for missing artifacts and 403 for authentication or foreign ownership.
 
-## Declared but not mounted routes
+## Natural-language turn routes
 
-The cutover inventory declares `/api/turn` and `/api/omni/turn`. The current
-FastAPI factory does not mount them. Do not send clients to these routes or mark
-Web/Omni turn ingress production-ready until a router converts authenticated
-input to `AgentTurnRequest` and calls `HermesTurnService` with durable stores.
+`POST /api/turn` and `POST /api/omni/turn` accept:
+
+```json
+{
+  "conversation_id": "chat-42",
+  "message": "Summarize the approved product research"
+}
+```
+
+The authenticated owner and external subject come from the credential, never
+from caller-supplied ownership fields. `Idempotency-Key` is optional but strongly
+recommended. Success is a newline-delimited stream of canonical `AgentEvent`
+objects ending in `completed` or `failed`. The service persists each event to
+SQLite before yielding it to the client. If the upstream iterator ends without
+a terminal event, the Gateway emits and persists a structured failure.
 
 ## Upstream AIAgent integration
 
-`UpstreamAIAgentAdapter` is the only general-purpose reasoning integration. It
-uses the public `AIAgent.run_conversation` contract, translates streaming text
-and tool activity into `AgentEvent`, and requires the final result fields
-`final_response`, `messages`, and `completed`.
+`UpstreamAIAgentAdapter` is the canonical public-contract adapter for an already
+constructed upstream `AIAgent`. The configured runtime initializes the public
+`AIAgent` with upstream configuration and invokes `AIAgent.run_conversation`,
+mapping streaming deltas and tool activity into `AgentEvent`. The fake runtime
+emits deterministic streaming deltas for offline development and smoke tests.
 
 Adapters must not call private agent-loop internals or create a second planner.
 

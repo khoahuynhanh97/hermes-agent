@@ -24,10 +24,22 @@ def test_check_budget_exceeds_channel(engine):
         engine.check_budget("chanA", 600)
 
 def test_check_budget_exceeds_total(engine):
-    engine.check_budget("chanA", 400)
-    engine.check_budget("chanB", 300)
+    first = engine.reserve_budget("chanA", 400)
+    second = engine.reserve_budget("chanB", 300)
+    engine.commit_budget(first)
+    engine.commit_budget(second)
     with pytest.raises(BudgetError):
         engine.check_budget("chanC", 400)
+
+
+def test_check_is_non_consuming_and_reservation_is_counted_once(engine):
+    engine.check_budget("chanA", 200)
+    first = engine.reserve_budget("chanA", 200)
+    engine.commit_budget(first)
+    second = engine.reserve_budget("chanA", 300)
+    engine.commit_budget(second)
+
+    assert engine.get_allocated("chanA") == 500
 
 def test_reserve_and_commit(engine):
     alloc = engine.reserve_budget("chanA", 200)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,7 +31,9 @@ class RuntimeConfig:
     app_api_port: int = 8000
     web_port: int = 3000
     python_executable: str = field(default_factory=lambda: sys.executable)
-    node_executable: str = "npm"
+    node_executable: str = field(
+        default_factory=lambda: "npm.cmd" if os.name == "nt" else "npm"
+    )
     web_static_dir: Path | None = None
     web_static_digest: str = ""
     enable_telegram: bool = True
@@ -51,15 +54,20 @@ class RuntimeConfig:
         if len(ports) != len(set(ports)):
             raise RuntimeConfigError(f"Runtime ports must be unique: {ports}")
 
+        if self.mode == "production" and self.provider_mode == "fake":
+            raise RuntimeConfigError("Production mode cannot use the fake provider")
+        if self.provider_mode not in {"configured", "fake"}:
+            raise RuntimeConfigError(f"Unsupported provider_mode: {self.provider_mode}")
+
         if self.mode == "production" and self.enable_web:
             if self.web_static_dir is None:
                 raise RuntimeConfigError("Production mode requires web_static_dir to be specified for Web surface")
             if not self.web_static_digest:
                 raise RuntimeConfigError("Production mode requires web_static_digest for static bundle verification")
-        if self.mode == "production" and self.provider_mode == "fake":
-            raise RuntimeConfigError("Production mode cannot use the fake provider")
-        if self.provider_mode not in {"configured", "fake"}:
-            raise RuntimeConfigError(f"Unsupported provider_mode: {self.provider_mode}")
+            if not re.match(r"^sha256:[0-9a-f]{64}$", self.web_static_digest):
+                raise RuntimeConfigError(
+                    f"web_static_digest must be sha256:<64 lowercase hex>, got {self.web_static_digest!r}"
+                )
 
     def validate_secrets_presence(self, env: dict[str, str] | None = None) -> None:
         """Check required secrets are present in environment without leaking their values in logs/errors."""

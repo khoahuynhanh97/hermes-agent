@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import abc
+import os
 import socket
 import subprocess
 import time
@@ -69,10 +70,32 @@ class SubprocessChild(ChildProcess):
         return self._process.poll()
 
     def terminate(self) -> None:
-        self._process.terminate()
+        if os.name == "nt":
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(self._process.pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            except Exception:
+                self._process.terminate()
+        else:
+            self._process.terminate()
 
     def kill(self) -> None:
-        self._process.kill()
+        if os.name == "nt":
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(self._process.pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            except Exception:
+                self._process.kill()
+        else:
+            self._process.kill()
 
     def wait(self, timeout: float | None = None) -> int:
         return self._process.wait(timeout=timeout)
@@ -194,9 +217,29 @@ class Supervisor:
     def _start_process(self, name: str) -> None:
         st = self._states[name]
         try:
-            # Keep the historical one-argument call: several integrations use
-            # lightweight runners whose start method only accepts ProcessSpec.
-            child = self._runner.start(st.spec)
+            inherited_keys = {
+                "PATH",
+                "PATHEXT",
+                "SYSTEMROOT",
+                "WINDIR",
+                "COMSPEC",
+                "TEMP",
+                "TMP",
+                "HOME",
+                "USERPROFILE",
+                "APPDATA",
+                "LOCALAPPDATA",
+                "PYTHONPATH",
+            }
+            allowed_keys = inherited_keys.union(st.spec.env_keys)
+            child_env = {
+                key: value for key, value in os.environ.items() if key.upper() in allowed_keys
+            }
+            try:
+                child = self._runner.start(st.spec, child_env)
+            except TypeError:
+                # Compatibility for legacy test runners that predate env.
+                child = self._runner.start(st.spec)
         except Exception as exc:
             st.status = "degraded" if not st.spec.required else "unavailable"
             self._emit("start_failed", name, {"required": st.spec.required})
@@ -252,31 +295,50 @@ class Supervisor:
             return child.is_alive()
 
         if probe.probe_type == "http":
-            remaining = max(0.0, deadline - time.monotonic())
-            if remaining <= 0:
-                return False
-            try:
-                with urllib.request.urlopen(probe.endpoint, timeout=remaining) as response:
-                    status = getattr(response, "status", None)
-                    if status is None:
-                        status = response.getcode()
-                    return 200 <= status < 400 and child.is_alive()
-            except (OSError, TimeoutError, urllib.error.URLError, ValueError):
-                return False
+            while time.monotonic() <= deadline:
+                if child.poll() is not None:
+                    return False
+                remaining = max(0.0, deadline - time.monotonic())
+                if remaining <= 0:
+                    break
+                try:
+                    with urllib.request.urlopen(
+                        probe.endpoint, timeout=remaining
+                    ) as response:
+                        status = getattr(response, "status", None)
+                        if status is None:
+                            status = response.getcode()
+                        if 200 <= status < 400:
+                            return child.is_alive()
+                except (OSError, TimeoutError, urllib.error.URLError, ValueError):
+                    pass
+                remaining = deadline - time.monotonic()
+                if remaining > 0:
+                    self._sleep(min(max(0.001, probe.interval_seconds), remaining))
+            return False
 
         if probe.probe_type == "tcp":
             endpoint = probe.endpoint
             parsed = urlparse(endpoint if "://" in endpoint else f"tcp://{endpoint}")
             if not parsed.hostname or parsed.port is None:
                 return False
-            remaining = max(0.0, deadline - time.monotonic())
-            if remaining <= 0:
-                return False
-            try:
-                with socket.create_connection((parsed.hostname, parsed.port), timeout=remaining):
-                    return child.is_alive()
-            except (OSError, TimeoutError, ValueError):
-                return False
+            while time.monotonic() <= deadline:
+                if child.poll() is not None:
+                    return False
+                remaining = max(0.0, deadline - time.monotonic())
+                if remaining <= 0:
+                    break
+                try:
+                    with socket.create_connection(
+                        (parsed.hostname, parsed.port), timeout=remaining
+                    ):
+                        return child.is_alive()
+                except (OSError, TimeoutError, ValueError):
+                    pass
+                remaining = deadline - time.monotonic()
+                if remaining > 0:
+                    self._sleep(min(max(0.001, probe.interval_seconds), remaining))
+            return False
 
         if probe.probe_type == "file":
             marker = Path(probe.endpoint)

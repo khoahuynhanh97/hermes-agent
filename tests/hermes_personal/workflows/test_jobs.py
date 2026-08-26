@@ -53,3 +53,23 @@ def test_job_timeout():
     assert result is not None
     assert result.status == JobStatus.FAILURE
     assert isinstance(result.error, TimeoutError)
+
+
+def test_timeout_does_not_retry_while_original_execution_is_still_running():
+    dispatcher = JobDispatcher()
+    calls = []
+
+    def slow_func():
+        calls.append(time.monotonic())
+        time.sleep(0.2)
+
+    dispatcher.dispatch(
+        JobSpec(job_id="j4", func=slow_func, timeout=0.05, max_retries=2)
+    )
+    time.sleep(0.35)
+
+    result = dispatcher.get_result("j4")
+    assert result is not None
+    assert result.status == JobStatus.FAILURE
+    assert isinstance(result.error, TimeoutError)
+    assert len(calls) == 1

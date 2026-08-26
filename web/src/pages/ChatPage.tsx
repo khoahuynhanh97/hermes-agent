@@ -206,12 +206,15 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     setHasActivated((prev) => latchChatActivation(prev, isActive));
   }, [isActive]);
   const [searchParams, setSearchParams] = useSearchParams();
-  const activeSessionId = searchParams.get("session") || "default_user";
+  const hermesOwnerId = window.__HERMES_OWNER_ID__ ?? "local-owner";
+  const hermesAuthToken = window.__HERMES_SESSION_TOKEN__ ?? "";
   const { events: hermesEvents } = useHermesEventStream({
-    ownerId: activeSessionId,
+    ownerId: hermesOwnerId,
+    authToken: hermesAuthToken,
   });
   const { submitCommand: submitHermesOperatorCommand } = useHermesOperator({
-    ownerId: activeSessionId,
+    ownerId: hermesOwnerId,
+    authToken: hermesAuthToken,
   });
   // Lazy-init: the missing-token check happens at construction so the effect
   // body doesn't have to setState (React 19's set-state-in-effect rule).
@@ -1982,6 +1985,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
 declare global {
   interface Window {
     __HERMES_SESSION_TOKEN__?: string;
+    __HERMES_OWNER_ID__?: string;
     __HERMES_AUTH_REQUIRED__?: boolean;
   }
 }

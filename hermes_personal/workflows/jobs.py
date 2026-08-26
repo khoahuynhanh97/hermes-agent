@@ -65,6 +65,11 @@ class JobDispatcher:
                 result = self._run_with_timeout(spec.func, spec.timeout, *spec.args, **spec.kwargs)
             except Exception as exc:
                 self.handle_failure(spec.job_id, exc, attempt, spec)
+                # Python cannot safely terminate a running thread. Retrying a
+                # timed-out attempt would overlap the still-running function
+                # and can duplicate paid or irreversible side effects.
+                if isinstance(exc, TimeoutError):
+                    break
                 # If retries left, continue loop.
                 if attempt > spec.max_retries:
                     break

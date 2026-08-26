@@ -21,6 +21,7 @@ from hermes_personal.capabilities.service import CapabilityCatalogService
 from hermes_personal.capabilities.snapshots import CapabilitySnapshotRepository
 from hermes_personal.contracts import AgentEvent, AgentTurnRequest, PrincipalContext
 from hermes_personal.identity import GlobalUserIdentity
+from hermes_personal.orchestration import AgentOutput
 from hermes_personal.orchestration.event_repository import EventRepository
 from hermes_personal.orchestration.turn_service import HermesTurnService
 from hermes_personal.sessions import ConversationSession
@@ -245,14 +246,20 @@ async def test_exit_criterion_8_hermetic_vertical_slice():
 
     class FakeAgent:
         def run(self, req, hist):
-            output = MagicMock()
-            output.event_type = "tool_activity"
-            output.data = {"tool_name": "mcp__product_intelligence__research_product", "status": "executed"}
-            output.workflow_id = req.workflow_id
-            output.job_id = None
-            output.approval_id = None
-            output.tool_call_id = "tc_01"
-            return iter([output])
+            return iter(
+                [
+                    AgentOutput(
+                        "tool_activity",
+                        {
+                            "tool_name": "mcp__product_intelligence__research_product",
+                            "status": "executed",
+                        },
+                        workflow_id=req.workflow_id,
+                        tool_call_id="tc_01",
+                    ),
+                    AgentOutput("completed", {}, workflow_id=req.workflow_id),
+                ]
+            )
 
     event_repo = EventRepository(connection)
 
@@ -298,6 +305,7 @@ async def test_exit_criterion_8_hermetic_vertical_slice():
     async for ev in turn_service.handle(request):
         events.append(ev)
 
-    assert len(events) == 1
+    assert len(events) == 2
     assert events[0].event_type == "tool_activity"
     assert events[0].data["tool_name"] == "mcp__product_intelligence__research_product"
+    assert events[1].event_type == "completed"
