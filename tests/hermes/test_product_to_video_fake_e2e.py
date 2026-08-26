@@ -87,7 +87,10 @@ def test_product_to_video_api_flow_renders_30_seconds(monkeypatch, tmp_path: Pat
     while worker.run_once() is not None:
         pass
     project = client.get(f"/api/vf/projects/{project_id}").json()["data"]
-    assert project["storyboard"]["approval_status"] == "approved"
+    assert project["storyboard"]["approval_status"] == "pending"
+    approval = client.post(f"/api/vf/projects/{project_id}/storyboard/approve")
+    assert approval.status_code == 200, approval.text
+    assert approval.json()["data"]["storyboard"]["approval_status"] == "approved"
 
     while worker.run_once() is not None:
         pass
@@ -101,6 +104,8 @@ def test_product_to_video_api_flow_renders_30_seconds(monkeypatch, tmp_path: Pat
     project = client.get(f"/api/vf/projects/{project_id}").json()["data"]
     assert project["draft_video_asset_id"]
 
+    final_approval = client.post(f"/api/vf/projects/{project_id}/final/approve")
+    assert final_approval.status_code == 200, final_approval.text
     export = client.post(f"/api/vf/projects/{project_id}/final/export")
     assert export.status_code == 200, export.text
     assert worker.run_once()["state"] == "completed"

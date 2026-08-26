@@ -438,9 +438,9 @@ class KnowledgeLifecycleWiringTests(unittest.TestCase):
     def test_production_callers_do_not_bypass_lifecycle_transitions(self) -> None:
         root = Path(__file__).resolve().parents[2]
         for path in (
-            root / "telegram_bot.py",
-            root / "core" / "learning_review.py",
-            root / "core" / "knowledge_base.py",
+            root / "src" / "hermes" / "channels" / "gateway" / "platforms" / "telegram" / "bot.py",
+            root / "src" / "hermes" / "application" / "core" / "learning_review.py",
+            root / "src" / "hermes" / "application" / "core" / "knowledge_base.py",
         ):
             source = path.read_text(encoding="utf-8")
             self.assertNotIn(".mark_approved(", source, path)

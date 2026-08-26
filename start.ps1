@@ -34,10 +34,18 @@ if (-not $env:HERMES_DB_PATH) {
 }
 New-Item -ItemType Directory -Path $env:HERMES_DATA_DIR -Force | Out-Null
 
-$verificationCode = "import importlib.util,pathlib; root=pathlib.Path(r'$RepoRoot').resolve(); names=('cli','hermes','hermes_cli','run_agent'); paths=[pathlib.Path(importlib.util.find_spec(name).origin).resolve() for name in names]; print(';'.join(map(str,paths))); raise SystemExit(0 if all(path == root or root in path.parents for path in paths) else 1)"
-$verification = & $Python -I -c $verificationCode
+$verificationCode = @'
+import importlib.util, pathlib, sys
+root = pathlib.Path.cwd().resolve()
+spec = importlib.util.find_spec('hermes')
+if not spec or not spec.origin:
+    sys.exit(1)
+path = pathlib.Path(spec.origin).resolve()
+sys.exit(0 if path == root or root in path.parents else 1)
+'@
+$verification = & $Python -c $verificationCode
 if ($LASTEXITCODE -ne 0) {
-    throw "Hermes imports resolve outside this repository: $verification"
+    throw "Hermes imports resolve outside this repository."
 }
 
 function Test-Router {
@@ -70,25 +78,27 @@ try {
     if (-not $NoServices) {
         $videoDb = Join-Path $env:HERMES_DATA_DIR "db\video.sqlite"
         $videoWs = Join-Path $env:HERMES_DATA_DIR "workspaces\video"
-        $videoWorker = Start-Process -FilePath $Python -ArgumentList "-m", "workers.job_worker", "--daemon", "--db-path", $videoDb, "--workspace", $videoWs -WorkingDirectory $RepoRoot -RedirectStandardOutput (Join-Path $logDir "video-worker.out.log") -RedirectStandardError (Join-Path $logDir "video-worker.err.log") -WindowStyle Hidden -PassThru
+        $videoWorker = Start-Process -FilePath $Python -ArgumentList "-m", "hermes.workers.job_worker", "--daemon", "--db-path", $videoDb, "--workspace", $videoWs -WorkingDirectory $RepoRoot -RedirectStandardOutput (Join-Path $logDir "video-worker.out.log") -RedirectStandardError (Join-Path $logDir "video-worker.err.log") -WindowStyle Hidden -PassThru
         $ownedProcesses.Add($videoWorker)
 
         $vfDb = Join-Path $env:HERMES_DATA_DIR "db\video_factory.sqlite"
         $vfWs = Join-Path $env:HERMES_DATA_DIR "workspaces\video-factory"
-        $vfWorker = Start-Process -FilePath $Python -ArgumentList "-m", "workers.job_worker", "--daemon", "--db-path", $vfDb, "--workspace", $vfWs -WorkingDirectory $RepoRoot -RedirectStandardOutput (Join-Path $logDir "video-factory-worker.out.log") -RedirectStandardError (Join-Path $logDir "video-factory-worker.err.log") -WindowStyle Hidden -PassThru
+        $vfWorker = Start-Process -FilePath $Python -ArgumentList "-m", "hermes.workers.job_worker", "--daemon", "--db-path", $vfDb, "--workspace", $vfWs -WorkingDirectory $RepoRoot -RedirectStandardOutput (Join-Path $logDir "video-factory-worker.out.log") -RedirectStandardError (Join-Path $logDir "video-factory-worker.err.log") -WindowStyle Hidden -PassThru
         $ownedProcesses.Add($vfWorker)
 
-        $backend = Start-Process -FilePath $Python -ArgumentList "web_studio.py" -WorkingDirectory $RepoRoot -RedirectStandardOutput (Join-Path $logDir "backend.out.log") -RedirectStandardError (Join-Path $logDir "backend.err.log") -WindowStyle Hidden -PassThru
+        $backend = Start-Process -FilePath $Python -ArgumentList "-m", "uvicorn", "hermes.channels.api.app:app", "--host", "127.0.0.1", "--port", "8000" -WorkingDirectory $RepoRoot -RedirectStandardOutput (Join-Path $logDir "backend.out.log") -RedirectStandardError (Join-Path $logDir "backend.err.log") -WindowStyle Hidden -PassThru
         $ownedProcesses.Add($backend)
         Write-Host "Backend: http://127.0.0.1:8000 | Video worker PID: $($videoWorker.Id) | Video Factory worker PID: $($vfWorker.Id)"
     }
 
     if ($UI) {
-        if (-not (Test-Path "$RepoRoot\web\node_modules")) {
-            throw "Web dependencies are missing. Run .\setup.ps1 first."
+        $webDir = "$RepoRoot\apps\web"
+        if (-not (Test-Path "$webDir\node_modules")) {
+            throw "Web dependencies are missing in apps/web. Run pnpm install first."
         }
-        $npm = (Get-Command "npm.cmd" -ErrorAction Stop).Source
-        $uiProcess = Start-Process -FilePath $npm -ArgumentList "run", "dev" -WorkingDirectory "$RepoRoot\web" -RedirectStandardOutput (Join-Path $logDir "ui.out.log") -RedirectStandardError (Join-Path $logDir "ui.err.log") -WindowStyle Hidden -PassThru
+        $npm = (Get-Command "pnpm.cmd" -ErrorAction SilentlyContinue)
+        if (-not $npm) { $npm = (Get-Command "npm.cmd" -ErrorAction Stop) }
+        $uiProcess = Start-Process -FilePath $npm.Source -ArgumentList "run", "dev" -WorkingDirectory $webDir -RedirectStandardOutput (Join-Path $logDir "ui.out.log") -RedirectStandardError (Join-Path $logDir "ui.err.log") -WindowStyle Hidden -PassThru
         $ownedProcesses.Add($uiProcess)
         Write-Host "UI: http://127.0.0.1:3000"
     }

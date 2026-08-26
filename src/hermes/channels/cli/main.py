@@ -6,11 +6,11 @@ import re
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from hermes.runtime import config
+from hermes.agent.turn_runtime import AgentTurnRequest, AgentTurnRuntime
+from hermes.security.ingress import build_local_cli_principal
 from hermes.tools.video_downloader import download_video
 from hermes.tools.video_analyser import analyze_video
 from hermes.tools.script_generator import generate_tiktok_script, check_ollama
-from hermes.tools.registry import registry
-import hermes.tools.product_to_video_tool  # Ensures product_to_video is registered in Tool Registry
 
 def clear_screen():
     """Clear terminal screen."""
@@ -260,76 +260,44 @@ def run_pipeline_option():
     input("\nQuy trình hoàn tất! Nhấn Enter để quay lại Menu chính...")
 
 def run_product_to_video_command(prompt_text: str):
-    """Execute product-to-video tool explicitly via Hermes Tool Registry."""
-    from hermes.runtime_layout import get_work_journal_dir
+    """Route the interactive video shortcut through Hermes Orchestrator."""
+    run_agent_turn(
+        "Tạo video TikTok bằng Video Factory theo yêu cầu sau. "
+        "Hãy lập kế hoạch, dùng capability phù hợp và dừng tại các bước cần tôi duyệt: "
+        f"{prompt_text}"
+    )
 
-    print("\n" + "="*60)
-    print("     HERMES AGENT: TOOL REGISTRY DISPATCH (product_to_video)")
-    print("="*60)
-    print(f"[*] Prompt: \"{prompt_text}\"")
-    print("[*] Invoking 'product_to_video' registered tool from Hermes Tool Registry...\n")
+def build_cli_turn_request(prompt_text: str, session_id: str = "cli_session") -> AgentTurnRequest:
+    principal = build_local_cli_principal(session_id=session_id)
+    return AgentTurnRequest(
+        message=prompt_text.strip(),
+        principal=principal,
+        platform="cli",
+        task_id=session_id,
+    )
 
-    tool_entry = registry.get_entry("product_to_video")
-    if tool_entry is None:
-        raise RuntimeError("Tool 'product_to_video' is not registered in Hermes Tool Registry")
-
-    result = tool_entry.handler(prompt=prompt_text)
-
-    if not isinstance(result, dict) or result.get("status") != "ok":
-        print(f"\n[x] Workflow execution failed: {result}")
-        return
-
-    specs = result.get("video_specs", {})
-    print("\n" + "="*60)
-    print("  PRODUCT-TO-VIDEO WORKFLOW: OPERATIONALLY COMPLETE")
-    print("="*60)
-    print(f"  - Project ID:             {result.get('project_id')}")
-    print(f"  - Product ID:             {result.get('product_id')}")
-    print(f"  - ResourcePackLock ID:    {result.get('resource_pack_lock_id')}")
-    print(f"  - Final Asset ID:         {result.get('final_asset_id')}")
-    print(f"  - Final Video Path:       {result.get('final_mp4_path')}")
-    print(f"  - UI Project URL:         {result.get('ui_url')}")
-    print(f"  - Content API URL:        {result.get('content_url')}")
-    print(f"  - WorkJournal Location:   {get_work_journal_dir()}")
-    print("\n[+] Probed Artifact Specifications (FFprobe Inspection Gate):")
-    for k, v in specs.items():
-        print(f"    * {k}: {v}")
-    print("="*60 + "\n")
 
 def run_agent_turn(prompt_text: str):
-    """Unified CLI Ingress: routes natural language prompts to Hermes Agent Runtime & ConversationLoop."""
+    """Route natural-language CLI input through the channel-neutral agent boundary."""
     from hermes.channels.cli.env_loader import load_hermes_dotenv
     load_hermes_dotenv()
 
-    from hermes.security.ingress import build_local_cli_principal, principal_scope
-    from hermes.agent.runtime_agent import AIAgent
-
-    principal = build_local_cli_principal()
-    with principal_scope(principal):
-        agent = AIAgent(
-            model=os.environ.get("HERMES_INFERENCE_MODEL") or "reason_combo",
-            quiet_mode=True,
-            platform="cli",
-        )
-        try:
-            result = agent.run_conversation(prompt_text)
-            response = result.get("final_response") or ""
-            if response:
-                print(f"\n{response}\n")
-            else:
-                print("\n[No textual response produced]\n")
-        finally:
-            try:
-                agent.close()
-            except Exception:
-                pass
+    result = AgentTurnRuntime().run(build_cli_turn_request(prompt_text))
+    if result.content:
+        print(f"\n{result.content}\n")
+    else:
+        print("\n[No textual response produced]\n")
 
 def main():
     args = sys.argv[1:]
     if args:
         if args[0].lower() == "video":
-            prompt_text = " ".join(args[1:]).strip() or "Tạo video TikTok review sản phẩm dài 30 giây"
-            run_product_to_video_command(prompt_text)
+            request_text = " ".join(args[1:]).strip() or "review sản phẩm dài 30 giây"
+            run_agent_turn(
+                "Tạo video TikTok bằng Video Factory theo yêu cầu sau. "
+                "Hãy lập kế hoạch, dùng capability phù hợp và dừng tại các bước cần tôi duyệt: "
+                f"{request_text}"
+            )
             return
         prompt_text = " ".join(arg for arg in args if arg not in ("chat", "-q", "--query")).strip()
         if prompt_text:
@@ -346,7 +314,7 @@ def main():
         print(" 2. Phân tích video mẫu (Xem hình ảnh, ghi lời thoại bằng Gemini)")
         print(" 3. Sinh kịch bản TikTok mới (Sử dụng Ollama Local Model)")
         print(" 4. Quy trình tự động toàn diện (Tải mẫu -> Phân tích -> Viết kịch bản mới)")
-        print(" 5. Chạy Product-to-Video Tool (Dispatch từ Tool Registry)")
+        print(" 5. Yêu cầu Hermes Orchestrator tạo video")
         print(" 6. Kiểm tra kết nối và cấu hình hệ thống (Ollama & Gemini)")
         print(" 7. Thoát")
         print("="*60)

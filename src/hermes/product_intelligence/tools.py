@@ -8,25 +8,42 @@ def _handle_product_scout(args: Dict[str, Any], **kwargs) -> str:
     Handler for the product_scout tool.
     It can scout for product info or get resource pack details.
     """
-    sku = args.get("sku")
+    sku = args.get("sku") or args.get("query") or args.get("product_name") or args.get("url") or ""
     action = args.get("action", "scout_info")
 
     if not sku:
-        return tool_error("SKU is required.")
+        return tool_error("SKU or product identifier is required.")
 
     try:
         if action == "scout_info":
             service = ProductScoutService()
             product_info = service.scout_by_sku(sku)
             if not product_info:
-                return tool_error(f"Product info not found for SKU: {sku}")
+                # Try finding case-insensitively or via slug match
+                pack_root = service.pi_data_root / "products"
+                if pack_root.exists():
+                    for p in pack_root.iterdir():
+                        if p.is_dir() and (sku.lower() in p.name.lower() or p.name.lower() in sku.lower()):
+                            product_info = service.scout_by_sku(p.name)
+                            if product_info:
+                                break
+                if not product_info:
+                    return tool_error(f"Product info not found in store for identifier: '{sku}'. Please provide or scrape product data first.")
             return tool_result(product_info.model_dump())
 
         elif action == "get_resource_pack":
             service = AssetProjectionService()
             resource_pack = service.load_and_verify_resource_pack(sku)
             if not resource_pack:
-                return tool_error(f"Resource pack not found or failed verification for SKU: {sku}")
+                pack_root = service.pi_data_root / "products"
+                if pack_root.exists():
+                    for p in pack_root.iterdir():
+                        if p.is_dir() and (sku.lower() in p.name.lower() or p.name.lower() in sku.lower()):
+                            resource_pack = service.load_and_verify_resource_pack(p.name)
+                            if resource_pack:
+                                break
+                if not resource_pack:
+                    return tool_error(f"Resource pack not found or failed verification for SKU: {sku}")
             # Paths are not JSON serializable, so convert them to strings
             pack_dict = resource_pack.model_dump()
             for asset in pack_dict.get("assets", []):
@@ -49,7 +66,7 @@ PRODUCT_SCOUT_SCHEMA = {
         "properties": {
             "sku": {
                 "type": "string",
-                "description": "The SKU of the product to scout for."
+                "description": "The SKU, name, or URL identifier of the product to scout for."
             },
             "action": {
                 "type": "string",

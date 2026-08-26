@@ -28,7 +28,6 @@ if sys.platform.startswith('win'):
 
 from hermes.runtime import config
 from hermes.application.core.agent_jobs import AgentJobManager
-from hermes.application.core.assistant_runtime import HermesAssistantRuntime
 from hermes.application.core.coding_agent import CodingAgentPlanner
 from hermes.application.core.job_dedup import JobDedup
 from hermes.application.core.learning_review import LearningReviewStore
@@ -38,6 +37,7 @@ from hermes.application.core.llm_gateway import complete as llm_complete, health
 from hermes.application.core.conversation_memory import get_memory
 from hermes.application.core.knowledge_store import get_store
 from hermes.application.core.source_validation import validate_learning_source
+from hermes.agent.turn_runtime import AgentTurnRequest, AgentTurnRuntime
 from hermes.application.knowledge_lifecycle import (
     KnowledgeLifecycle,
     LifecycleActor,
@@ -47,6 +47,7 @@ from hermes.application.affiliate_review_service import AffiliateReviewService, 
 from hermes.adapters.telegram.affiliate_review import parse_review_callback
 from hermes.assistant import extract_learning_request, extract_memory_request
 from hermes.memory import MemoryRepository
+from hermes.security.ingress import build_gateway_principal
 from hermes.application.core.repository_search import (
     extract_repository_query,
     format_repository_context,
@@ -99,6 +100,18 @@ def _affiliate_content_service_factory(repository):
     return AffiliateContentService(repository, AffiliateContentGateway(HermesLLMGateway()))
 
 
+def _video_factory_service_factory():
+    """Construct the operator-only approval service lazily."""
+    from hermes.adapters.sqlite.video_factory_repository import SQLiteVideoFactoryRepository
+    from hermes.application.video_factory_service import VideoFactoryService
+    from hermes.config import get_data_path
+    from hermes.db import Database
+
+    db = Database(str(get_data_path("db", "video_factory.sqlite")))
+    db.initialize()
+    return VideoFactoryService(SQLiteVideoFactoryRepository(db))
+
+
 def save_text_learning_source(text: str, owner_user_id: str | int) -> tuple[Path, dict]:
     payload = (text or "").strip()
     if not payload:
@@ -149,20 +162,29 @@ CODEREVIEW_INSTRUCTION = (
     "Sau đó, hãy đề xuất giải pháp refactor code chi tiết kèm ví dụ minh họa cụ thể. "
     "Câu trả lời cần ngắn gọn, rõ ràng, đi thẳng vào vấn đề kỹ thuật."
 )
-
-TECH_INSTRUCTION = (
+TECH_INSTRUCTION = (
     "Bạn là một chuyên gia công nghệ thông tin và kiến trúc sư hệ thống. "
     "Nhiệm vụ của bạn là giải đáp các câu hỏi kỹ thuật, giải thuật, hướng dẫn lập trình "
     "hoặc thiết kế hệ thống một cách tối ưu, chính xác và có chiều sâu cấu trúc."
 )
 
 CHAT_INSTRUCTION = (
-    "Bạn là một trợ lý ảo cá nhân đa năng thân thiện, lịch sự và hữu ích của người dùng."
+    "Bạn là Hermes Agent — Bộ não điều phối AI và Tự động hóa nội dung đa phương tiện duy nhất của người dùng.\n\n"
+    "NGUYÊN TẮC ĐIỀU PHỐI & HITL (HUMAN-IN-THE-LOOP):\n"
+    "1. Lắng nghe và hiểu rõ ý định của người dùng trước khi thực thi.\n"
+    "2. NẾU YÊU CẦU CHƯA RÕ RÀNG HOẶC THIẾU THÔNG TIN (ví dụ: người dùng gửi link TikTok nhưng chưa rõ muốn học kiến thức hay tạo video, hoặc muốn tạo video bán hàng nhưng chưa có link/SKU sản phẩm Shopee/Lazada):\n"
+    "   👉 BẠN PHẢI CHỦ ĐỘNG HỎI LẠI NGƯỜI DÙNG, giải thích ngắn gọn và đưa ra các lựa chọn rõ ràng để người dùng chọn/duyệt trước khi gọi các công cụ tốn kém.\n"
+    "   👉 TUYỆT ĐỐI KHÔNG tự động đoán mò hay đưa ra các mã lỗi kỹ thuật nội bộ (như 'Lỗi PI Lock Not Found'). Thay vào đó hãy hướng dẫn người dùng một cách thân thiện, rõ ràng.\n"
+    "3. CẤU TRÚC DỮ LIỆU KNOWLEDGE BASE:\n"
+    "   - Tri thức chính thức: knowledge_base/approved/\n"
+    "   - Đề xuất chờ duyệt: knowledge_base/review_queue/\n"
+    "   - Job đang xử lý: knowledge_base/jobs/active/\n"
+    "   - Job đã lưu trữ: knowledge_base/jobs/archived/\n"
+    "   - Bộ nhớ cá nhân: knowledge_base/memory/user_memory.json\n"
+    "4. Luôn trả lời ngắn gọn, trực quan, chuyên nghiệp bằng tiếng Việt và tôn trọng quyền quyết định của người dùng."
 )
 
 def init_gemini():
-    # Text requests now use the LLM gateway. Video vision keeps its own
-    # optional provider initialization in tools.video_analyser.
     return True
     """Khởi tạo Google Gemini API"""
     global _GEMINI_INITIALIZED
@@ -956,11 +978,61 @@ async def enqueue_learning_job(
             f"Output: {job.get('target', {}).get('output_dir', '')}\n"
             f"Intake note: {intake_path or 'N/A'}",
         )
+        asyncio.create_task(background_process_and_report_job(job, update))
         return job
     except Exception as exc:
         logger.exception("Failed to create learning job")
         await reply_html(update.message, f"Could not create learning job: {exc}")
         return None
+
+
+async def background_process_and_report_job(job: dict, update: Update):
+    """Automatically run video/source analysis for enqueued learning job and reply to Telegram."""
+    try:
+        job_id = job.get("job_id")
+        if not job_id:
+            return
+
+        output_dir_str = job.get("target", {}).get("output_dir", "")
+        output_dir = Path(output_dir_str) if output_dir_str else None
+        source_val = job.get("source", {}).get("value") or ""
+        source_kind = job.get("source", {}).get("kind") or "tiktok_url"
+        tasks = job.get("tasks", ["learn_knowledge"])
+        mode = job.get("mode", MODE_LEARN_KNOWLEDGE)
+
+        job_payload = {
+            "job_type": "knowledge_learning",
+            "source": {
+                "value": source_val,
+                "kind": source_kind,
+                "metadata": {}
+            },
+            "target": {
+                "output_dir": output_dir_str,
+                "project_slug": job.get("target", {}).get("project_slug", "")
+            },
+            "tasks": tasks,
+            "style": {"notes": mode, "language": "vi"}
+        }
+
+        from hermes.application.core.job_watcher import JobWorker
+        worker = JobWorker()
+        loop = asyncio.get_running_loop()
+        files, summary = await loop.run_in_executor(None, worker.execute_job_tasks, job_payload)
+
+        report_body = summary
+        if output_dir and output_dir.exists():
+            for fname in ["summary_analysis.md", "learning_proposal.md", "analysis.md"]:
+                fpath = output_dir / fname
+                if fpath.exists():
+                    report_body = fpath.read_text(encoding="utf-8", errors="ignore")
+                    break
+
+        msg = f"📊 **BÁO CÁO PHÂN TÍCH TỰ ĐỘNG [Job: {job_id}]**\n\n{report_body[:3500]}"
+        await send_response(update, msg)
+    except Exception as err:
+        logger.exception(f"Background job processing error for {job.get('job_id')}: {err}")
+
 
 
 def create_learning_intake_note(job: dict, source_value: str, source_kind: str, extra_note: str, local_video_path, telegram_info: dict):
@@ -1110,9 +1182,9 @@ async def assistant_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    runtime = HermesAssistantRuntime(Path(__file__).resolve().parent)
-    plan = runtime.build_plan(request)
-    await send_response(update, runtime.format_markdown(plan))
+    await update.message.reply_chat_action("typing")
+    result = await run_orchestrator_turn(update, request)
+    await send_response(update, result)
 
 
 async def code_plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1444,6 +1516,52 @@ async def approve_force_command(update: Update, context: ContextTypes.DEFAULT_TY
         await reply_html(update.message, "Ban khong so huu knowledge entry nay.")
     else:
         await reply_html(update.message, "Lesson khong ton tai hoac da duoc duyet.")
+
+
+async def video_factory_approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Approve one durable Video Factory stage from an authenticated user command."""
+    args = [str(value).strip() for value in context.args if str(value).strip()]
+    if len(args) < 2:
+        await reply_html(
+            update.message,
+            "Cách dùng: /vf_approve <project_id> <creative_brief|scene_plan|storyboard|final_video>",
+        )
+        return
+
+    project_id, requested_stage = args[0], args[1].lower()
+    stage_aliases = {
+        "brief": "creative_brief",
+        "creative_brief": "creative_brief",
+        "scenes": "scene_plan",
+        "scene_plan": "scene_plan",
+        "storyboard": "storyboard",
+        "final": "final_video",
+        "final_video": "final_video",
+    }
+    stage = stage_aliases.get(requested_stage)
+    if stage is None:
+        await reply_html(update.message, f"Stage không hợp lệ: {requested_stage}")
+        return
+
+    owner_user_id = str(update.effective_user.id)
+    service = _video_factory_service_factory()
+    try:
+        if stage == "creative_brief":
+            service.approve_creative_brief(owner_user_id, project_id)
+        elif stage == "scene_plan":
+            service.approve_scene_plan(owner_user_id, project_id)
+        elif stage == "storyboard":
+            service.approve_storyboard(owner_user_id, project_id, "Approved via Telegram")
+        else:
+            service.approve_final_video(owner_user_id, project_id, "Approved via Telegram")
+    except Exception as exc:
+        await reply_html(update.message, f"Không thể duyệt {stage}: {exc}")
+        return
+
+    await reply_html(
+        update.message,
+        f"Đã duyệt {stage} cho project {project_id}. Gửi: tiếp tục project {project_id}",
+    )
 
 
 async def merge_knowledge_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1895,6 +2013,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "   • `/len_kich_ban` = phân tích và lên kịch bản mới\n\n"
         "⚙️ **Vận hành**: `/status`, `/knowledge [pending|approved|rejected]`, `/retry <job_id>`, `/cancel <job_id>`\n"
         "✅ **Duyệt knowledge**: `/approve <id>`, `/reject <id>`, `/approve_force <id>`, `/merge <id>`\n"
+        "🎬 **Duyệt Video Factory**: `/vf_approve <project_id> <creative_brief|scene_plan|storyboard|final_video>`\n"
         "🧭 **Trợ lý lập kế hoạch**: `/assistant <yêu cầu>`, `/code_plan <yêu cầu>`\n\n"
         "🧠 **Lưu prompt học hỏi**: `/luu_prompt Tên prompt | nội dung prompt`\n\n"
         "💬 Ngoài ra, bạn có thể **chat trực tiếp** không cần lệnh, tôi sẽ trả lời như một người bạn ảo!"
@@ -2020,84 +2139,171 @@ async def video_attachment_handler(update: Update, context: ContextTypes.DEFAULT
     )
 
 
-async def default_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Lắng nghe các tin nhắn thường không dùng slash command
-    user_text = update.message.text
+async def handle_telegram_job_query(update: Update, user_text: str) -> bool:
+    """Detect if the user message is querying, analyzing, or asking about a job or intake note, and handle it with real disk access."""
+    job_match = re.search(r"job_\d{8}_\d{6}_[a-f0-9]+", user_text)
+    is_job_query = bool(job_match) or any(
+        kw in user_text.lower() for kw in [
+            "check job", "phân tích job", "learning_intake.md", "intake note",
+            "chưa phân tích", "kết quả job", "xem job"
+        ]
+    )
 
-    memory_text = extract_memory_request(user_text)
-    if memory_text:
-        await propose_memory(update, memory_text)
-        return
+    if not is_job_query:
+        return False
 
-    learning_text = extract_learning_request(user_text)
-    if learning_text:
-        await create_video_job_command(
-            update,
-            context,
-            mode=MODE_LEARN_KNOWLEDGE,
-            explicit_source_text=learning_text,
-        )
-        return
+    job_id = job_match.group(0) if job_match else None
+    manager = AgentJobManager()
+
+    if not job_id:
+        recent_jobs = manager.list_jobs(limit=5)
+        if recent_jobs:
+            job_id = recent_jobs[0].get("job_id")
+
+    if not job_id:
+        return False
 
     await update.message.reply_chat_action("typing")
 
-    route = resolve_route(user_text)
-    if route:
-        await create_video_job_command(update, context, mode=route["mode"])
-        return
-
-    url = extract_first_url(user_text)
-    if url and any(domain in url.lower() for domain in ["tiktok.com", "vt.tiktok.com", "youtube.com", "youtu.be"]):
-        await ask_video_intent(update, url)
-        return
-
-    if is_repository_search_request(user_text):
-        user_id = update.effective_user.id if update.effective_user else update.effective_chat.id
-        query = extract_repository_query(user_text)
-        if query:
-            approved_context = get_store().get_approved_context(user_text, owner_user_id=user_id)
-            live_result = await asyncio.get_running_loop().run_in_executor(None, search_repositories, query)
-            prompt = "\n\n".join([
-                approved_context,
-                format_repository_context(live_result),
-                "Current user message:\n" + user_text,
-            ])
-            instruction = (
-                TECH_INSTRUCTION
-                + " Ưu tiên repo đã approved trong knowledge của Hermes; nếu dùng kết quả GitHub live thì nói rõ đó là gợi ý cần kiểm tra."
-            )
-            result = await asyncio.get_running_loop().run_in_executor(None, ask_gemini, prompt, instruction)
-            memory = get_memory()
-            memory.add(user_id, "user", user_text)
-            memory.add(user_id, "assistant", result)
-            await send_response(update, result)
-            return
+    reports = find_report_files(job_id)
     
-    # Định tuyến ngầm: Nếu tin nhắn chứa code nhiều dòng hoặc từ khóa lập trình, dùng CODEREVIEW/TECH
-    contains_code_patterns = any(
-        kw in user_text for kw in [
-            "def ", "class ", "import ", "function", "const ", "let ", "var ", 
-            "select * from", "html", "css", "dockerfile", "git commit"
-        ]
-    ) or "\n" in user_text and ("{" in user_text or ":" in user_text)
-    
-    if contains_code_patterns:
-        instruction = CODEREVIEW_INSTRUCTION
-    else:
-        instruction = CHAT_INSTRUCTION
+    # If no report files or only intake note exists, run execution on disk immediately
+    if not reports or all("learning_intake.md" in str(p) for p in reports):
+        try:
+            manifest = manager.load_manifest_job(job_id, sync=True)
+            if manifest:
+                source_meta = manifest.get("metadata", {}).get("source", {})
+                source_val = source_meta.get("value") or manifest.get("source", {}).get("value", "")
+                source_kind = source_meta.get("kind") or manifest.get("source", {}).get("kind", "tiktok_url")
+                output_dir = manifest.get("metadata", {}).get("legacy_output_dir") or manifest.get("target", {}).get("output_dir", "")
 
+                job_payload = {
+                    "job_type": "knowledge_learning",
+                    "source": {
+                        "value": source_val,
+                        "kind": source_kind,
+                        "metadata": {}
+                    },
+                    "target": {
+                        "output_dir": output_dir,
+                        "project_slug": manifest.get("metadata", {}).get("project_slug", "")
+                    },
+                    "tasks": ["learn_knowledge"],
+                    "style": {"notes": "/hoc_kien_thuc", "language": "vi"}
+                }
+                from hermes.application.core.job_watcher import JobWorker
+                worker = JobWorker()
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, worker.execute_job_tasks, job_payload)
+                reports = find_report_files(job_id)
+        except Exception as err:
+            logger.warning(f"On-demand job execution error for {job_id}: {err}")
+
+    content_parts = []
+    if reports:
+        for rpath in reports[:3]:
+            try:
+                text = rpath.read_text(encoding="utf-8", errors="ignore")
+                content_parts.append(f"--- File: {rpath.name} ---\n{text}")
+            except Exception:
+                pass
+
+    if not content_parts:
+        await reply_html(update.message, f"Đã kiểm tra Job `{job_id}` nhưng chưa có báo cáo. Vui lòng thử lại sau ít phút.")
+        return True
+
+    file_context = "\n\n".join(content_parts)
+    prompt = (
+        f"Người dùng hỏi về Job `{job_id}`: '{user_text}'\n\n"
+        f"Nội dung các file báo cáo thực tế được đọc trực tiếp từ ổ đĩa cứng của Hermes:\n{file_context[:4000]}\n\n"
+        f"Hãy tổng hợp kết quả phân tích chi tiết và trả lời câu hỏi của người dùng."
+    )
+    instruction = (
+        "Bạn là Hermes Agent với TOÀN QUYỀN TRUY CẬP Ổ ĐĨA CÁ NHÂN VÀ KNOWLEDGE BASE. "
+        "Dựa vào nội dung file thật ở trên, hãy đưa ra báo cáo phân tích hoàn chỉnh. TUYỆT ĐỐI KHÔNG từ chối hoặc nói không có quyền truy cập file local."
+    )
+
+    result = await asyncio.get_event_loop().run_in_executor(None, ask_gemini, prompt, instruction)
     user_id = update.effective_user.id if update.effective_user else update.effective_chat.id
     memory = get_memory()
-    prior_context = memory.context(user_id)
-    prompt = user_text
-    approved_context = get_store().get_approved_context(user_text, owner_user_id=user_id)
-    context_blocks = [block for block in (approved_context, prior_context) if block]
-    if context_blocks:
-        prompt = "\n\n".join(context_blocks) + f"\n\nCurrent user message:\n{user_text}"
-    result = await asyncio.get_event_loop().run_in_executor(None, ask_gemini, prompt, instruction)
     memory.add(user_id, "user", user_text)
     memory.add(user_id, "assistant", result)
     await send_response(update, result)
+    return True
+
+
+def build_telegram_turn_request(
+    update: Update,
+    message: str,
+    conversation_history: tuple[dict, ...] = (),
+) -> AgentTurnRequest:
+    """Translate authenticated Telegram metadata into a channel-neutral turn."""
+    user = update.effective_user
+    chat = update.effective_chat
+    actor_id = str(user.id if user is not None else chat.id)
+    chat_id = str(chat.id)
+    thread_id = getattr(update.message, "message_thread_id", None)
+    session_id = f"telegram:{chat_id}"
+    if thread_id is not None:
+        session_id = f"{session_id}:{thread_id}"
+    principal = build_gateway_principal(
+        actor_id=actor_id,
+        owner_user_id=actor_id,
+        platform="telegram",
+        session_id=session_id,
+        roles=("admin",) if is_authorized_user_id(actor_id) else (),
+    )
+    return AgentTurnRequest(
+        message=message.strip(),
+        principal=principal,
+        platform="telegram",
+        conversation_history=conversation_history,
+        task_id=session_id,
+    )
+
+
+async def run_orchestrator_turn(update: Update, message: str) -> str:
+    """Execute Telegram free text through the canonical Hermes agent loop."""
+    user = update.effective_user
+    chat = update.effective_chat
+    owner_id = str(user.id if user is not None else chat.id)
+    memory = get_memory()
+    request = build_telegram_turn_request(
+        update,
+        message,
+        conversation_history=tuple(memory.history(owner_id)),
+    )
+    result = await asyncio.to_thread(AgentTurnRuntime().run, request)
+    if not result.content:
+        raise RuntimeError("Hermes completed the turn without a response")
+
+    memory.add(request.principal.owner_user_id, "user", request.message)
+    memory.add(request.principal.owner_user_id, "assistant", result.content)
+    return result.content
+
+
+async def default_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Route all non-command free text and URLs to the sole Hermes Orchestrator."""
+    user_text = (update.message.text or "").strip()
+    if not user_text:
+        return
+    if user_text.startswith("/"):
+        await reply_html(update.message, "Lệnh không được hỗ trợ. Dùng /help để xem danh sách lệnh.")
+        return
+
+    # Check for Job queries
+    if await handle_telegram_job_query(update, user_text):
+        return
+
+    await update.message.reply_chat_action("typing")
+    try:
+        result = await run_orchestrator_turn(update, user_text)
+    except Exception as exc:
+        logger.exception("Hermes orchestrator turn failed")
+        await reply_html(update.message, f"Hermes không thể xử lý yêu cầu: {exc}")
+        return
+    await send_response(update, result)
+
 
 
 def sort_report_files(paths: list[Path]) -> list[Path]:
@@ -2547,6 +2753,7 @@ def main():
     app.add_handler(CommandHandler("local", local_command))
     app.add_handler(CommandHandler("hoc_video", hoc_video_command))
     app.add_handler(CommandHandler("hoc_kien_thuc", hoc_kien_thuc_command))
+    app.add_handler(CommandHandler("learn", hoc_kien_thuc_command))
     app.add_handler(CommandHandler("hoc_hook_CTA", hoc_hook_cta_command))
     app.add_handler(CommandHandler("hoc_hook_cta", hoc_hook_cta_command))
     app.add_handler(CommandHandler("len_kich_ban", len_kich_ban_command))
@@ -2561,6 +2768,7 @@ def main():
     app.add_handler(CommandHandler("approve", approve_command))
     app.add_handler(CommandHandler("approve_all", approve_all_command))
     app.add_handler(CommandHandler("approve_force", approve_force_command))
+    app.add_handler(CommandHandler("vf_approve", video_factory_approve_command))
     app.add_handler(CommandHandler("reject", reject_command))
     app.add_handler(CommandHandler("merge", merge_knowledge_command))
     app.add_handler(CommandHandler("recover", recover_command))
@@ -2590,7 +2798,13 @@ def main():
 
     print("⚡ Bot Telegram đã KHỞI CHẠY và đang LẮNG NGHE tin nhắn...")
     print("👉 Hãy truy cập Telegram và chat với bot của bạn ngay bây giờ!")
-    app.run_polling()
+    while True:
+        try:
+            app.run_polling(close_loop=False)
+        except Exception as err:
+            logger.warning(f"Telegram polling loop issue: {err}")
+        import time
+        time.sleep(1)
 
 if __name__ == "__main__":
     main()

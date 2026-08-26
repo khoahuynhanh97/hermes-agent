@@ -7,6 +7,7 @@ from typing import Any, Dict
 
 from hermes.tools.registry import registry, tool_error
 from hermes.config import get_data_path
+from hermes.security.principal import current_principal
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +42,20 @@ PRODUCT_TO_VIDEO_SCHEMA = {
             },
             "owner_user_id": {
                 "type": "string",
-                "description": "Owner user identifier",
+                "description": "Compatibility fallback outside authenticated channels. Authenticated principal always wins.",
                 "default": "user",
+            },
+            "project_id": {
+                "type": "string",
+                "description": "Existing Video Factory project to continue after an explicit approval",
+            },
+            "run_id": {
+                "type": "string",
+                "description": "Existing workflow run associated with project_id",
             },
             "async_dispatch": {
                 "type": "boolean",
-                "description": "If true, queues the long-running video workflow in CanonicalJobWorker and returns job_id and queued status immediately without blocking.",
+                "description": "Legacy compatibility flag. User-governed agent calls remain synchronous until an approval-aware durable dispatcher is available.",
                 "default": False,
             },
         },
@@ -71,12 +80,10 @@ def _handle_product_to_video(args: dict | str = None, **kwargs) -> Dict[str, Any
     duration_seconds = int(params.get("duration_seconds", 30))
     platform = params.get("platform", "TikTok")
     language = params.get("language", "Vietnamese")
-    owner_user_id = params.get("owner_user_id", "user")
-    async_dispatch = bool(
-        params.get("async_dispatch", False)
-        or params.get("async_mode", False)
-        or params.get("non_blocking", False)
-    )
+    principal = current_principal.get()
+    owner_user_id = principal.owner_user_id if principal is not None else params.get("owner_user_id", "user")
+    project_id = params.get("project_id") or None
+    run_id = params.get("run_id") or None
 
     try:
         db_path = get_data_path("db", "video_factory.sqlite")
@@ -88,7 +95,10 @@ def _handle_product_to_video(args: dict | str = None, **kwargs) -> Dict[str, Any
             duration_seconds=duration_seconds,
             platform=platform,
             language=language,
-            async_dispatch=async_dispatch,
+            project_id=project_id,
+            run_id=run_id,
+            async_dispatch=False,
+            approval_policy="require_user",
         )
         return json.dumps(result, ensure_ascii=False, indent=2)
     except Exception as err:

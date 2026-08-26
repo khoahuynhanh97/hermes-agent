@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 
 class FakeMessage:
@@ -65,17 +65,18 @@ class TelegramMemoryTests(unittest.TestCase):
         asyncio.run(telegram_bot.memory_decision_command(decision_update, decision_context, "approve"))
         self.assertEqual(MemoryRepository().get(memories[0]["id"])["status"], "approved")
 
-    def test_natural_memory_request_does_not_call_llm(self) -> None:
+    def test_natural_memory_request_uses_orchestrator(self) -> None:
         import telegram_bot
-        from hermes.memory import MemoryRepository
 
         update = self.update("Hãy nhớ: tôi ưu tiên câu trả lời bằng tiếng Việt")
-        with patch.object(telegram_bot, "ask_gemini", side_effect=AssertionError("LLM must not be called")):
+        with patch.object(
+            telegram_bot,
+            "run_orchestrator_turn",
+            new=AsyncMock(return_value="Đã tạo đề xuất memory chờ duyệt."),
+        ) as run_turn, patch.object(telegram_bot, "send_response", new=AsyncMock()):
             asyncio.run(telegram_bot.default_chat_handler(update, SimpleNamespace(args=[])))
 
-        memories = MemoryRepository().list_memories("42", status="pending")
-        self.assertEqual(len(memories), 1)
-        self.assertIn("/approve_memory", update.message.replies[0])
+        run_turn.assert_awaited_once_with(update, update.message.text)
 
     def test_approve_source_command_approves_all_atomic_lessons(self) -> None:
         import telegram_bot
@@ -144,7 +145,7 @@ class TelegramMemoryTests(unittest.TestCase):
         self.assertIn("SQLite", update.message.replies[0])
 
     def test_reanalysis_rejects_json_backend_before_creating_a_job(self) -> None:
-        import core.knowledge_store as legacy_store
+        from hermes.application.core import knowledge_store as legacy_store
         import telegram_bot
 
         self.env.stop()
@@ -155,7 +156,12 @@ class TelegramMemoryTests(unittest.TestCase):
             UNIFIED_INDEX_FILE=root / "unified_index.json",
             ENTRIES_DIR=root / "entries",
         ), patch.dict(
-            os.environ, {"HERMES_STORAGE_BACKEND": "json"}, clear=True
+            os.environ,
+            {
+                "HERMES_STORAGE_BACKEND": "json",
+                "HERMES_DB_PATH": str(Path(self.temp_dir.name) / "legacy-hermes.db"),
+            },
+            clear=True,
         ), patch.object(legacy_store.logger, "info"):
             store = legacy_store.UnifiedKnowledgeStore()
             entry = store.add_entry(

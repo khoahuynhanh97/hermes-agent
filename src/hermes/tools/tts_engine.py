@@ -55,6 +55,32 @@ async def _edge_tts_async(text: str, voice: str, rate: str, output_path: str):
     await asyncio.wait_for(communicate.save(output_path), timeout=10.0)
 
 
+async def _edge_tts_async_with_subtitles(text: str, voice: str, rate: str, output_path: str) -> list[dict]:
+    """Async Edge TTS synthesis capturing word boundaries for subtitles."""
+    try:
+        import edge_tts
+    except ImportError:
+        raise ImportError("edge-tts not installed. Run: pip install edge-tts")
+
+    communicate = edge_tts.Communicate(text, voice, rate=rate)
+    word_boundaries = []
+
+    with open(output_path, "wb") as f:
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                f.write(chunk["data"])
+            elif chunk["type"] == "WordBoundary":
+                offset_sec = chunk["offset"] / 10_000_000.0
+                duration_sec = chunk["duration"] / 10_000_000.0
+                word_boundaries.append({
+                    "word": chunk["text"],
+                    "start": offset_sec,
+                    "end": offset_sec + duration_sec,
+                })
+
+    return word_boundaries
+
+
 def _speed_to_rate(speed: float) -> str:
     """Convert speed float (0.7–1.5) to Edge TTS rate string (+25%, -15%, etc.)"""
     pct = int((speed - 1.0) * 100)
@@ -113,6 +139,39 @@ def synthesize_edge_tts(text: str, voice: str = DEFAULT_VOICE,
     size_kb = os.path.getsize(output_path) / 1024
     logger.info(f"[TTS] ✅ Generated {size_kb:.1f} KB → {output_path}")
     return output_path
+
+
+def synthesize_edge_tts_with_subtitles(text: str, voice: str = DEFAULT_VOICE,
+                                        speed: float = DEFAULT_SPEED,
+                                        output_path: str = None) -> tuple[str, list[dict]]:
+    """
+    Synthesize speech using Edge TTS and return (audio_path, word_boundaries).
+    """
+    if not text or not text.strip():
+        raise ValueError("Text cannot be empty.")
+
+    voice = VOICES_VI.get(voice, voice) or DEFAULT_VOICE
+    if not output_path:
+        tmp = tempfile.mktemp(suffix=".mp3", prefix="tts_sub_")
+        output_path = tmp
+
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+    rate_str = _speed_to_rate(speed)
+
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                future = pool.submit(asyncio.run, _edge_tts_async_with_subtitles(text, voice, rate_str, output_path))
+                words = future.result(timeout=120)
+        else:
+            words = loop.run_until_complete(_edge_tts_async_with_subtitles(text, voice, rate_str, output_path))
+    except RuntimeError:
+        words = asyncio.run(_edge_tts_async_with_subtitles(text, voice, rate_str, output_path))
+
+    return output_path, words
+
 
 
 def synthesize_elevenlabs(text: str, voice_id: str = "pNInz6obpgDQGcFmaJgB",

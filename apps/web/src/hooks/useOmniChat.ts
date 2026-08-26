@@ -139,8 +139,9 @@ export function useOmniChat(initialProjectId?: string) {
               const event = JSON.parse(jsonStr)
 
               // Handle token deltas for streaming text
-              if (event.token) {
-                streamedText += event.token
+              const deltaText = event.token || (event.type === 'delta' ? event.content : null)
+              if (deltaText) {
+                streamedText += deltaText
                 setMessages((prev) =>
                   prev.map((m) =>
                     m.id === assistantMsgId ? { ...m, text: streamedText } : m

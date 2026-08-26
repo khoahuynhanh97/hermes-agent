@@ -152,7 +152,8 @@ class DataHealthTests(unittest.TestCase):
         self.assertIn("legacy_count_drift", codes)
         self.assertEqual(report.integrity, "ok")
         self.assertEqual(report.foreign_key_violations, 0)
-        self.assertEqual(report.schema_version, 2)
+        from hermes.db import SCHEMA_VERSION
+        self.assertEqual(report.schema_version, SCHEMA_VERSION)
         self.assertEqual(report.counts["lessons"], 5)
         self.assertGreaterEqual(len(report.repair_plan.actions), 5)
 

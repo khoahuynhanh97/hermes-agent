@@ -185,7 +185,6 @@ def _sync_project_generation_status(project, service) -> VideoFactoryProject:
     
     # 1. Sync storyboard frames
     if project.storyboard:
-        changed = False
         for frame in project.storyboard.frames:
             if frame.generation_status != FrameGenerationStatus.COMPLETED and frame.generation_job_id:
                 asset = asset_repo.get_by_job_id(frame.generation_job_id)
@@ -195,13 +194,14 @@ def _sync_project_generation_status(project, service) -> VideoFactoryProject:
                         FrameGenerationStatus.COMPLETED, asset["asset_id"],
                         frame.generation_job_id
                     )
-                    changed = True
                     
-        # If all frames are completed, let's auto-approve the storyboard!
-        if changed and project.storyboard and all(f.generation_status == FrameGenerationStatus.COMPLETED for f in project.storyboard.frames):
-            project = service.approve_storyboard(project.owner_user_id, project.id, "Auto approved")
-            
-            # Submit video_generate jobs for all scenes in the scene plan automatically when storyboard is approved!
+        # Generation may continue only after a separate operator approval call.
+        if (
+            project.storyboard
+            and project.storyboard.approval_status == StoryboardApprovalStatus.APPROVED
+            and all(f.generation_status == FrameGenerationStatus.COMPLETED for f in project.storyboard.frames)
+        ):
+            # Submit video_generate jobs after the approved storyboard is observed.
             if project.scene_plan and not project.generated_scenes:
                 job_service = get_video_factory_job_service()
                 frame_by_scene = {
@@ -290,7 +290,6 @@ def _sync_project_generation_status(project, service) -> VideoFactoryProject:
         ), None)
         if latest_timeline_asset and latest_timeline_asset.get("asset_id") != project.draft_video_asset_id:
             project = service.save_draft_video(project.owner_user_id, project.id, latest_timeline_asset["asset_id"])
-            project = service.approve_final_video(project.owner_user_id, project.id, "Auto approved")
                 
     # 4. Sync final export
     if project.draft_video_asset_id and project.final_approval == FinalApprovalStatus.APPROVED:
@@ -488,12 +487,10 @@ def generate_project_storyboard(
     try:
         project = service.get_project(owner, project_id)
         
-        # Ensure scene plan is approved first
         if not project.scene_plan:
-            description = project.resource_pack.product_identity_description if project.resource_pack else "the product"
-            plan = _default_scene_plan(description)
-            project = service.save_scene_plan(owner, project_id, plan)
-            project = service.approve_scene_plan(owner, project_id)
+            raise HTTPException(status_code=400, detail="Scene plan is required before storyboard generation.")
+        if project.scene_plan_approval != "approved":
+            raise HTTPException(status_code=409, detail="Scene plan approval is required before storyboard generation.")
             
         reference_images = []
         if project.resource_pack:
@@ -561,6 +558,22 @@ def generate_project_storyboard(
             "data": _serialize_project(project),
             "jobs": submitted_jobs
         }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/projects/{project_id}/storyboard/approve")
+def approve_project_storyboard(
+    project_id: str,
+    owner_user_id: Optional[str] = None,
+    principal: PrincipalContext = Depends(get_authenticated_principal_context),
+) -> Dict[str, Any]:
+    owner = verify_owner_match(owner_user_id, principal)
+    service = _vf_service()
+    try:
+        project = service.approve_storyboard(owner, project_id, "Approved by operator")
+        project = _sync_project_generation_status(project, service)
+        return {"status": "ok", "data": _serialize_project(project)}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -695,6 +708,21 @@ def render_project_timeline(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.post("/projects/{project_id}/final/approve")
+def approve_project_final(
+    project_id: str,
+    owner_user_id: Optional[str] = None,
+    principal: PrincipalContext = Depends(get_authenticated_principal_context),
+) -> Dict[str, Any]:
+    owner = verify_owner_match(owner_user_id, principal)
+    service = _vf_service()
+    try:
+        project = service.approve_final_video(owner, project_id, "Approved by operator")
+        return {"status": "ok", "data": _serialize_project(project)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.post("/projects/{project_id}/final/export")
 def export_project_final(
     project_id: str,
@@ -711,7 +739,8 @@ def export_project_final(
         if not project.draft_video_asset_id:
             raise HTTPException(status_code=400, detail="Timeline draft video must be completed first.")
             
-        project = service.approve_final_video(owner, project_id, "Approved for export")
+        if project.final_approval != FinalApprovalStatus.APPROVED:
+            raise HTTPException(status_code=409, detail="Final video approval is required before export.")
         asset_repo = SQLiteGeneratedAssetRepository(Database(str(_database_path())))
         draft_asset = asset_repo.get_by_asset_id(project.draft_video_asset_id)
         if not draft_asset:
@@ -742,6 +771,8 @@ class WorkflowDispatchRequest(BaseModel):
     duration_seconds: int = 30
     platform: str = "TikTok"
     language: str = "Vietnamese"
+    project_id: Optional[str] = None
+    run_id: Optional[str] = None
 
 
 @router.post("/workflow/dispatch")
@@ -754,13 +785,16 @@ def dispatch_workflow(
     from hermes.application.workflow import WorkflowOrchestrator
     orchestrator = WorkflowOrchestrator(_database_path())
     try:
-        return orchestrator.dispatch_product_to_video_workflow(
+        return orchestrator.run_product_to_video_workflow(
             owner_user_id=owner,
             prompt=body.prompt,
             product_query=body.product_query,
             duration_seconds=body.duration_seconds,
             platform=body.platform,
             language=body.language,
+            project_id=body.project_id,
+            run_id=body.run_id,
+            approval_policy="require_user",
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -789,11 +823,13 @@ def get_project_progress(
                     "version": project.resource_version,
                 },
                 "brief": {
-                    "status": "completed" if project.brief_approval else "pending",
+                    "status": "completed" if project.brief_approval == "approved" else "pending",
+                    "approval_status": project.brief_approval or "pending",
                     "version": project.brief_version,
                 },
                 "scene_plan": {
-                    "status": "completed" if project.scene_plan_approval else "pending",
+                    "status": "completed" if project.scene_plan_approval == "approved" else "pending",
+                    "approval_status": project.scene_plan_approval or "pending",
                     "version": project.scene_version,
                 },
                 "storyboard": {
@@ -994,4 +1030,3 @@ def download_ab_variant(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-

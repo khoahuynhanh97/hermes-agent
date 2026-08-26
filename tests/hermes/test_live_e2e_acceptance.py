@@ -115,13 +115,22 @@ def test_live_e2e_acceptance(tmp_path: Path, monkeypatch):
     worker = CanonicalJobWorker(str(vf_db_path), str(workspace))
     while worker.run_once() is not None:
         pass
+    assert client.get(f"/api/vf/projects/{project_id}").status_code == 200
+    storyboard_approval = client.post(f"/api/vf/projects/{project_id}/storyboard/approve")
+    assert storyboard_approval.status_code == 200
+    while worker.run_once() is not None:
+        pass
+    assert client.get(f"/api/vf/projects/{project_id}").status_code == 200
 
     # 7. Render timeline
     render = client.post(f"/api/vf/projects/{project_id}/timeline/render")
     assert render.status_code == 200
     assert worker.run_once()["state"] == "completed"
+    assert client.get(f"/api/vf/projects/{project_id}").status_code == 200
 
     # 8. Export final
+    final_approval = client.post(f"/api/vf/projects/{project_id}/final/approve")
+    assert final_approval.status_code == 200
     export = client.post(f"/api/vf/projects/{project_id}/final/export")
     assert export.status_code == 200
     assert worker.run_once()["state"] == "completed"

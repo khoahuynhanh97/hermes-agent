@@ -34,8 +34,7 @@ class ConversationMemory:
             self._write(data)
 
     def context(self, user_id: str | int) -> str:
-        with self._lock:
-            messages = self._read().get(str(user_id), [])
+        messages = self.history(user_id)
         if not messages:
             return ""
         lines = [
@@ -44,6 +43,18 @@ class ConversationMemory:
         for message in messages:
             lines.append(f"{message.get('role', 'user')}: {message.get('content', '')}")
         return "\n".join(lines)[-self.max_chars:]
+
+    def history(self, user_id: str | int) -> list[dict[str, str]]:
+        with self._lock:
+            messages = self._read().get(str(user_id), [])
+        return [
+            {
+                "role": "assistant" if message.get("role") == "assistant" else "user",
+                "content": str(message.get("content") or ""),
+            }
+            for message in messages
+            if message.get("content")
+        ]
 
     def clear(self, user_id: str | int) -> None:
         with self._lock:
@@ -95,6 +106,9 @@ class SQLiteConversationMemory:
 
     def context(self, user_id: str | int) -> str:
         return self.repository.conversation_context(user_id, user_id)
+
+    def history(self, user_id: str | int) -> list[dict[str, str]]:
+        return self.repository.conversation_history(user_id, user_id)
 
     def clear(self, user_id: str | int) -> None:
         self.repository.clear_messages(user_id, user_id)

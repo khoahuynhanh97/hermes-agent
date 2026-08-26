@@ -78,4 +78,27 @@ def apply_schema_v2(conn: sqlite3.Connection):
         """
     )
 
+    # Jobs table
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS jobs (
+            id TEXT PRIMARY KEY,
+            task_name TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            payload TEXT,
+            result_json TEXT,
+            error TEXT,
+            worker_id TEXT,
+            lease_expires_at TEXT,
+            attempt INTEGER DEFAULT 0,
+            max_attempts INTEGER DEFAULT 3,
+            started_at TEXT,
+            finished_at TEXT
+        )
+        """
+    )
+
     conn.commit()
+

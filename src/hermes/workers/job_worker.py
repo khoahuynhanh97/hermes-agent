@@ -500,6 +500,14 @@ class CanonicalJobWorker:
             project_id=payload.get("project_id"),
             run_id=payload.get("run_id"),
         )
+        if result.get("status") == "approval_required":
+            return {
+                "task_type": "product_to_video_workflow",
+                "project_id": result["project_id"],
+                "status": "approval_required",
+                "approval_stage": result["approval_stage"],
+                "run_id": result.get("run_id"),
+            }
         return {
             "task_type": "product_to_video_workflow",
             "project_id": result["project_id"],

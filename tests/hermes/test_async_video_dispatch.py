@@ -9,7 +9,6 @@ from PIL import Image
 from hermes.application.product_resource_service import ProductResourceService
 from hermes.application.workflow import WorkflowOrchestrator
 from hermes.tools.product_to_video_tool import _handle_product_to_video
-from hermes.workers.job_worker import CanonicalJobWorker
 
 
 def _setup_test_environment(monkeypatch, tmp_path: Path):
@@ -57,7 +56,7 @@ def _setup_test_environment(monkeypatch, tmp_path: Path):
     return data_root, pi_root, db_path, workspace, lock
 
 
-def test_orchestrator_async_dispatch_returns_queued_job(monkeypatch, tmp_path: Path):
+def test_orchestrator_dispatch_stops_at_user_approval(monkeypatch, tmp_path: Path):
     data_root, pi_root, db_path, workspace, lock = _setup_test_environment(monkeypatch, tmp_path)
 
     orchestrator = WorkflowOrchestrator(db_path)
@@ -68,20 +67,14 @@ def test_orchestrator_async_dispatch_returns_queued_job(monkeypatch, tmp_path: P
         duration_seconds=30,
     )
 
-    assert res["status"] == "queued"
-    assert res["state"] == "queued"
-    assert res["job_id"].startswith("job_wf_")
+    assert res["status"] == "approval_required"
+    assert res["state"] == "waiting_for_user"
+    assert res["approval_stage"] == "creative_brief"
     assert res["project_id"].startswith("vfp_")
-
-    worker = CanonicalJobWorker(str(db_path), str(workspace))
-    executed = worker.run_once()
-    assert executed is not None
-    assert executed["state"] == "completed"
-    assert executed["result"]["status"] == "completed"
-    assert Path(executed["result"]["output_path"]).is_file()
+    assert "job_id" not in res
 
 
-def test_product_to_video_tool_non_blocking_dispatch(monkeypatch, tmp_path: Path):
+def test_agent_tool_async_flag_cannot_bypass_user_approval(monkeypatch, tmp_path: Path):
     data_root, pi_root, db_path, workspace, lock = _setup_test_environment(monkeypatch, tmp_path)
 
     raw_output = _handle_product_to_video(
@@ -91,12 +84,13 @@ def test_product_to_video_tool_non_blocking_dispatch(monkeypatch, tmp_path: Path
     )
 
     parsed = json.loads(raw_output)
-    assert parsed["status"] == "queued"
-    assert parsed["job_id"].startswith("job_wf_")
+    assert parsed["status"] == "approval_required"
+    assert parsed["approval_stage"] == "creative_brief"
     assert parsed["project_id"].startswith("vfp_")
+    assert "job_id" not in parsed
 
 
-def test_api_workflow_dispatch_and_progress_endpoint(monkeypatch, tmp_path: Path):
+def test_api_workflow_dispatch_stops_at_approval_and_reports_progress(monkeypatch, tmp_path: Path):
     data_root, pi_root, db_path, workspace, lock = _setup_test_environment(monkeypatch, tmp_path)
     from hermes.channels.api.app import app
 
@@ -118,8 +112,8 @@ def test_api_workflow_dispatch_and_progress_endpoint(monkeypatch, tmp_path: Path
     )
     assert dispatch_res.status_code == 200, dispatch_res.text
     body = dispatch_res.json()
-    assert body["status"] == "queued"
-    job_id = body["job_id"]
+    assert body["status"] == "approval_required"
+    assert body["approval_stage"] == "creative_brief"
     project_id = body["project_id"]
 
     # 2. Check initial project progress
@@ -127,30 +121,6 @@ def test_api_workflow_dispatch_and_progress_endpoint(monkeypatch, tmp_path: Path
     assert progress_res.status_code == 200
     prog = progress_res.json()["stages"]
     assert prog["resource_pack"]["status"] == "completed"
-
-    # 3. Check job status via /api/jobs/{job_id}
-    job_check = client.get(f"/api/jobs/{job_id}")
-    assert job_check.status_code == 200
-    assert job_check.json()["status"] == "QUEUED"
-
-    # 4. Worker executes the dispatched job
-    worker = CanonicalJobWorker(str(db_path), str(workspace))
-    worker.run_once()
-
-    # 5. Check completed job status
-    job_check_after = client.get(f"/api/jobs/{job_id}")
-    assert job_check_after.status_code == 200
-    assert job_check_after.json()["status"] == "SUCCEEDED"
-
-    # 6. Check final progress breakdown
-    final_prog_res = client.get(f"/api/vf/projects/{project_id}/progress")
-    assert final_prog_res.status_code == 200
-    final_prog = final_prog_res.json()["stages"]
-    assert final_prog["resource_pack"]["status"] == "completed"
-    assert final_prog["brief"]["status"] == "completed"
-    assert final_prog["scene_plan"]["status"] == "completed"
-    assert final_prog["storyboard"]["status"] == "approved"
-    assert final_prog["tts_voiceover"]["status"] == "completed"
-    assert final_prog["video_scenes"]["status"] == "completed"
-    assert final_prog["timeline_render"]["status"] == "completed"
-    assert final_prog["final_export"]["status"] == "completed"
+    assert prog["brief"]["approval_status"] == "pending"
+    assert prog["scene_plan"]["status"] == "pending"
+    assert "job_id" not in body

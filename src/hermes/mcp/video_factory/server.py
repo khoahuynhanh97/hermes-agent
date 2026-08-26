@@ -636,7 +636,8 @@ def _primitive(value):
     return value
 
 
-# Canonical public tool surface (17 tools)
+# Canonical model-facing tool surface. Approval mutations are intentionally
+# excluded: only authenticated operator channels may cross review boundaries.
 CANONICAL_PUBLIC_TOOLS = (
     video_project_create,
     video_project_get,
@@ -647,10 +648,8 @@ CANONICAL_PUBLIC_TOOLS = (
     raw_idea_save,
     creative_brief_save,
     creative_brief_get,
-    creative_brief_approve,
     scene_plan_save,
     scene_plan_get,
-    scene_plan_approve,
     storyboard_generate,
     timeline_get,
     export_submit,

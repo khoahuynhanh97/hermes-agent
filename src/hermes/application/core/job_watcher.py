@@ -610,7 +610,8 @@ FIRST MALFORMED MODEL RESPONSE:
                         analysis_source = "video_only"
                         confidence = "high"
                 except Exception as e:
-                    logger.warning(f"  -> Gemini/local video analysis failed: {e}")
+                    err_str = str(e).encode('ascii', errors='replace').decode('ascii')
+                    logger.warning(f"  -> Gemini/local video analysis failed: {err_str}")
                     if transcript:
                         logger.info("  -> Fallback: Phân tích dựa trên Transcript bằng AI Chat...")
                         try:
@@ -621,7 +622,17 @@ FIRST MALFORMED MODEL RESPONSE:
                         except Exception as e2:
                             analysis_text = self._no_media_analysis(source_val, notes, f"Phan tich clip & transcript that bai: {e}, {e2}")
                     else:
-                        analysis_text = self._no_media_analysis(source_val, notes, f"Phan tich file that bai: {e}")
+                        logger.info("  -> Fallback: Phân tích dựa trên Video Metadata & Title qua AI Chat...")
+                        try:
+                            video_name = media_path.name if media_path else ""
+                            analysis_prompt = f"Phân tích nội dung TikTok từ tiêu đề/metadata sau:\nVideo Title/File: {video_name}\nURL: {source_val}\nGhi chú: {notes}\n\nHãy tổng hợp các công cụ, bài học, khái niệm và cách áp dụng vào Hermes."
+                            analysis_text = ai_chat(analysis_prompt, task_type="analysis")
+                            analysis_is_source_bound = True
+                            analysis_source = "metadata_only"
+                            confidence = "medium"
+                        except Exception as e2:
+                            err2 = str(e2).encode('ascii', errors='replace').decode('ascii')
+                            analysis_text = self._no_media_analysis(source_val, notes, f"Phan tich file & metadata that bai: {err_str}, {err2}")
             else:
                 if transcript or source_metadata:
                     logger.info("  -> Không tải được video, thực hiện phân tích bằng Transcript...")

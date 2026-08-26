@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 
 class TelegramTextLearningTests(unittest.TestCase):
     def test_learn_alias_always_selects_knowledge_mode(self) -> None:
-        import telegram_bot
+        from hermes.channels.gateway.platforms.telegram import bot as telegram_bot
 
         update = SimpleNamespace(message=SimpleNamespace(text="/learn repository maps"))
         context = SimpleNamespace(args=["repository", "maps"])
@@ -20,9 +20,10 @@ class TelegramTextLearningTests(unittest.TestCase):
         self.assertEqual(create.await_args.kwargs["mode"], telegram_bot.MODE_LEARN_KNOWLEDGE)
 
     def test_plain_text_source_is_written_to_local_data_directory(self) -> None:
-        import telegram_bot
+        from hermes.channels.gateway.platforms.telegram import bot as telegram_bot
 
-        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+        Path(".tmp").mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=".tmp") as temp_dir, patch.dict(
             os.environ, {"HERMES_DATA_DIR": temp_dir}
         ):
             path, metadata = telegram_bot.save_text_learning_source(
@@ -34,8 +35,8 @@ class TelegramTextLearningTests(unittest.TestCase):
             self.assertEqual(path.read_text(encoding="utf-8"), "Repository maps reduce repeated context.")
             self.assertTrue(metadata["sha256"])
 
-    def test_natural_learning_request_routes_to_learning_job(self) -> None:
-        import telegram_bot
+    def test_natural_learning_request_routes_to_orchestrator(self) -> None:
+        from hermes.channels.gateway.platforms.telegram import bot as telegram_bot
 
         message = SimpleNamespace(
             text="Hãy học kiến thức này: Repository maps reduce token use",
@@ -46,14 +47,18 @@ class TelegramTextLearningTests(unittest.TestCase):
             effective_user=SimpleNamespace(id=42),
             effective_chat=SimpleNamespace(id=42),
         )
-        with patch.object(telegram_bot, "create_video_job_command", new=AsyncMock()) as create, patch.object(
-            telegram_bot, "ask_gemini", side_effect=AssertionError("LLM must not be called")
-        ):
+        with patch.object(
+            telegram_bot,
+            "run_orchestrator_turn",
+            new=AsyncMock(return_value="proposal created"),
+        ) as run_turn, patch.object(telegram_bot, "send_response", new=AsyncMock()):
             asyncio.run(telegram_bot.default_chat_handler(update, SimpleNamespace(args=[])))
-        self.assertEqual(create.await_args.kwargs["mode"], telegram_bot.MODE_LEARN_KNOWLEDGE)
+        run_turn.assert_awaited_once_with(update, message.text)
 
     def test_primary_commands_are_registered(self) -> None:
-        source = Path("telegram_bot.py").read_text(encoding="utf-8")
+        from hermes.channels.gateway.platforms.telegram import bot as telegram_bot
+
+        source = Path(telegram_bot.__file__).read_text(encoding="utf-8")
         for command in (
             "remember", "approve_memory", "reject_memory",
             "approve_source", "re_analysis", "settings",

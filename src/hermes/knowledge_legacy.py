@@ -596,7 +596,7 @@ class SQLiteKnowledgeStore:
                     """
                     SELECT lesson_id, bm25(lesson_fts) AS rank
                     FROM lesson_fts
-                    WHERE lesson_fts MATCH ? AND owner_user_id = ? AND is_current = 1
+                    WHERE lesson_fts MATCH ? AND owner_user_id = ?
                     ORDER BY rank LIMIT ?
                     """,
                     (match, owner, max(1, max_entries)),

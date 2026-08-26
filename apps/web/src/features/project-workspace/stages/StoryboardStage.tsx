@@ -13,7 +13,7 @@ import {
   Loader2,
 } from 'lucide-react'
 import { VideoFactoryProject, StoryboardFrame } from '../../../types/videoFactory'
-import { useGenerateStoryboard } from '../../../hooks/useVideoFactory'
+import { useApproveStoryboard, useGenerateStoryboard } from '../../../hooks/useVideoFactory'
 import { api } from '../../../lib/api'
 import { Badge, BadgeVariant } from '../../../components/common/Badge'
 import { Button } from '../../../components/common/Button'
@@ -41,10 +41,13 @@ export const StoryboardStage: React.FC<StoryboardStageProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [pendingUploadFrameId, setPendingUploadFrameId] = useState<string | null>(null)
   const generateMutation = useGenerateStoryboard()
+  const approveMutation = useApproveStoryboard()
 
   const isSceneApproved = project.scene_plan_approval === 'approved'
   const storyboard = project.storyboard
   const frames = storyboard?.frames || []
+  const isStoryboardApproved = storyboard?.approval_status === 'approved'
+  const canApproveStoryboard = frames.length > 0 && frames.every(frame => frame.generation_status === 'completed')
   const productAssets = project.resource_pack?.product_references || []
 
   const handleGenerateFrames = async () => {
@@ -113,6 +116,16 @@ export const StoryboardStage: React.FC<StoryboardStageProps> = ({
       setNotice({ text: err.message || 'Failed to regenerate all frames', ok: false })
     } finally {
       setBulkRegenerating(false)
+    }
+  }
+
+  const handleApproveStoryboard = async () => {
+    setNotice(null)
+    try {
+      await approveMutation.mutateAsync(project.id)
+      setNotice({ text: 'Storyboard approved. Scene video generation can continue.', ok: true })
+    } catch (err: any) {
+      setNotice({ text: err.message || 'Failed to approve storyboard', ok: false })
     }
   }
 
@@ -192,6 +205,16 @@ export const StoryboardStage: React.FC<StoryboardStageProps> = ({
           <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
             {frames.filter(f => f.generation_status === 'completed').length} / {frames.length} completed
           </span>
+          <Button
+            variant="success"
+            size="sm"
+            icon={<CheckCircle2 size={13} />}
+            disabled={!canApproveStoryboard || isStoryboardApproved || approveMutation.isPending}
+            loading={approveMutation.isPending}
+            onClick={handleApproveStoryboard}
+          >
+            {isStoryboardApproved ? 'Storyboard Approved' : 'Approve Storyboard'}
+          </Button>
         </div>
       )}
 

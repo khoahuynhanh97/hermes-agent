@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -84,6 +85,121 @@ def test_workflow_orchestrator_creates_bound_project_and_journal(monkeypatch, tm
     assert result["snapshot_id"] == lock["snapshot_id"]
     assert orchestrator.get_project_status("user", "proj_orchestrated")["state"] == "resource_ready"
     assert orchestrator.journal.get_entry(result["run_id"]).project_id == "proj_orchestrated"
+
+
+def test_user_governed_workflow_stops_at_creative_brief_approval(monkeypatch, tmp_path):
+    pi_root, lock = _configure_runtime(monkeypatch, tmp_path)
+    from hermes.application.workflow import WorkflowOrchestrator
+
+    orchestrator = WorkflowOrchestrator(tmp_path / "workflow.sqlite", pi_data_root=pi_root)
+    result = orchestrator.run_product_to_video_workflow(
+        owner_user_id="user",
+        prompt="Create a TikTok review for Test Product",
+        product_query=lock["canonical_product_id"],
+        approval_policy="require_user",
+    )
+
+    project = orchestrator.vf_service.get_project("user", result["project_id"])
+    assert result["status"] == "approval_required"
+    assert result["approval_stage"] == "creative_brief"
+    assert result["approve_tool"] == "creative_brief_approve"
+    assert result["approval_command"] == f"/vf_approve {result['project_id']} creative_brief"
+    assert project.creative_brief is not None
+    assert project.brief_approval == "pending"
+    assert project.scene_plan is None
+
+
+def test_user_governed_workflow_resumes_through_review_checkpoints(monkeypatch, tmp_path):
+    pi_root, lock = _configure_runtime(monkeypatch, tmp_path)
+    from hermes.application.workflow import WorkflowOrchestrator
+
+    monkeypatch.setattr(
+        "hermes.application.workflow.render_beat_keyframe",
+        lambda output_path, **_: Path(output_path).write_bytes(b"generated-frame"),
+    )
+    orchestrator = WorkflowOrchestrator(tmp_path / "workflow.sqlite", pi_data_root=pi_root)
+    orchestrator.worker.run_once = lambda: None
+    common = {
+        "owner_user_id": "user",
+        "prompt": "Create a TikTok review for Test Product",
+        "product_query": lock["canonical_product_id"],
+        "approval_policy": "require_user",
+    }
+
+    brief = orchestrator.run_product_to_video_workflow(**common)
+    resume = {
+        "owner_user_id": "user",
+        "prompt": "continue",
+        "approval_policy": "require_user",
+        "project_id": brief["project_id"],
+        "run_id": brief["run_id"],
+    }
+    orchestrator.vf_service.approve_creative_brief("user", brief["project_id"])
+    scenes = orchestrator.run_product_to_video_workflow(**resume)
+    assert scenes["approval_stage"] == "scene_plan"
+    scene_project = orchestrator.vf_service.get_project("user", brief["project_id"])
+    assert all("continue" not in scene.content.lower() for scene in scene_project.scene_plan.scenes)
+    assert "Test Product" in scene_project.scene_plan.scenes[0].content
+
+    orchestrator.vf_service.approve_scene_plan("user", brief["project_id"])
+    storyboard = orchestrator.run_product_to_video_workflow(**resume)
+    project = orchestrator.vf_service.get_project("user", brief["project_id"])
+
+    assert storyboard["approval_stage"] == "storyboard"
+    assert storyboard["approve_tool"] == "storyboard_approve"
+    assert project.storyboard is not None
+    assert project.storyboard.approval_status.value == "pending"
+    assert project.generated_scenes == ()
+
+
+def test_existing_draft_waits_for_final_approval_then_exports_without_regeneration(monkeypatch, tmp_path):
+    pi_root, lock = _configure_runtime(monkeypatch, tmp_path)
+    from hermes.application.workflow import WorkflowOrchestrator
+
+    orchestrator = WorkflowOrchestrator(tmp_path / "workflow.sqlite", pi_data_root=pi_root)
+    created = orchestrator.create_video_project("user", "proj_final_gate", lock["canonical_product_id"])
+    draft_path = tmp_path / "draft.mp4"
+    draft_path.write_bytes(b"draft-video")
+    draft_asset_id = "draft_asset_final_gate"
+    orchestrator.asset_repository.save_asset({
+        "asset_id": draft_asset_id,
+        "owner_user_id": "user",
+        "project_id": created["project_id"],
+        "scene_id": "draft_video",
+        "job_id": "job_draft",
+        "provider": "fake",
+        "resource_lock_id": lock["lock_id"],
+        "output_path": str(draft_path),
+    })
+    project = orchestrator.vf_service.get_project("user", created["project_id"])
+    orchestrator.repo.save(replace(project, draft_video_asset_id=draft_asset_id))
+
+    pending = orchestrator.run_product_to_video_workflow(
+        owner_user_id="user",
+        prompt="Create video for Test Product",
+        product_query=lock["canonical_product_id"],
+        project_id=created["project_id"],
+        run_id=created["run_id"],
+        approval_policy="require_user",
+    )
+    assert pending["approval_stage"] == "final_video"
+
+    orchestrator.vf_service.approve_final_video("user", created["project_id"])
+    monkeypatch.setattr(
+        orchestrator,
+        "_export_approved_draft",
+        lambda **kwargs: {"status": "ok", "draft_mp4_path": kwargs["draft_mp4_path"]},
+    )
+    completed = orchestrator.run_product_to_video_workflow(
+        owner_user_id="user",
+        prompt="Create video for Test Product",
+        product_query=lock["canonical_product_id"],
+        project_id=created["project_id"],
+        run_id=created["run_id"],
+        approval_policy="require_user",
+    )
+
+    assert completed == {"status": "ok", "draft_mp4_path": str(draft_path)}
 
 
 def test_acceptance_fixture_ids_are_not_embedded_in_production_workflow():

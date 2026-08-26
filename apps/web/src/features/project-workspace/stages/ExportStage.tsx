@@ -15,7 +15,7 @@ import {
   ExternalLink,
 } from 'lucide-react'
 import { VideoFactoryProject, Publication } from '../../../types/videoFactory'
-import { useExportFinalVideo, useGenerateABVariants, useABVariants, useSelectVariant, usePublicationHistory } from '../../../hooks/useVideoFactory'
+import { useApproveFinalVideo, useExportFinalVideo, useGenerateABVariants, useABVariants, useSelectVariant, usePublicationHistory } from '../../../hooks/useVideoFactory'
 import { api } from '../../../lib/api'
 import { Badge } from '../../../components/common/Badge'
 import { Button } from '../../../components/common/Button'
@@ -58,8 +58,9 @@ export const ExportStage: React.FC<ExportStageProps> = ({
   const [platform, setPlatform] = useState<PlatformPreset>(null)
   const draftAssetId = project.draft_video_asset_id
   const finalAssetId = project.final_video_asset_id
+  const isFinalApproved = project.final_approval === 'approved'
   const isReadyToPublish = project.status === 'ready_to_publish' || Boolean(finalAssetId)
-  const canExport = Boolean(draftAssetId) || Boolean(finalAssetId)
+  const canExport = isFinalApproved && (Boolean(draftAssetId) || Boolean(finalAssetId))
 
   const [exporting, setExporting] = useState(false)
   const [exportStageIndex, setExportStageIndex] = useState(0)
@@ -71,6 +72,7 @@ export const ExportStage: React.FC<ExportStageProps> = ({
   const [showComplianceDetails, setShowComplianceDetails] = useState(false)
   const exportTimerRef = useRef<number | null>(null)
   const exportMutation = useExportFinalVideo()
+  const approveFinalMutation = useApproveFinalVideo()
   const generateABMutation = useGenerateABVariants()
   const abVariantsQuery = useABVariants(project.id)
   const abVariants = abVariantsQuery.data?.data?.variants || []
@@ -126,6 +128,16 @@ export const ExportStage: React.FC<ExportStageProps> = ({
       setNotice({ text: err.message || 'Failed to export final video', ok: false })
       setExporting(false)
       if (exportTimerRef.current) clearInterval(exportTimerRef.current)
+    }
+  }
+
+  const handleApproveFinal = async () => {
+    setNotice(null)
+    try {
+      await approveFinalMutation.mutateAsync(project.id)
+      setNotice({ text: 'Final draft approved. Export is now available.', ok: true })
+    } catch (err: any) {
+      setNotice({ text: err.message || 'Failed to approve final draft', ok: false })
     }
   }
 
@@ -635,6 +647,19 @@ export const ExportStage: React.FC<ExportStageProps> = ({
             <p style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
               Produce the high-bitrate master MP4 container ready for campaign deployment or social network publishing.
             </p>
+
+            <Button
+              variant="outline"
+              size="lg"
+              icon={<CheckCircle2 size={16} />}
+              disabled={!draftAssetId || isFinalApproved || approveFinalMutation.isPending}
+              loading={approveFinalMutation.isPending}
+              onClick={handleApproveFinal}
+              title="Approve the reviewed draft before export"
+              style={{ width: '100%' }}
+            >
+              {isFinalApproved ? 'Final Draft Approved' : 'Approve Final Draft'}
+            </Button>
 
             <Button
               variant="success"

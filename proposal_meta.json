@@ -1,0 +1,9 @@
+{
+  "validation_status": "needs_source",
+  "analysis_source": "metadata_only",
+  "video_downloaded": false,
+  "confidence": "low",
+  "recovery_available": false,
+  "raw_analysis": "Thiếu nội dung video. Cung cấp transcript hoặc file video để phân tích.\n\n1. Chủ đề: Trống.\n2. Công cụ: Trống.\n3. Vai trò: Trống.\n4. Quy trình: Trống.\n5. Input/Output: Trống.\n6. Lưu ý: Thiếu dữ liệu đầu vào.\n7. Ứng dụng: Trống.\n\nGửi dữ liệu để bắt đầu.",
+  "source_url": ""
+}

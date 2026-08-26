@@ -40,8 +40,8 @@ _HERMES_CORE_TOOLS = [
     "read_terminal", "close_terminal", "open_preview", "read_preview", "focus_pane", "react_to_message",
     # File manipulation
     "read_file", "write_file", "patch", "search_files",
-    # Vision + image generation
-    "vision_analyze", "image_generate", "product_to_video",
+    # Vision + image generation + Product Intelligence
+    "vision_analyze", "image_generate", "product_to_video", "product_scout",
     # BFL FLUX 3 video generation
     "bfl_flux3_text_to_video", "bfl_flux3_image_to_video",
     "bfl_flux3_keyframes_to_video", "bfl_flux3_video_continuation",

@@ -28,7 +28,8 @@ from hermes.domain.video_factory import (
     AssetReference, ResourcePack, CreativeBrief, ScenePlan, Scene,
     Storyboard, StoryboardFrame, FramePrompt, FrameGenerationStatus,
     GeneratedScene, VideoPrompt, VideoGenerationStatus, Timeline,
-    TimelineClip, TimelineStatus, ProjectStatus, HookVariant, ABVariantSet,
+    TimelineClip, TimelineStatus, ProjectStatus, StoryboardApprovalStatus,
+    FinalApprovalStatus, HookVariant, ABVariantSet,
     new_id,
 )
 
@@ -163,6 +164,120 @@ class WorkflowOrchestrator:
             "final_video_asset_id": project.final_video_asset_id,
         }
 
+    @staticmethod
+    def _approval_required(
+        *,
+        project_id: str,
+        run_id: str,
+        stage: str,
+        approve_tool: str,
+        artifact: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        approval_command = f"/vf_approve {project_id} {stage}"
+        return {
+            "status": "approval_required",
+            "state": "waiting_for_user",
+            "project_id": project_id,
+            "run_id": run_id,
+            "approval_stage": stage,
+            "approve_tool": approve_tool,
+            "approval_command": approval_command,
+            "artifact": artifact,
+            "message": (
+                f"Review {stage} and approve or request revision before Hermes continues. "
+                f"Telegram approval command: {approval_command}"
+            ),
+            "project_url": f"/api/vf/projects/{project_id}",
+        }
+
+    def _export_approved_draft(
+        self,
+        *,
+        owner_user_id: str,
+        project_id: str,
+        run_id: str,
+        canonical_product_id: str,
+        lock_id: str,
+        lock: Dict[str, Any],
+        draft_mp4_path: str,
+        voiceover_text: str,
+    ) -> Dict[str, Any]:
+        project = self.vf_service.get_project(owner_user_id, project_id)
+        if project.final_approval != FinalApprovalStatus.APPROVED:
+            raise ValueError("FINAL_APPROVAL_REQUIRED")
+
+        exports_dir = get_workspaces_dir() / project_id / "exports"
+        exports_dir.mkdir(parents=True, exist_ok=True)
+        final_mp4_path = str(exports_dir / "final_video.mp4")
+        final_asset_id = project.final_video_asset_id or f"gen_final_{project_id}"
+
+        if project.final_video_asset_id:
+            existing = self.asset_repository.get_by_asset_id(project.final_video_asset_id)
+            if existing and Path(str(existing.get("output_path") or "")).is_file():
+                final_mp4_path = str(existing["output_path"])
+        else:
+            export_payload = {
+                "project_id": project_id,
+                "input_path": draft_mp4_path,
+                "output_path": final_mp4_path,
+            }
+            export_job_id = f"job_export_{uuid4().hex[:8]}"
+            self.worker.repository.enqueue(export_job_id, owner_user_id, "export", export_payload)
+            self.worker.run_once()
+            if not Path(final_mp4_path).is_file():
+                shutil.copy2(draft_mp4_path, final_mp4_path)
+
+            self.asset_repository.save_asset({
+                "asset_id": final_asset_id,
+                "owner_user_id": owner_user_id,
+                "project_id": project_id,
+                "scene_id": "final_export",
+                "job_id": export_job_id,
+                "provider": "ffmpeg",
+                "resource_lock_id": lock_id,
+                "output_path": final_mp4_path,
+            })
+            self.vf_service.save_final_export(owner_user_id, project_id, final_asset_id)
+
+        from hermes.compliance.gateway import ComplianceGateway
+
+        compliance_result = ComplianceGateway().run_full_check(
+            project_id=project_id,
+            video_path=final_mp4_path,
+            voiceover_text=voiceover_text,
+            caption_text=voiceover_text,
+            resource_pack=lock,
+        )
+        summary = "All compliance checks passed"
+        if not compliance_result["passed"]:
+            summary = f"Compliance warnings: {compliance_result['issues']}"
+            logger.warning("Compliance warnings for %s: %s", project_id, compliance_result["issues"])
+        self.update_acceptance_run_step(run_id, "compliance_check", RunStatus.COMPLETED, summary)
+
+        media_specs = self.ffmpeg.probe_media_file(final_mp4_path)
+        if not media_specs.get("is_valid"):
+            raise ValueError(f"FINAL_EXPORT_INVALID: {media_specs}")
+        self.update_acceptance_run_step(
+            run_id,
+            "final_export",
+            RunStatus.COMPLETED,
+            f"Final MP4 verified & exported to {final_mp4_path}",
+        )
+        self.complete_acceptance_run(run_id, RunStatus.COMPLETED)
+        return {
+            "status": "ok",
+            "project_id": project_id,
+            "run_id": run_id,
+            "product_id": canonical_product_id,
+            "resource_pack_lock_id": lock_id,
+            "final_asset_id": final_asset_id,
+            "final_mp4_path": final_mp4_path,
+            "ui_url": f"http://localhost:3000/projects/{project_id}/workflow/export",
+            "content_url": f"/api/assets/{final_asset_id}/content",
+            "video_specs": media_specs,
+            "compliance": compliance_result,
+        }
+
     def resolve_product_lock(self, owner_user_id: str, product_query: str) -> Dict[str, Any]:
         """Resolve authentic Product Intelligence ResourcePackLock."""
         lock = self.asset_projection.find_resource_pack_lock(owner_user_id, product_query)
@@ -236,52 +351,21 @@ class WorkflowOrchestrator:
         platform: str = "TikTok",
         language: str = "Vietnamese",
     ) -> Dict[str, Any]:
-        """Asynchronously dispatch end-to-end Product-to-Video Workflow into CanonicalJobWorker."""
-        target_product_name = _extract_product_name(prompt, product_query, owner_user_id)
+        """Start the workflow and stop at the first operator approval boundary.
 
-        # 1. Resolve or construct Product Resource Lock & Project
-        project_id = f"vfp_{int(time.time())}_{uuid4().hex[:6]}"
-        proj_meta = self.create_video_project(owner_user_id, project_id, target_product_name)
-        lock = proj_meta["lock"]
-        run_id = proj_meta["run_id"]
-        canonical_product_id = proj_meta["product_id"]
-        lock_id = proj_meta["resource_pack_lock_id"]
-        snapshot_id = proj_meta["snapshot_id"]
-
-        self.update_acceptance_run_step(run_id, "resolve_product_lock", RunStatus.COMPLETED, f"Locked {target_product_name} via {lock_id}")
-        self.update_acceptance_run_step(run_id, "create_project", RunStatus.COMPLETED, f"Created project {project_id}")
-
-        job_id = f"job_wf_{uuid4().hex[:8]}"
-        payload = {
-            "project_id": project_id,
-            "run_id": run_id,
-            "owner_user_id": owner_user_id,
-            "prompt": prompt,
-            "product_query": target_product_name,
-            "duration_seconds": duration_seconds,
-            "platform": platform,
-            "language": language,
-            "resource_lock_id": lock_id,
-            "canonical_product_id": canonical_product_id,
-            "snapshot_id": snapshot_id,
-        }
-
-        self.worker.repository.enqueue(job_id, owner_user_id, "product_to_video_workflow", payload)
-        self.update_acceptance_run_step(run_id, "job_dispatch", RunStatus.IN_PROGRESS, f"Workflow job {job_id} queued in CanonicalJobWorker")
-
-        return {
-            "status": "queued",
-            "job_id": job_id,
-            "project_id": project_id,
-            "run_id": run_id,
-            "product_id": canonical_product_id,
-            "resource_pack_lock_id": lock_id,
-            "state": "queued",
-            "message": f"Product-to-video workflow queued with job_id {job_id}",
-            "job_url": f"/api/jobs/{job_id}",
-            "project_url": f"/api/vf/projects/{project_id}",
-            "progress_url": f"/api/vf/projects/{project_id}/progress",
-        }
+        The legacy implementation queued the entire workflow, allowing a worker
+        to cross approval stages without a user turn. Keep this entry point for
+        API compatibility, but enforce the same governed contract as Hermes.
+        """
+        return self.run_product_to_video_workflow(
+            owner_user_id=owner_user_id,
+            prompt=prompt,
+            product_query=product_query,
+            duration_seconds=duration_seconds,
+            platform=platform,
+            language=language,
+            approval_policy="require_user",
+        )
 
     def run_product_to_video_workflow(
         self,
@@ -294,8 +378,11 @@ class WorkflowOrchestrator:
         project_id: str | None = None,
         run_id: str | None = None,
         async_dispatch: bool = False,
+        approval_policy: str = "require_user",
     ) -> Dict[str, Any]:
         """Execute end-to-end 14-step Product-to-Video Workflow with durable job processing and output probe validation."""
+        if approval_policy not in {"legacy_auto", "require_user"}:
+            raise ValueError("approval_policy must be 'legacy_auto' or 'require_user'")
         if async_dispatch:
             return self.dispatch_product_to_video_workflow(
                 owner_user_id=owner_user_id,
@@ -315,7 +402,13 @@ class WorkflowOrchestrator:
             except ValueError:
                 project = None
             if project and project.resource_pack:
-                lock = self.resolve_product_lock(owner_user_id, target_product_name)
+                # Resume from the immutable lock already bound to the project;
+                # the follow-up user message may only say "continue".
+                lock = self.resolve_product_lock(owner_user_id, project.resource_pack.id)
+                target_product_name = str(
+                    lock.get("product_name")
+                    or project.resource_pack.product_identity_description
+                )
                 canonical_product_id = project.resource_pack.product_identity_description
                 lock_id = project.resource_pack.id
                 snapshot_id = lock.get("snapshot_id", "")
@@ -347,6 +440,38 @@ class WorkflowOrchestrator:
         generated_dir.mkdir(parents=True, exist_ok=True)
         exports_dir.mkdir(parents=True, exist_ok=True)
 
+        project = self.vf_service.get_project(owner_user_id, project_id)
+        if project.draft_video_asset_id:
+            draft_asset = self.asset_repository.get_by_asset_id(project.draft_video_asset_id)
+            draft_mp4_path = str((draft_asset or {}).get("output_path") or "")
+            if not draft_mp4_path or not Path(draft_mp4_path).is_file():
+                raise ValueError("DRAFT_VIDEO_ASSET_NOT_FOUND")
+            if project.final_approval != FinalApprovalStatus.APPROVED:
+                return self._approval_required(
+                    project_id=project_id,
+                    run_id=run_id,
+                    stage="final_video",
+                    approve_tool="final_approve",
+                    artifact={
+                        "draft_asset_id": project.draft_video_asset_id,
+                        "content_url": f"/api/assets/{project.draft_video_asset_id}/content",
+                    },
+                )
+            voiceover_text = (
+                f"Bạn đang tìm {target_product_name} với hiệu năng nổi bật và giá trị sử dụng tốt? "
+                "Khám phá ngay hôm nay!"
+            )
+            return self._export_approved_draft(
+                owner_user_id=owner_user_id,
+                project_id=project_id,
+                run_id=run_id,
+                canonical_product_id=canonical_product_id,
+                lock_id=lock_id,
+                lock=lock,
+                draft_mp4_path=draft_mp4_path,
+                voiceover_text=voiceover_text,
+            )
+
         # 2. Creative Brief Generation & Approval
         brief = CreativeBrief(
             objective=f"High-converting {platform} review video for {target_product_name} showcasing key features and value",
@@ -360,8 +485,31 @@ class WorkflowOrchestrator:
             aspect_ratio="9:16",
             target_duration_seconds=duration_seconds,
         )
-        self.vf_service.save_creative_brief(owner_user_id, project_id, brief)
-        self.vf_service.approve_creative_brief(owner_user_id, project_id)
+        project = self.vf_service.get_project(owner_user_id, project_id)
+        if project.creative_brief is None:
+            project = self.vf_service.save_creative_brief(owner_user_id, project_id, brief)
+        if project.brief_approval != "approved" and approval_policy == "require_user":
+            self.update_acceptance_run_step(
+                run_id,
+                "brief_approval",
+                RunStatus.IN_PROGRESS,
+                "Awaiting explicit user approval for the creative brief",
+            )
+            return self._approval_required(
+                project_id=project_id,
+                run_id=run_id,
+                stage="creative_brief",
+                approve_tool="creative_brief_approve",
+                artifact={
+                    "objective": project.creative_brief.objective,
+                    "target_audience": project.creative_brief.target_audience,
+                    "core_message": project.creative_brief.core_message,
+                    "tone": project.creative_brief.tone,
+                    "cta": project.creative_brief.cta,
+                },
+            )
+        if project.brief_approval != "approved":
+            self.vf_service.approve_creative_brief(owner_user_id, project_id)
         self.update_acceptance_run_step(run_id, "brief_approval", RunStatus.COMPLETED, "Creative brief approved")
 
         # 3. Scene Plan Generation & Approval
@@ -411,86 +559,144 @@ class WorkflowOrchestrator:
                 duration_seconds=8,
             ),
         )
-        plan = ScenePlan(scenes=scenes)
-        self.vf_service.save_scene_plan(owner_user_id, project_id, plan)
-        self.vf_service.approve_scene_plan(owner_user_id, project_id)
+        project = self.vf_service.get_project(owner_user_id, project_id)
+        if project.scene_plan is None:
+            project = self.vf_service.save_scene_plan(owner_user_id, project_id, ScenePlan(scenes=scenes))
+        else:
+            scenes = project.scene_plan.scenes
+        if project.scene_plan_approval != "approved" and approval_policy == "require_user":
+            self.update_acceptance_run_step(
+                run_id,
+                "scene_plan_approval",
+                RunStatus.IN_PROGRESS,
+                "Awaiting explicit user approval for the scene plan",
+            )
+            return self._approval_required(
+                project_id=project_id,
+                run_id=run_id,
+                stage="scene_plan",
+                approve_tool="scene_plan_approve",
+                artifact={
+                    "scenes": [
+                        {
+                            "scene_id": scene.scene_id,
+                            "title": scene.title,
+                            "objective": scene.objective,
+                            "duration_seconds": scene.duration_seconds,
+                        }
+                        for scene in scenes
+                    ]
+                },
+            )
+        if project.scene_plan_approval != "approved":
+            self.vf_service.approve_scene_plan(owner_user_id, project_id)
         self.update_acceptance_run_step(run_id, "scene_plan_approval", RunStatus.COMPLETED, "4-beat scene plan approved")
 
-        # 4. Storyboard & Keyframe Generation using 4 Authentic Product Photos from ResourcePackLock
-        ref_asset_ids = [str(ref.get("asset_id")) for ref in lock.get("assets", []) if ref.get("asset_id")]
-        ref_asset_paths = [str(ref.get("local_path") or ref.get("uri") or "") for ref in lock.get("assets", []) if (ref.get("local_path") or ref.get("uri"))]
+        # 4. Storyboard & Keyframe Generation using authentic Product Intelligence assets
+        project = self.vf_service.get_project(owner_user_id, project_id)
+        storyboard = project.storyboard
+        if storyboard is None:
+            ref_asset_ids = [str(ref.get("asset_id")) for ref in lock.get("assets", []) if ref.get("asset_id")]
+            ref_asset_paths = [str(ref.get("local_path") or ref.get("uri") or "") for ref in lock.get("assets", []) if (ref.get("local_path") or ref.get("uri"))]
+            frames = []
+            for i, scene in enumerate(scenes):
+                frame_id = f"frame_{i+1}"
+                kf_img_path = str(generated_dir / f"keyframe_beat_{i+1}.png")
+                photo_path = ref_asset_paths[i % len(ref_asset_paths)] if ref_asset_paths and Path(ref_asset_paths[i % len(ref_asset_paths)]).is_file() else None
 
-        frames = []
-        for i, scene in enumerate(scenes):
-            frame_id = f"frame_{i+1}"
-            kf_img_path = str(generated_dir / f"keyframe_beat_{i+1}.png")
-            photo_path = ref_asset_paths[i % len(ref_asset_paths)] if ref_asset_paths and Path(ref_asset_paths[i % len(ref_asset_paths)]).is_file() else None
+                render_beat_keyframe(
+                    output_path=kf_img_path,
+                    beat_index=i + 1,
+                    title=scene.title,
+                    subtitle=scene.main_action,
+                    product_name=target_product_name,
+                    product_ref_image_path=photo_path,
+                    width=720,
+                    height=1280,
+                )
 
-            render_beat_keyframe(
-                output_path=kf_img_path,
-                beat_index=i + 1,
-                title=scene.title,
-                subtitle=scene.main_action,
-                product_name=target_product_name,
-                product_ref_image_path=photo_path,
-                width=720,
-                height=1280,
+                job_payload = {
+                    "request_id": f"img_{project_id}_{frame_id}",
+                    "project_id": project_id,
+                    "scene_id": frame_id,
+                    "prompt": f"Studio shot of {target_product_name}, {scene.content}",
+                    "output_path": kf_img_path,
+                    "resource_lock_id": lock_id,
+                }
+                job_id = f"job_img_{uuid4().hex[:8]}"
+                self.worker.repository.enqueue(job_id, owner_user_id, "image_generate", job_payload)
+                self.worker.run_once()
+
+                kf_asset_id = f"asset_sb_{project_id}_{frame_id}"
+                self.asset_repository.save_asset({
+                    "asset_id": kf_asset_id,
+                    "project_id": project_id,
+                    "scene_id": frame_id,
+                    "job_id": job_id,
+                    "provider": "pillow",
+                    "resource_lock_id": lock_id,
+                    "output_path": kf_img_path,
+                })
+                prompt_obj = FramePrompt(
+                    positive_prompt=f"Studio shot of {target_product_name}, {scene.content}",
+                    negative_constraints="No text distortion, no low res",
+                    product_identity_constraints=target_product_name,
+                    action=scene.main_action,
+                    reference_asset_ids=tuple(ref_asset_ids),
+                    aspect_ratio="9:16",
+                )
+                frames.append(StoryboardFrame(
+                    frame_id=frame_id,
+                    scene_id=scene.scene_id,
+                    order=i + 1,
+                    label=scene.title,
+                    purpose=scene.objective,
+                    visual_state=scene.content,
+                    subject_action=scene.main_action,
+                    product_state=scene.content,
+                    character_state="",
+                    context=scene.context,
+                    camera_intention=scene.camera_intention,
+                    required_resource_ids=tuple(ref_asset_ids),
+                    prompt=prompt_obj,
+                    generation_status=FrameGenerationStatus.COMPLETED,
+                    generated_asset_id=kf_asset_id,
+                    generation_job_id=job_id,
+                ))
+
+            storyboard = Storyboard(storyboard_id=new_id("storyboard"), project_id=project_id, frames=tuple(frames))
+            project = self.vf_service.save_storyboard(owner_user_id, project_id, storyboard)
+            storyboard = project.storyboard
+            self.update_acceptance_run_step(run_id, "storyboard_keyframes", RunStatus.COMPLETED, "4 distinct keyframe beats generated")
+
+        if storyboard.approval_status != StoryboardApprovalStatus.APPROVED and approval_policy == "require_user":
+            self.update_acceptance_run_step(
+                run_id,
+                "storyboard_approval",
+                RunStatus.IN_PROGRESS,
+                "Awaiting explicit user approval for the storyboard",
             )
-
-            job_payload = {
-                "request_id": f"img_{project_id}_{frame_id}",
-                "project_id": project_id,
-                "scene_id": frame_id,
-                "prompt": f"Studio shot of {target_product_name}, {scene.content}",
-                "output_path": kf_img_path,
-                "resource_lock_id": lock_id,
-            }
-            job_id = f"job_img_{uuid4().hex[:8]}"
-            self.worker.repository.enqueue(job_id, owner_user_id, "image_generate", job_payload)
-            self.worker.run_once()
-
-            kf_asset_id = f"asset_sb_{project_id}_{frame_id}"
-            self.asset_repository.save_asset({
-                "asset_id": kf_asset_id,
-                "project_id": project_id,
-                "scene_id": frame_id,
-                "job_id": job_id,
-                "provider": "pillow",
-                "resource_lock_id": lock_id,
-                "output_path": kf_img_path,
-            })
-            prompt_obj = FramePrompt(
-                positive_prompt=f"Studio shot of {target_product_name}, {scene.content}",
-                negative_constraints="No text distortion, no low res",
-                product_identity_constraints=target_product_name,
-                action=scene.main_action,
-                reference_asset_ids=tuple(ref_asset_ids),
-                aspect_ratio="9:16",
+            return self._approval_required(
+                project_id=project_id,
+                run_id=run_id,
+                stage="storyboard",
+                approve_tool="storyboard_approve",
+                artifact={
+                    "storyboard_id": storyboard.storyboard_id,
+                    "frames": [
+                        {
+                            "frame_id": frame.frame_id,
+                            "scene_id": frame.scene_id,
+                            "label": frame.label,
+                            "generated_asset_id": frame.generated_asset_id,
+                        }
+                        for frame in storyboard.frames
+                    ],
+                },
             )
-            frame = StoryboardFrame(
-                frame_id=frame_id,
-                scene_id=scene.scene_id,
-                order=i + 1,
-                label=scene.title,
-                purpose=scene.objective,
-                visual_state=scene.content,
-                subject_action=scene.main_action,
-                product_state=scene.content,
-                character_state="",
-                context=scene.context,
-                camera_intention=scene.camera_intention,
-                required_resource_ids=tuple(ref_asset_ids),
-                prompt=prompt_obj,
-                generation_status=FrameGenerationStatus.COMPLETED,
-                generated_asset_id=kf_asset_id,
-                generation_job_id=job_id,
-            )
-            frames.append(frame)
-
-        storyboard = Storyboard(storyboard_id=new_id("storyboard"), project_id=project_id, frames=tuple(frames))
-        self.vf_service.save_storyboard(owner_user_id, project_id, storyboard)
-        self.vf_service.approve_storyboard(owner_user_id, project_id, "All keyframe beats approved")
-        self.update_acceptance_run_step(run_id, "storyboard_keyframes", RunStatus.COMPLETED, "4 distinct keyframe beats generated")
+        if storyboard.approval_status != StoryboardApprovalStatus.APPROVED:
+            self.vf_service.approve_storyboard(owner_user_id, project_id, "Legacy automated acceptance")
+        self.update_acceptance_run_step(run_id, "storyboard_approval", RunStatus.COMPLETED, "Storyboard approved")
 
         # 5. Video Scene Clips Generation
         generated_scenes = []
@@ -714,76 +920,37 @@ class WorkflowOrchestrator:
         self.vf_service.save_draft_video(owner_user_id, project_id, draft_asset_id)
         self.update_acceptance_run_step(run_id, "timeline_render", RunStatus.COMPLETED, "30s 9:16 vertical draft video rendered")
 
-        # 8. Final MP4 Export
-        final_mp4_path = str(exports_dir / "final_video.mp4")
-        export_payload = {
-            "project_id": project_id,
-            "input_path": draft_mp4_path,
-            "output_path": final_mp4_path,
-        }
-        export_job_id = f"job_export_{uuid4().hex[:8]}"
-        self.worker.repository.enqueue(export_job_id, owner_user_id, "export", export_payload)
-        self.worker.run_once()
-
-        if not Path(final_mp4_path).is_file():
-            shutil.copy2(draft_mp4_path, final_mp4_path)
-
-        final_asset_id = f"gen_final_{project_id}"
-        self.asset_repository.save_asset({
-            "asset_id": final_asset_id,
-            "project_id": project_id,
-            "scene_id": "final_export",
-            "job_id": export_job_id,
-            "provider": "ffmpeg",
-            "resource_lock_id": lock_id,
-            "output_path": final_mp4_path,
-        })
-        self.vf_service.approve_final_video(owner_user_id, project_id, "Approved for acceptance export")
-        self.vf_service.save_final_export(owner_user_id, project_id, final_asset_id)
-
-        # 9. Compliance Check & AIGC Watermark
-        from hermes.compliance.gateway import ComplianceGateway
-        compliance = ComplianceGateway()
-        compliance_result = compliance.run_full_check(
+        project = self.vf_service.get_project(owner_user_id, project_id)
+        if project.final_approval != FinalApprovalStatus.APPROVED and approval_policy == "require_user":
+            self.update_acceptance_run_step(
+                run_id,
+                "final_approval",
+                RunStatus.IN_PROGRESS,
+                "Awaiting explicit user approval for the draft video",
+            )
+            return self._approval_required(
+                project_id=project_id,
+                run_id=run_id,
+                stage="final_video",
+                approve_tool="final_approve",
+                artifact={
+                    "draft_asset_id": draft_asset_id,
+                    "content_url": f"/api/assets/{draft_asset_id}/content",
+                },
+            )
+        if project.final_approval != FinalApprovalStatus.APPROVED:
+            self.vf_service.approve_final_video(owner_user_id, project_id, "Legacy automated acceptance")
+        self.update_acceptance_run_step(run_id, "final_approval", RunStatus.COMPLETED, "Final draft approved")
+        return self._export_approved_draft(
+            owner_user_id=owner_user_id,
             project_id=project_id,
-            video_path=final_mp4_path,
+            run_id=run_id,
+            canonical_product_id=canonical_product_id,
+            lock_id=lock_id,
+            lock=lock,
+            draft_mp4_path=draft_mp4_path,
             voiceover_text=tts_script,
-            caption_text=tts_script,
-            resource_pack=lock,
         )
-        if not compliance_result["passed"]:
-            logger.warning("Compliance warnings for %s: %s", project_id, compliance_result["issues"])
-            self.update_acceptance_run_step(
-                run_id, "compliance_check", RunStatus.COMPLETED,
-                f"Compliance warnings: {compliance_result['issues']}",
-            )
-        else:
-            self.update_acceptance_run_step(
-                run_id, "compliance_check", RunStatus.COMPLETED,
-                "All compliance checks passed",
-            )
-
-        # 10. Probe & Verify Final Output Artifact
-        media_specs = self.ffmpeg.probe_media_file(final_mp4_path)
-        if not media_specs.get("is_valid"):
-            raise ValueError(f"FINAL_EXPORT_INVALID: {media_specs}")
-
-        self.update_acceptance_run_step(run_id, "final_export", RunStatus.COMPLETED, f"Final MP4 verified & exported to {final_mp4_path}")
-        self.complete_acceptance_run(run_id, RunStatus.COMPLETED)
-
-        return {
-            "status": "ok",
-            "project_id": project_id,
-            "run_id": run_id,
-            "product_id": canonical_product_id,
-            "resource_pack_lock_id": lock_id,
-            "final_asset_id": final_asset_id,
-            "final_mp4_path": final_mp4_path,
-            "ui_url": f"http://localhost:3000/projects/{project_id}/workflow/export",
-            "content_url": f"/api/assets/{final_asset_id}/content",
-            "video_specs": media_specs,
-            "compliance": compliance_result,
-        }
 
     def run_ab_variant_workflow(
         self,

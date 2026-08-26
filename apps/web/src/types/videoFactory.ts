@@ -118,6 +118,8 @@ export interface StoryboardFrame {
 
 export interface Storyboard {
   frames: StoryboardFrame[]
+  approval_status?: 'pending' | 'approved' | 'rejected'
+  approval_notes?: string
 }
 
 export interface VideoPrompt {

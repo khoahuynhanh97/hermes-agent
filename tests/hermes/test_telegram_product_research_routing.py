@@ -1,10 +1,9 @@
-from __future__ import annotations
+from pathlib import Path
 
 
-def test_product_research_detector_matches_sheet_and_script_request():
-    import telegram_bot
+def test_product_research_is_not_semantically_routed_by_telegram_channel():
+    from hermes.channels.gateway.platforms.telegram import bot
 
-    assert telegram_bot.is_product_research_script_request(
-        "crawl ngành bàn phím, giá 200k-500k, xuất sheet rồi tạo kịch bản"
-    )
-    assert not telegram_bot.is_product_research_script_request("hôm nay thời tiết sao")
+    source = Path(bot.__file__).read_text(encoding="utf-8")
+    assert "is_product_research_script_request" not in source
+    assert "run_orchestrator_turn(update, user_text)" in source

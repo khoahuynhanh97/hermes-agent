@@ -147,6 +147,22 @@ export function useGenerateStoryboard() {
   })
 }
 
+export function useApproveStoryboard() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (projectId: string) => {
+      return api.post<{ status: string; data: VideoFactoryProject }>(
+        `/api/vf/projects/${encodeURIComponent(projectId)}/storyboard/approve`
+      )
+    },
+    onSuccess: (_, projectId) => {
+      queryClient.invalidateQueries({ queryKey: ['vf-project', projectId] })
+      queryClient.invalidateQueries({ queryKey: ['vf-projects'] })
+    },
+  })
+}
+
 export function useGenerateVoiceover() {
   const queryClient = useQueryClient()
 
@@ -212,6 +228,22 @@ export function useExportFinalVideo() {
     mutationFn: async (projectId: string) => {
       return api.post<{ status: string; job_id?: string; data: VideoFactoryProject }>(
         `/api/vf/projects/${encodeURIComponent(projectId)}/final/export`
+      )
+    },
+    onSuccess: (_, projectId) => {
+      queryClient.invalidateQueries({ queryKey: ['vf-project', projectId] })
+      queryClient.invalidateQueries({ queryKey: ['vf-projects'] })
+    },
+  })
+}
+
+export function useApproveFinalVideo() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (projectId: string) => {
+      return api.post<{ status: string; data: VideoFactoryProject }>(
+        `/api/vf/projects/${encodeURIComponent(projectId)}/final/approve`
       )
     },
     onSuccess: (_, projectId) => {
@@ -409,4 +441,3 @@ export function useInstagramStatus() {
     staleTime: 10000,
   })
 }
-
