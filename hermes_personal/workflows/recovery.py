@@ -27,36 +27,9 @@ class WorkflowRecoveryService:
         return [row["workflow_id"] for row in cur.fetchall()]
 
     def replay_outbox(self) -> List[Tuple[str, str]]:
-        cur = self.conn.cursor()
-        cur.execute(
-            "SELECT workflow_id, message FROM workflow_outbox WHERE state != 'quarantined' ORDER BY outbox_id"
-        )
-        rows = cur.fetchall()
-        return [(row["workflow_id"], row["message"]) for row in rows]
+        messages = self.outbox_repository.list_unacknowledged()
+        return [(msg.workflow_id, msg.message) for msg in messages]
 
     def ack_outbox(self, workflow_id: str, message: str) -> None:
         """Acknowledge one delivered outbox record using its stable payload."""
-        with self.conn:
-            row = self.conn.execute(
-                """
-                SELECT outbox_id, lease_token, lease_owner FROM workflow_outbox
-                WHERE workflow_id = ? AND message = ?
-                ORDER BY outbox_id LIMIT 1
-                """,
-                (workflow_id, message),
-            ).fetchone()
-            if row is not None:
-                if (
-                    row["lease_token"] is not None
-                    and row["lease_owner"] is not None
-                ):
-                    self.outbox_repository.ack(
-                        outbox_id=row["outbox_id"],
-                        lease_token=row["lease_token"],
-                        worker_id=row["lease_owner"],
-                    )
-                else:
-                    self.conn.execute(
-                        "DELETE FROM workflow_outbox WHERE outbox_id = ?",
-                        (row["outbox_id"],),
-                    )
+        self.outbox_repository.ack_message(workflow_id, message)

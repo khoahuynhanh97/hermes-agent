@@ -70,12 +70,16 @@ def test_dispatcher_handles_delivery_failure_with_retry_backoff():
     # Before backoff expires (t + 1s), should not be claimed
     t_before = "2026-01-01T00:00:01Z"
     report_before = dispatcher.process_batch(now_iso=t_before)
-    assert report_before == DispatchReport(claimed=0, succeeded=0, failed=0, quarantined=0)
+    assert report_before == DispatchReport(
+        claimed=0, succeeded=0, failed=0, quarantined=0
+    )
 
     # After backoff expires (t + 3s), should be claimed again
     t_after = "2026-01-01T00:00:03Z"
     report_after = dispatcher.process_batch(now_iso=t_after)
-    assert report_after == DispatchReport(claimed=1, succeeded=0, failed=1, quarantined=0)
+    assert report_after == DispatchReport(
+        claimed=1, succeeded=0, failed=1, quarantined=0
+    )
 
     cur.execute("SELECT attempt_count FROM workflow_outbox")
     assert cur.fetchone()["attempt_count"] == 2
@@ -130,7 +134,9 @@ def test_dispatcher_expired_lease_reclaim_and_redelivery():
 
     # Worker 1 claims with short lease (10 seconds)
     t0 = "2026-01-01T00:00:00Z"
-    claims = repo.claim("worker-1", lease_duration_seconds=10.0, batch_size=10, now_iso=t0)
+    claims = repo.claim(
+        "worker-1", lease_duration_seconds=10.0, batch_size=10, now_iso=t0
+    )
     assert len(claims) == 1
 
     # Worker 1 crashes / fails to ack
@@ -206,7 +212,9 @@ def test_dispatcher_stale_ack_rejected():
     )
 
     t0 = "2026-01-01T00:00:00Z"
-    claims1 = repo.claim("worker-1", lease_duration_seconds=5.0, batch_size=10, now_iso=t0)
+    claims1 = repo.claim(
+        "worker-1", lease_duration_seconds=5.0, batch_size=10, now_iso=t0
+    )
     assert len(claims1) == 1
     claim1 = claims1[0]
 
@@ -215,18 +223,67 @@ def test_dispatcher_stale_ack_rejected():
     repo.reclaim_expired(now_iso=t_exp)
 
     # Worker 2 claims message
-    claims2 = repo.claim("worker-2", lease_duration_seconds=30.0, batch_size=10, now_iso=t_exp)
+    claims2 = repo.claim(
+        "worker-2", lease_duration_seconds=30.0, batch_size=10, now_iso=t_exp
+    )
     assert len(claims2) == 1
     claim2 = claims2[0]
     assert claim1.lease_token != claim2.lease_token
 
     # Worker 1 tries to ACK with old stale token -> rejected (returns False)
-    stale_ack = repo.ack(claim1.outbox_id, claim1.lease_token, "worker-1", now_iso=t_exp)
+    stale_ack = repo.ack(
+        claim1.outbox_id, claim1.lease_token, "worker-1", now_iso=t_exp
+    )
     assert stale_ack is False
 
     # Worker 2 ACKs with valid token -> succeeded (returns True)
-    valid_ack = repo.ack(claim2.outbox_id, claim2.lease_token, "worker-2", now_iso=t_exp)
+    valid_ack = repo.ack(
+        claim2.outbox_id, claim2.lease_token, "worker-2", now_iso=t_exp
+    )
     assert valid_ack is True
 
     cur.execute("SELECT COUNT(*) as cnt FROM workflow_outbox")
     assert cur.fetchone()["cnt"] == 0
+
+
+def test_successful_delivery_with_stale_ack_not_counted_as_succeeded():
+    conn = connect(":memory:")
+    repo = OutboxRepository(conn)
+    repo.enqueue("wf1", "stale delivery msg")
+
+    t0 = "2026-01-01T00:00:00Z"
+    t_exp = "2026-01-01T00:00:15Z"
+
+    def delivery_fn(workflow_id: str, message: str) -> None:
+        repo.reclaim_expired(now_iso=t_exp)
+        repo.claim("worker-2", now_iso=t_exp)
+
+    dispatcher = OutboxDispatcher(
+        repo, delivery_fn, worker_id="worker-1", lease_duration_seconds=10.0
+    )
+    report = dispatcher.process_batch(now_iso=t0)
+
+    assert report.succeeded == 0
+
+
+def test_competing_workers_do_not_deliver_same_active_lease():
+    conn = connect(":memory:")
+    repo = OutboxRepository(conn)
+    repo.enqueue("wf1", "active lease msg")
+
+    t0 = "2026-01-01T00:00:00Z"
+
+    claims1 = repo.claim(
+        "worker-1", lease_duration_seconds=30.0, batch_size=10, now_iso=t0
+    )
+    assert len(claims1) == 1
+
+    delivered2: list[tuple[str, str]] = []
+    dispatcher2 = OutboxDispatcher(
+        repo, lambda wf, msg: delivered2.append((wf, msg)), worker_id="worker-2"
+    )
+    report2 = dispatcher2.process_batch(now_iso=t0)
+
+    assert report2 == DispatchReport(claimed=0, succeeded=0, failed=0, quarantined=0)
+    assert delivered2 == []
+    assert len(repo.claim("worker-2", now_iso=t0)) == 0

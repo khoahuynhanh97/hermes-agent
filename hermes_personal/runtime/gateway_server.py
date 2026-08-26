@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hmac
+import logging
 import os
 import sqlite3
 import threading
@@ -32,6 +33,8 @@ from hermes_personal.runtime.startup import StartupCoordinator
 from hermes_personal.sessions import SessionRepository
 from hermes_personal.storage.sqlite import connect
 from hermes_personal.workflows.budgets import BudgetRepository
+from hermes_personal.workflows.outbox_dispatcher import OutboxDispatcher
+from hermes_personal.workflows.outbox_repository import OutboxRepository
 
 
 class _NullTranscript:
@@ -201,6 +204,12 @@ def create_gateway_application(
         snapshot_repository=snapshots,
         policy_evaluator=evaluator,
     )
+    outbox_repository = OutboxRepository(connection)
+    outbox_dispatcher = OutboxDispatcher(
+        repository=outbox_repository,
+        delivery_fn=lambda workflow_id, message: None,
+        worker_id=f"gateway-{os.getpid()}",
+    )
     if agent is None:
         agent = (
             DevelopmentFakeAgent()
@@ -248,7 +257,9 @@ def create_gateway_application(
             pass
 
     app.state.database_connection = connection
-    app.router.add_event_handler("shutdown", connection.close)
+    app.state.outbox_repository = outbox_repository
+    app.state.outbox_dispatcher = outbox_dispatcher
+    app.router.add_event_handler("shutdown", _shutdown_gateway)
     return app
 
 

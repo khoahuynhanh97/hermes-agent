@@ -31,3 +31,33 @@ def test_replay_outbox_remains_durable_until_acknowledged():
     cur.execute('SELECT COUNT(*) as cnt FROM workflow_outbox')
     assert cur.fetchone()['cnt'] == 0
     assert service.replay_outbox() == []
+
+
+def test_recovery_delegates_to_outbox_repository_without_lease_bypass():
+    from unittest.mock import MagicMock
+
+    conn = connect(":memory:")
+    service = WorkflowRecoveryService(conn)
+
+    service.outbox_repository.enqueue("wf_del", "msg_del")
+    claims = service.outbox_repository.claim("worker_del")
+    assert len(claims) == 1
+    c = claims[0]
+
+    original_ack = service.outbox_repository.ack
+    spy_ack = MagicMock(side_effect=original_ack)
+    service.outbox_repository.ack = spy_ack
+
+    service.ack_outbox("wf_del", "msg_del")
+
+    from unittest.mock import ANY
+
+    assert spy_ack.called
+    kwargs = spy_ack.call_args.kwargs
+    assert kwargs["outbox_id"] == c.outbox_id
+    assert kwargs["lease_token"] == c.lease_token
+    assert kwargs["worker_id"] == c.lease_owner
+
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) as cnt FROM workflow_outbox")
+    assert cur.fetchone()["cnt"] == 0

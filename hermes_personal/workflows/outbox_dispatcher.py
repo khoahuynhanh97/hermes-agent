@@ -48,10 +48,11 @@ class OutboxDispatcher:
         for claim in claims:
             try:
                 self.delivery_fn(claim.workflow_id, claim.message)
-                self.repository.ack(
+                ack_success = self.repository.ack(
                     claim.outbox_id, claim.lease_token, self.worker_id, now_iso
                 )
-                succeeded += 1
+                if ack_success is True:
+                    succeeded += 1
             except Exception as ex:
                 status = self.repository.record_failure(
                     claim.outbox_id,
