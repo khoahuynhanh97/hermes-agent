@@ -288,3 +288,61 @@ def test_existing_caller_compatibility():
     assert get_allocated_budget("any") == 200
     with pytest.raises(BudgetError):
         reserve_budget("any", 400)
+
+
+# 16. Colon in fields causes no collision or ambiguity
+def test_colon_in_fields_no_collision(memory_connection):
+    policy = BudgetPolicy(max_total=1000, per_channel={})
+    repo = BudgetRepository(memory_connection)
+
+    # Reserve with colons inside strings
+    alloc1 = repo.reserve_budget(
+        policy,
+        channel="chan:A",
+        amount=100,
+        idempotency_key="key:1",
+        owner_user_id="owner:x:y",
+        scope_id="scope:1:2",
+        capability_id="video:render:paid",
+        operation_input_digest="sha256:123456",
+    )
+
+    # Re-reserving exact same record works
+    alloc2 = repo.reserve_budget(
+        policy,
+        channel="chan:A",
+        amount=100,
+        idempotency_key="key:1",
+        owner_user_id="owner:x:y",
+        scope_id="scope:1:2",
+        capability_id="video:render:paid",
+        operation_input_digest="sha256:123456",
+    )
+    assert alloc1.reservation_id == alloc2.reservation_id
+
+    # Re-reserving with different action/input raises conflict
+    with pytest.raises(BudgetConflict, match="action/input digest mismatch"):
+        repo.reserve_budget(
+            policy,
+            channel="chan:A",
+            amount=100,
+            idempotency_key="key:1",
+            owner_user_id="owner:x:y",
+            scope_id="scope:1:2",
+            capability_id="video:render:paid",
+            operation_input_digest="sha256:999999",
+        )
+
+
+# 17. Policy auditability snapshot is persisted
+def test_policy_auditability_snapshot(memory_connection):
+    policy = BudgetPolicy(
+        max_total=500, per_channel={"metered": 300}, policy_id="p_v1", policy_version=2
+    )
+    repo = BudgetRepository(memory_connection)
+
+    alloc = repo.reserve_budget(policy, "metered", 150)
+    assert alloc.policy_id == "p_v1"
+    assert alloc.policy_version == 2
+    assert "p_v1" in alloc.policy_snapshot_json
+    assert "300" in alloc.policy_snapshot_json

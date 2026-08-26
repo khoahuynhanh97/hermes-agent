@@ -5,6 +5,11 @@ from dataclasses import dataclass, field
 from hermes_personal.capabilities.bindings import ImplementationBinding
 from hermes_personal.capabilities.errors import CapabilityError
 from hermes_personal.capabilities.manifest import CapabilitySpec
+from hermes_personal.workflows.budgets import (
+    BudgetAllocation,
+    BudgetPolicy,
+    BudgetRepository,
+)
 
 
 @dataclass(frozen=True)
@@ -17,6 +22,13 @@ class PolicyRequestContext:
     budget_available: float | None = None
     channel_id: str | None = None
     session_id: str | None = None
+    owner_user_id: str = "default-owner"
+    scope_id: str | None = None
+    idempotency_key: str | None = None
+    operation_input_digest: str = ""
+    amount: int = 1
+    currency: str = "USD"
+    external_reference: str | None = None
 
 
 @dataclass(frozen=True)
@@ -31,16 +43,28 @@ class PolicyDecision:
     capability_id: str
     error: CapabilityError | None = None
     warnings: tuple[PolicyWarning, ...] = ()
+    reservation: BudgetAllocation | None = None
 
 
 class CapabilityPolicyEvaluator:
+    def __init__(
+        self,
+        budget_repository: BudgetRepository | None = None,
+        budget_policy: BudgetPolicy | None = None,
+    ) -> None:
+        self.budget_repository = budget_repository
+        self.budget_policy = budget_policy
+
     def evaluate(
         self,
         spec: CapabilitySpec,
         binding: ImplementationBinding,
         context: PolicyRequestContext,
+        budget_repository: BudgetRepository | None = None,
+        budget_policy: BudgetPolicy | None = None,
     ) -> PolicyDecision:
         cap_id = spec.capability_id
+        active_reservation: BudgetAllocation | None = None
 
         # 1. Authentication check
         if not context.authenticated:
@@ -202,19 +226,49 @@ class CapabilityPolicyEvaluator:
 
         # 8. Budget Permission check
         if spec.cost_class in ("metered", "paid"):
-            if context.budget_available is None or context.budget_available <= 0:
-                err = CapabilityError(
-                    code="budget_exceeded",
-                    message=f"Capability {cap_id!r} requires cost authorization ({spec.cost_class!r}), but budget_available is {context.budget_available}",
-                    retryable=False,
-                    capability_id=cap_id,
-                    actionable_recovery="Allocate positive budget before calling capability",
-                    details={
-                        "cost_class": spec.cost_class,
-                        "budget_available": context.budget_available,
-                    },
-                )
-                return PolicyDecision(allowed=False, capability_id=cap_id, error=err)
+            effective_repo = budget_repository or self.budget_repository
+            effective_pol = budget_policy or self.budget_policy or BudgetPolicy(max_total=1000, per_channel={"metered": 500, "paid": 500})
+            if effective_repo is not None:
+                try:
+                    active_reservation = effective_repo.reserve_budget(
+                        policy=effective_pol,
+                        channel=spec.cost_class,
+                        amount=context.amount,
+                        idempotency_key=context.idempotency_key,
+                        owner_user_id=context.owner_user_id,
+                        scope_id=context.scope_id or context.workflow_id or context.owner_user_id,
+                        currency=context.currency,
+                        capability_id=spec.capability_id,
+                        operation_input_digest=context.operation_input_digest,
+                        external_reference=context.external_reference,
+                    )
+                except Exception as ex:
+                    err = CapabilityError(
+                        code="budget_exceeded",
+                        message=f"Capability {cap_id!r} requires cost authorization ({spec.cost_class!r}), but durable budget reservation failed: {ex}",
+                        retryable=False,
+                        capability_id=cap_id,
+                        actionable_recovery="Allocate sufficient budget before calling capability",
+                        details={
+                            "cost_class": spec.cost_class,
+                            "error": str(ex),
+                        },
+                    )
+                    return PolicyDecision(allowed=False, capability_id=cap_id, error=err)
+            else:
+                if context.budget_available is None or context.budget_available <= 0:
+                    err = CapabilityError(
+                        code="budget_exceeded",
+                        message=f"Capability {cap_id!r} requires cost authorization ({spec.cost_class!r}), but budget_available is {context.budget_available}",
+                        retryable=False,
+                        capability_id=cap_id,
+                        actionable_recovery="Allocate positive budget before calling capability",
+                        details={
+                            "cost_class": spec.cost_class,
+                            "budget_available": context.budget_available,
+                        },
+                    )
+                    return PolicyDecision(allowed=False, capability_id=cap_id, error=err)
 
         # 9. Degraded Health check
         if binding.health == "degraded":
@@ -237,6 +291,7 @@ class CapabilityPolicyEvaluator:
                     allowed=True,
                     capability_id=cap_id,
                     warnings=tuple(policy_warnings),
+                    reservation=active_reservation,
                 )
 
             err = CapabilityError(
@@ -254,4 +309,5 @@ class CapabilityPolicyEvaluator:
             allowed=True,
             capability_id=cap_id,
             warnings=tuple(policy_warnings),
+            reservation=active_reservation,
         )

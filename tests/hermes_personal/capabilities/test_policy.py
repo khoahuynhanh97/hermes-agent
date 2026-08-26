@@ -478,3 +478,161 @@ def test_bounded_serialization_depth_and_length():
         assert f"level{i}" in curr_dict
         curr_dict = curr_dict[f"level{i}"]
     assert curr_dict == "[TRUNCATED_DEPTH]"
+
+
+def test_paid_capability_durable_budget_reservation_integration(tmp_path):
+    from hermes_personal.storage.sqlite import connect
+    from hermes_personal.workflows.budgets import BudgetPolicy, BudgetRepository
+
+    db_path = tmp_path / "policy_budget.sqlite"
+    conn = connect(db_path)
+    try:
+        repo = BudgetRepository(conn)
+        policy = BudgetPolicy(max_total=500, per_channel={"paid": 300})
+        evaluator = CapabilityPolicyEvaluator(budget_repository=repo, budget_policy=policy)
+
+        spec = INITIAL_CAPABILITIES["video.render"]
+        binding = _make_healthy_binding("video.render")
+
+        fake_provider_calls = 0
+
+        def fake_provider_invoke():
+            nonlocal fake_provider_calls
+            fake_provider_calls += 1
+            return {"status": "rendered"}
+
+        # 1. Paid capability authorized with file-backed reservation
+        context = PolicyRequestContext(
+            authenticated=True,
+            skill_id="hermes-personal-product-video-production",
+            workflow_id="product_to_video",
+            user_confirmed_approval=True,
+            granted_policies=frozenset(["storyboard_approved"]),
+            owner_user_id="user_alice",
+            scope_id="wf_123",
+            idempotency_key="tx_key_1",
+            amount=200,
+        )
+
+        decision = evaluator.evaluate(spec, binding, context)
+        assert decision.allowed is True
+        assert decision.reservation is not None
+        assert decision.reservation.amount == 200
+        assert decision.reservation.state == "reserved"
+
+        if decision.allowed:
+            fake_provider_invoke()
+        assert fake_provider_calls == 1
+
+        # 2. Duplicate invocation with same idempotency contract does not reserve twice
+        decision_dup = evaluator.evaluate(spec, binding, context)
+        assert decision_dup.allowed is True
+        assert decision_dup.reservation is not None
+        assert decision_dup.reservation.reservation_id == decision.reservation.reservation_id
+
+        # 3. Next reservation of 200 exceeds limit (300) -> rejected BEFORE provider invocation
+        context_exceed = PolicyRequestContext(
+            authenticated=True,
+            skill_id="hermes-personal-product-video-production",
+            workflow_id="product_to_video",
+            user_confirmed_approval=True,
+            granted_policies=frozenset(["storyboard_approved"]),
+            owner_user_id="user_alice",
+            scope_id="wf_123",
+            idempotency_key="tx_key_2",
+            amount=200,
+        )
+        decision_fail = evaluator.evaluate(spec, binding, context_exceed)
+        assert decision_fail.allowed is False
+        assert decision_fail.error is not None
+        assert decision_fail.error.code == "budget_exceeded"
+
+        if decision_fail.allowed:
+            fake_provider_invoke()
+
+        # Assert fake provider call count remains 1 (0 additional calls made!)
+        assert fake_provider_calls == 1
+    finally:
+        conn.close()
+
+    # 4. Restart / reopen database context retains reservation
+    from hermes_personal.storage.sqlite import connect
+
+    reopened = connect(db_path)
+    try:
+        repo2 = BudgetRepository(reopened)
+        evaluator2 = CapabilityPolicyEvaluator(budget_repository=repo2, budget_policy=policy)
+        decision_restart = evaluator2.evaluate(spec, binding, context)
+        assert decision_restart.allowed is True
+        assert (
+            decision_restart.reservation.reservation_id
+            == decision.reservation.reservation_id
+        )
+    finally:
+        reopened.close()
+
+
+def test_free_capability_does_not_require_budget_reservation(tmp_path):
+    from hermes_personal.storage.sqlite import connect
+    from hermes_personal.workflows.budgets import BudgetPolicy, BudgetRepository
+
+    db_path = tmp_path / "free_budget.sqlite"
+    conn = connect(db_path)
+    try:
+        repo = BudgetRepository(conn)
+        policy = BudgetPolicy(max_total=500, per_channel={})
+        evaluator = CapabilityPolicyEvaluator(budget_repository=repo, budget_policy=policy)
+
+        spec = INITIAL_CAPABILITIES["product.research"]
+        binding = _make_healthy_binding("product.research")
+
+        context = PolicyRequestContext(
+            authenticated=True,
+            skill_id="hermes-personal-product-research",
+            workflow_id="product_research",
+        )
+
+        decision = evaluator.evaluate(spec, binding, context)
+        assert decision.allowed is True
+        assert decision.reservation is None  # Free capability requires no reservation!
+    finally:
+        conn.close()
+
+
+def test_approval_failure_rejects_before_budget_reservation(tmp_path):
+    from hermes_personal.storage.sqlite import connect
+    from hermes_personal.workflows.budgets import BudgetPolicy, BudgetRepository
+
+    db_path = tmp_path / "approval_budget.sqlite"
+    conn = connect(db_path)
+    try:
+        repo = BudgetRepository(conn)
+        policy = BudgetPolicy(max_total=500, per_channel={"paid": 300})
+        evaluator = CapabilityPolicyEvaluator(budget_repository=repo, budget_policy=policy)
+
+        spec = INITIAL_CAPABILITIES["video.render"]
+        binding = _make_healthy_binding("video.render")
+
+        # Approval policy NOT satisfied
+        context = PolicyRequestContext(
+            authenticated=True,
+            skill_id="hermes-personal-product-video-production",
+            workflow_id="product_to_video",
+            user_confirmed_approval=False,
+            granted_policies=frozenset(),
+            owner_user_id="user_alice",
+            scope_id="wf_123",
+            idempotency_key="tx_key_approval_fail",
+            amount=200,
+        )
+
+        decision = evaluator.evaluate(spec, binding, context)
+        assert decision.allowed is False
+        assert decision.error is not None
+        assert decision.error.code == "unmet_precondition"
+
+        # Verify zero budget reservation was written to database
+        row = conn.execute("SELECT COUNT(*) AS cnt FROM budget_reservation").fetchone()
+        assert row["cnt"] == 0
+    finally:
+        conn.close()

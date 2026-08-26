@@ -192,6 +192,11 @@ CREATE TABLE IF NOT EXISTS budget_reservation (
   idempotency_key TEXT NOT NULL,
   request_digest TEXT NOT NULL,
   state TEXT NOT NULL CHECK(state IN ('reserved', 'committed', 'released')),
+  capability_id TEXT NOT NULL DEFAULT 'general',
+  operation_input_digest TEXT NOT NULL DEFAULT '',
+  policy_id TEXT NOT NULL DEFAULT 'default',
+  policy_version INTEGER NOT NULL DEFAULT 1,
+  policy_snapshot_json TEXT NOT NULL DEFAULT '{}',
   external_reference TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -262,6 +267,11 @@ def _migrate_schema(connection: sqlite3.Connection) -> None:
               idempotency_key TEXT NOT NULL,
               request_digest TEXT NOT NULL,
               state TEXT NOT NULL CHECK(state IN ('reserved', 'committed', 'released')),
+              capability_id TEXT NOT NULL DEFAULT 'general',
+              operation_input_digest TEXT NOT NULL DEFAULT '',
+              policy_id TEXT NOT NULL DEFAULT 'default',
+              policy_version INTEGER NOT NULL DEFAULT 1,
+              policy_snapshot_json TEXT NOT NULL DEFAULT '{}',
               external_reference TEXT,
               created_at TEXT NOT NULL,
               updated_at TEXT NOT NULL,
@@ -269,6 +279,22 @@ def _migrate_schema(connection: sqlite3.Connection) -> None:
             );
             """
         )
+        b_cols = [
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(budget_reservation)").fetchall()
+        ]
+        if b_cols:
+            if "capability_id" not in b_cols:
+                connection.execute("ALTER TABLE budget_reservation ADD COLUMN capability_id TEXT NOT NULL DEFAULT 'general'")
+            if "operation_input_digest" not in b_cols:
+                connection.execute("ALTER TABLE budget_reservation ADD COLUMN operation_input_digest TEXT NOT NULL DEFAULT ''")
+            if "policy_id" not in b_cols:
+                connection.execute("ALTER TABLE budget_reservation ADD COLUMN policy_id TEXT NOT NULL DEFAULT 'default'")
+            if "policy_version" not in b_cols:
+                connection.execute("ALTER TABLE budget_reservation ADD COLUMN policy_version INTEGER NOT NULL DEFAULT 1")
+            if "policy_snapshot_json" not in b_cols:
+                connection.execute("ALTER TABLE budget_reservation ADD COLUMN policy_snapshot_json TEXT NOT NULL DEFAULT '{}'")
+
         connection.execute(
             """
             CREATE INDEX IF NOT EXISTS budget_reservation_owner_scope_idx

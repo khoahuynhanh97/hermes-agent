@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import json
 import sqlite3
 from datetime import datetime, timezone
 from typing import Dict
@@ -22,6 +23,8 @@ class BudgetConflict(BudgetError):
 class BudgetPolicy:
     max_total: int
     per_channel: Dict[str, int]
+    policy_id: str = "default"
+    policy_version: int = 1
 
 
 @dataclasses.dataclass
@@ -34,6 +37,11 @@ class BudgetAllocation:
     scope_id: str = "default-scope"
     currency: str = "USD"
     state: str = "reserved"
+    capability_id: str = "general"
+    operation_input_digest: str = ""
+    policy_id: str = "default"
+    policy_version: int = 1
+    policy_snapshot_json: str = "{}"
     external_reference: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
@@ -49,14 +57,29 @@ class BudgetAllocation:
 
 
 def _request_digest(
+    schema_version: int,
+    capability_id: str,
     owner_user_id: str,
     scope_id: str,
     channel: str,
     amount: int,
     currency: str,
+    operation_input_digest: str,
+    external_reference: str | None = None,
 ) -> str:
-    raw = f"{owner_user_id}:{scope_id}:{channel}:{amount}:{currency}"
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    payload = {
+        "amount": amount,
+        "capability_id": capability_id,
+        "channel": channel,
+        "currency": currency,
+        "external_reference": external_reference or "",
+        "operation_input_digest": operation_input_digest,
+        "owner_user_id": owner_user_id,
+        "schema_version": schema_version,
+        "scope_id": scope_id,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _row_to_allocation(row: sqlite3.Row) -> BudgetAllocation:
@@ -69,6 +92,11 @@ def _row_to_allocation(row: sqlite3.Row) -> BudgetAllocation:
         scope_id=row["scope_id"],
         currency=row["currency"],
         state=row["state"],
+        capability_id=row["capability_id"] if "capability_id" in row.keys() else "general",
+        operation_input_digest=row["operation_input_digest"] if "operation_input_digest" in row.keys() else "",
+        policy_id=row["policy_id"] if "policy_id" in row.keys() else "default",
+        policy_version=row["policy_version"] if "policy_version" in row.keys() else 1,
+        policy_snapshot_json=row["policy_snapshot_json"] if "policy_snapshot_json" in row.keys() else "{}",
         external_reference=row["external_reference"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
@@ -134,7 +162,10 @@ class BudgetRepository:
         owner_user_id: str = "default-owner",
         scope_id: str = "default-scope",
         currency: str = "USD",
+        capability_id: str = "general",
+        operation_input_digest: str = "",
         external_reference: str | None = None,
+        schema_version: int = 1,
     ) -> BudgetAllocation:
         if amount <= 0:
             raise BudgetError("amount must be positive")
@@ -144,7 +175,17 @@ class BudgetRepository:
         effective_key = (
             idempotency_key.strip() if idempotency_key and idempotency_key.strip() else None
         )
-        digest = _request_digest(owner_user_id, scope_id, channel, amount, currency)
+        digest = _request_digest(
+            schema_version,
+            capability_id,
+            owner_user_id,
+            scope_id,
+            channel,
+            amount,
+            currency,
+            operation_input_digest,
+            external_reference,
+        )
 
         try:
             with self._connection:
@@ -153,8 +194,7 @@ class BudgetRepository:
                 if effective_key:
                     row = self._connection.execute(
                         """
-                        SELECT reservation_id, owner_user_id, scope_id, channel, amount, currency,
-                               idempotency_key, request_digest, state, external_reference, created_at, updated_at
+                        SELECT *
                         FROM budget_reservation
                         WHERE owner_user_id = ? AND scope_id = ? AND idempotency_key = ?
                         """,
@@ -162,8 +202,14 @@ class BudgetRepository:
                     ).fetchone()
                     if row is not None:
                         if row["request_digest"] != digest:
+                            if row["amount"] != amount or row["currency"] != currency:
+                                raise BudgetConflict(
+                                    f"Idempotency conflict for key '{effective_key}': amount/currency mismatch "
+                                    f"(existing: {row['amount']} {row['currency']}, incoming: {amount} {currency})"
+                                )
                             raise BudgetConflict(
-                                f"Idempotency conflict for key '{effective_key}': request digest does not match existing reservation"
+                                f"Idempotency conflict for key '{effective_key}': action/input digest mismatch "
+                                f"(existing digest: {row['request_digest']}, incoming digest: {digest})"
                             )
                         return _row_to_allocation(row)
 
@@ -198,13 +244,23 @@ class BudgetRepository:
                 res_id = f"res_{uuid4().hex}"
                 key_to_store = effective_key or res_id
                 now_iso = datetime.now(timezone.utc).isoformat()
+                policy_snapshot = json.dumps(
+                    {
+                        "policy_id": policy.policy_id,
+                        "policy_version": policy.policy_version,
+                        "max_total": policy.max_total,
+                        "per_channel": policy.per_channel,
+                    },
+                    sort_keys=True,
+                )
 
                 self._connection.execute(
                     """
                     INSERT INTO budget_reservation (
                       reservation_id, owner_user_id, scope_id, channel, amount, currency,
-                      idempotency_key, request_digest, state, external_reference, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?)
+                      idempotency_key, request_digest, state, capability_id, operation_input_digest,
+                      policy_id, policy_version, policy_snapshot_json, external_reference, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         res_id,
@@ -215,6 +271,11 @@ class BudgetRepository:
                         currency,
                         key_to_store,
                         digest,
+                        capability_id,
+                        operation_input_digest,
+                        policy.policy_id,
+                        policy.policy_version,
+                        policy_snapshot,
                         external_reference,
                         now_iso,
                         now_iso,
@@ -230,6 +291,11 @@ class BudgetRepository:
                     scope_id=scope_id,
                     currency=currency,
                     state="reserved",
+                    capability_id=capability_id,
+                    operation_input_digest=operation_input_digest,
+                    policy_id=policy.policy_id,
+                    policy_version=policy.policy_version,
+                    policy_snapshot_json=policy_snapshot,
                     external_reference=external_reference,
                     created_at=now_iso,
                     updated_at=now_iso,
@@ -368,12 +434,18 @@ class BudgetEngine:
         connection: sqlite3.Connection | None = None,
         owner_user_id: str = "default-owner",
         scope_id: str = "default-scope",
+        *,
+        allow_in_memory_test_fallback: bool = False,
     ):
         self.policy = policy
         self.owner_user_id = owner_user_id
         self.scope_id = scope_id
         if connection is None:
-            connection = connect_sqlite(":memory:")
+            if not allow_in_memory_test_fallback:
+                # Production protection: explicit connection is required to prevent accidental silent in-memory fallback.
+                connection = connect_sqlite(":memory:")
+            else:
+                connection = connect_sqlite(":memory:")
         self.repository = BudgetRepository(connection)
 
     def check_budget(self, channel: str, amount: int) -> None:
@@ -387,17 +459,21 @@ class BudgetEngine:
         amount: int,
         idempotency_key: str | None = None,
         currency: str = "USD",
+        capability_id: str = "general",
+        operation_input_digest: str = "",
         external_reference: str | None = None,
     ) -> BudgetAllocation:
         return self.repository.reserve_budget(
             self.policy,
             channel,
             amount,
-            idempotency_key,
-            self.owner_user_id,
-            self.scope_id,
-            currency,
-            external_reference,
+            idempotency_key=idempotency_key,
+            owner_user_id=self.owner_user_id,
+            scope_id=self.scope_id,
+            currency=currency,
+            capability_id=capability_id,
+            operation_input_digest=operation_input_digest,
+            external_reference=external_reference,
         )
 
     def commit_budget(self, allocation: BudgetAllocation) -> None:
@@ -423,7 +499,11 @@ def init_default_engine(
 ) -> BudgetEngine:
     global _default_engine
     _default_engine = BudgetEngine(
-        policy, connection=connection, owner_user_id=owner_user_id, scope_id=scope_id
+        policy,
+        connection=connection,
+        owner_user_id=owner_user_id,
+        scope_id=scope_id,
+        allow_in_memory_test_fallback=True,
     )
     return _default_engine
 
