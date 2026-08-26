@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import abc
 import os
+import signal
 import socket
 import subprocess
 import time
@@ -70,20 +71,25 @@ class SubprocessChild(ChildProcess):
         return self._process.poll()
 
     def terminate(self) -> None:
+        """Stage 1: Graceful termination request."""
         if os.name == "nt":
             try:
-                subprocess.run(
-                    ["taskkill", "/F", "/T", "/PID", str(self._process.pid)],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                )
+                self._process.send_signal(signal.CTRL_BREAK_EVENT)
             except Exception:
-                self._process.terminate()
+                try:
+                    subprocess.run(
+                        ["taskkill", "/T", "/PID", str(self._process.pid)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                    )
+                except Exception:
+                    self._process.terminate()
         else:
             self._process.terminate()
 
     def kill(self) -> None:
+        """Stage 2: Forceful kill of the process tree after shutdown timeout expires."""
         if os.name == "nt":
             try:
                 subprocess.run(
@@ -116,13 +122,16 @@ class DefaultProcessRunner(ProcessRunner):
     """Concrete ProcessRunner executing subprocess.Popen with shell=False."""
 
     def start(self, spec: ProcessSpec, env: dict[str, str] | None = None) -> ChildProcess:
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
         popen = subprocess.Popen(
             list(spec.argv),
             cwd=str(spec.cwd),
             env=env,
             shell=False,
+            stdin=subprocess.DEVNULL,
             stdout=None,
             stderr=None,
+            creationflags=creationflags,
         )
         return SubprocessChild(name=spec.name, process=popen)
 

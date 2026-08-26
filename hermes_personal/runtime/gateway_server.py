@@ -4,10 +4,11 @@ import argparse
 import hmac
 import os
 import sqlite3
+import threading
 from collections.abc import Iterator, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import FastAPI
 
@@ -47,18 +48,73 @@ class _NullTranscriptFactory:
 class DevelopmentFakeAgent:
     """Deterministic local provider for development smoke tests only."""
 
-    def run(self, request, history) -> Iterator[AgentOutput]:
+    def run(self, request: Any, history: Any) -> Iterator[AgentOutput]:
         text = f"[fake-provider] Hermes received: {request.message}"
         yield AgentOutput("text_delta", {"text": text})
         yield AgentOutput("completed", {"text": text, "provider_mode": "fake"})
 
 
-def create_configured_agent() -> Any:
+def create_configured_agent(session_id: str | None = None) -> Any:
     """Create the canonical upstream Hermes AIAgent wrapped in UpstreamAIAgentAdapter."""
     from run_agent import AIAgent
     from hermes_personal.orchestration.upstream_agent import UpstreamAIAgentAdapter
 
-    return UpstreamAIAgentAdapter(AIAgent(quiet_mode=True))
+    agent = AIAgent(
+        quiet_mode=True,
+        session_id=session_id or "",
+    )
+    return UpstreamAIAgentAdapter(agent)
+
+
+class SessionScopedAgentPool:
+    """Manages session-scoped AIAgent instances keyed by (owner_id, session_id).
+
+    Architecture Guarantees:
+    - Single Brain: Delegates every conversation turn to public upstream AIAgent.run_conversation.
+    - Prompt Caching: Associates a dedicated AIAgent instance per session, maintaining stable session_id.
+    - Concurrency & State Isolation: Different sessions operate on independent AIAgent instances.
+    - Clean Lifecycle: Closes and clears all agent instances on shutdown.
+    """
+
+    def __init__(
+        self,
+        agent_factory: Callable[[str, str], Any] | None = None,
+    ) -> None:
+        self._factory = agent_factory or (
+            lambda owner_id, session_id: create_configured_agent(session_id=session_id)
+        )
+        self._agents: dict[tuple[str, str], Any] = {}
+        self._lock = threading.Lock()
+
+    def get_agent(self, owner_id: str, session_id: str) -> Any:
+        key = (owner_id, session_id)
+        with self._lock:
+            if key not in self._agents:
+                self._agents[key] = self._factory(owner_id, session_id)
+            return self._agents[key]
+
+    def run(
+        self,
+        request: Any,
+        history: tuple[Mapping[str, Any], ...],
+    ) -> Iterator[AgentOutput]:
+        owner_id = getattr(request, "owner_id", None) or getattr(
+            getattr(request, "principal", None), "owner_user_id", "default-owner"
+        )
+        session_id = getattr(request, "session_id", "default-session")
+        agent = self.get_agent(owner_id, session_id)
+        return agent.run(request, history)
+
+    def close(self) -> None:
+        with self._lock:
+            for agent in self._agents.values():
+                close_fn = getattr(agent, "close", None)
+                if callable(close_fn):
+                    try:
+                        close_fn()
+                    except Exception:
+                        pass
+            self._agents.clear()
 
 
 def _ensure_identity(
@@ -136,7 +192,7 @@ def create_gateway_application(
         agent = (
             DevelopmentFakeAgent()
             if provider_mode == "fake"
-            else create_configured_agent()
+            else SessionScopedAgentPool()
         )
     service = HermesTurnService(
         identities,
@@ -164,6 +220,18 @@ def create_gateway_application(
     @app.get("/healthz", include_in_schema=False)
     def healthz() -> dict[str, bool]:
         return {"ready": True}
+
+    @app.on_event("shutdown")
+    def _shutdown_gateway() -> None:
+        if hasattr(agent, "close"):
+            try:
+                agent.close()
+            except Exception:
+                pass
+        try:
+            connection.close()
+        except Exception:
+            pass
 
     app.state.database_connection = connection
     app.router.add_event_handler("shutdown", connection.close)

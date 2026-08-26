@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import os
 from pathlib import Path
+import signal
 import socket
 from unittest.mock import patch
 
@@ -618,7 +620,17 @@ def test_forced_kill_after_shutdown_timeout(fake_runner, fake_clock):
 
     sup.stop_all()
 
-    # Event log must show forced kill for stubborn service
+    # Normal service must be terminated gracefully without kill()
+    normal_child = fake_runner.active_processes["normal_svc"][0]
+    assert normal_child._terminated is True
+    assert normal_child._killed is False
+
+    # Stubborn service must receive terminate() first, then kill() after timeout
+    stubborn_child = fake_runner.active_processes["stubborn_svc"][0]
+    assert stubborn_child._terminated is True
+    assert stubborn_child._killed is True
+
+    # Event log must show forced kill for stubborn service only
     killing_events = [e for e in events if e.event_type == "killing"]
     assert len(killing_events) == 1
     assert killing_events[0].process_name == "stubborn_svc"
@@ -642,7 +654,45 @@ def test_graceful_reverse_order_stop_and_no_orphans(fake_runner, fake_clock):
 
     sup.stop_all()
 
-    # All processes terminated
+    # All processes terminated gracefully without forced kill
     for spec in specs:
         for child in fake_runner.active_processes[spec.name]:
             assert not child.is_alive()
+            assert child._terminated is True
+            assert child._killed is False
+
+
+def test_subprocess_child_terminate_and_kill_separation(monkeypatch):
+    from hermes_personal.runtime.supervisor import SubprocessChild
+    import subprocess
+    from unittest.mock import MagicMock
+
+    mock_proc = MagicMock()
+    mock_proc.pid = 4321
+    mock_proc.poll.return_value = None
+
+    commands_run = []
+
+    def mock_run(cmd, **kwargs):
+        commands_run.append(cmd)
+        return MagicMock(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", mock_run)
+
+    child = SubprocessChild("test_child", mock_proc)
+
+    # 1. On Windows, terminate() sends CTRL_BREAK_EVENT or non-/F taskkill
+    child.terminate()
+    if os.name == "nt":
+        # Either send_signal was called or taskkill without /F
+        if mock_proc.send_signal.called:
+            assert mock_proc.send_signal.call_args[0][0] == signal.CTRL_BREAK_EVENT
+        else:
+            assert any("/F" not in cmd for cmd in commands_run)
+
+    # 2. kill() uses /F on Windows or process.kill() on POSIX
+    child.kill()
+    if os.name == "nt":
+        assert any("/F" in cmd for cmd in commands_run)
+    else:
+        assert mock_proc.kill.called

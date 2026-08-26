@@ -197,16 +197,20 @@ def run_smoke():
         assert [e["cursor"] for e in replay_data["events"]] == [1, 2, 3, 4]
 
         # Step 9: Graceful shutdown of Phase 1
-        print("Stopping supervisor process tree for graceful shutdown...")
+        print("Sending graceful termination signal to supervisor (Stage 1)...")
         if sys.platform == "win32":
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            proc.send_signal(signal.CTRL_BREAK_EVENT)
         else:
             proc.terminate()
         try:
             proc.wait(timeout=10.0)
-            print("Supervisor terminated successfully.")
+            print("Supervisor terminated gracefully.")
         except subprocess.TimeoutExpired:
-            proc.kill()
+            print("Shutdown timeout expired, falling back to force-kill (Stage 2)...")
+            if sys.platform == "win32":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            else:
+                proc.kill()
             proc.wait(timeout=5.0)
 
         assert port_is_closed(gw_port), f"Gateway port {gw_port} still open after shutdown!"
@@ -298,16 +302,20 @@ def run_smoke():
             assert ex.code == 403
 
         # Graceful shutdown of Phase 2
-        print("Shutting down supervisor Phase 2...")
+        print("Sending graceful termination signal to Phase 2 supervisor (Stage 1)...")
         if sys.platform == "win32":
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc2.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            proc2.send_signal(signal.CTRL_BREAK_EVENT)
         else:
             proc2.terminate()
         try:
             proc2.wait(timeout=10.0)
-            print("Phase 2 supervisor terminated successfully.")
+            print("Phase 2 supervisor terminated gracefully.")
         except subprocess.TimeoutExpired:
-            proc2.kill()
+            print("Phase 2 shutdown timeout expired, falling back to force-kill (Stage 2)...")
+            if sys.platform == "win32":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc2.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            else:
+                proc2.kill()
             proc2.wait(timeout=5.0)
 
         assert port_is_closed(gw_port)

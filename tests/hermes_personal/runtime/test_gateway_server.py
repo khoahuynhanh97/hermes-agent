@@ -162,6 +162,108 @@ def test_gateway_multi_turn_history_and_restart_persistence(tmp_path):
         assert [e["cursor"] for e in data["events"]] == [1, 2, 3, 4, 5, 6]
 
 
+def test_deterministic_history_and_cross_session_owner_isolation(tmp_path):
+    db_path = tmp_path / "isolation.sqlite3"
+    agent = _RecordingAgent()
+    app = create_gateway_application(
+        database_path=db_path,
+        api_key="key-alice",
+        owner_user_id="owner-alice",
+        external_subject="owner-alice",
+        provider_mode="fake",
+        agent=agent,
+    )
+
+    with TestClient(app) as client:
+        # Session A: Turn 1
+        t1 = client.post(
+            "/api/turn",
+            json={"conversation_id": "session-A", "message": "Alice Session A Turn 1"},
+            headers={"Authorization": "Bearer key-alice", "Idempotency-Key": "a-1"},
+        )
+        assert t1.status_code == 200
+        assert agent.calls[-1][1] == ()
+
+        # Session A: Turn 2
+        t2 = client.post(
+            "/api/turn",
+            json={"conversation_id": "session-A", "message": "Alice Session A Turn 2"},
+            headers={"Authorization": "Bearer key-alice", "Idempotency-Key": "a-2"},
+        )
+        assert t2.status_code == 200
+        hist_a2 = agent.calls[-1][1]
+        assert len(hist_a2) == 2
+        assert hist_a2[0] == {"role": "user", "content": "Alice Session A Turn 1"}
+        assert hist_a2[1] == {"role": "assistant", "content": "echo:Alice Session A Turn 1"}
+
+        # Session B (same owner): Turn 1 -> MUST receive empty history, NOT Session A history
+        tb1 = client.post(
+            "/api/turn",
+            json={"conversation_id": "session-B", "message": "Alice Session B Turn 1"},
+            headers={"Authorization": "Bearer key-alice", "Idempotency-Key": "b-1"},
+        )
+        assert tb1.status_code == 200
+        assert agent.calls[-1][1] == ()
+
+    # Create app for Bob (different owner) on same DB
+    agent_bob = _RecordingAgent()
+    app_bob = create_gateway_application(
+        database_path=db_path,
+        api_key="key-bob",
+        owner_user_id="owner-bob",
+        external_subject="owner-bob",
+        provider_mode="fake",
+        agent=agent_bob,
+    )
+
+    with TestClient(app_bob) as client_bob:
+        # Bob in Session A -> MUST receive empty history (owner isolation)
+        tbob1 = client_bob.post(
+            "/api/turn",
+            json={"conversation_id": "session-A", "message": "Bob Session A Turn 1"},
+            headers={"Authorization": "Bearer key-bob", "Idempotency-Key": "bob-1"},
+        )
+        assert tbob1.status_code == 200
+        assert agent_bob.calls[-1][1] == ()
+
+
+def test_session_scoped_agent_pool_lifecycle_and_isolation():
+    from hermes_personal.runtime.gateway_server import SessionScopedAgentPool
+    from unittest.mock import MagicMock
+
+    created_agents = []
+
+    def mock_factory(owner_id: str, session_id: str):
+        mock_agent = MagicMock()
+        mock_agent.owner_id = owner_id
+        mock_agent.session_id = session_id
+        created_agents.append(mock_agent)
+        return mock_agent
+
+    pool = SessionScopedAgentPool(agent_factory=mock_factory)
+
+    # 1. Getting agent for same session returns the exact same instance
+    agent_s1 = pool.get_agent("owner1", "session1")
+    assert pool.get_agent("owner1", "session1") is agent_s1
+    assert len(created_agents) == 1
+
+    # 2. Getting agent for different session creates distinct instance
+    agent_s2 = pool.get_agent("owner1", "session2")
+    assert agent_s2 is not agent_s1
+    assert len(created_agents) == 2
+
+    # 3. Getting agent for different owner creates distinct instance
+    agent_bob = pool.get_agent("owner2", "session1")
+    assert agent_bob is not agent_s1
+    assert len(created_agents) == 3
+
+    # 4. Closing pool calls close on all instantiated agents and empties pool
+    pool.close()
+    for ag in created_agents:
+        assert ag.close.called
+    assert len(pool._agents) == 0
+
+
 def test_gateway_auth_and_owner_isolation(tmp_path):
     app = create_gateway_application(
         database_path=tmp_path / "auth.sqlite3",

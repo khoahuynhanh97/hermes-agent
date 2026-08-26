@@ -107,6 +107,8 @@ def handle_start(args: argparse.Namespace) -> int:
     try:
         signal.signal(signal.SIGINT, _sig_handler)
         signal.signal(signal.SIGTERM, _sig_handler)
+        if hasattr(signal, "SIGBREAK"):
+            signal.signal(signal.SIGBREAK, _sig_handler)
     except Exception:
         pass  # Windows or non-main thread
 
