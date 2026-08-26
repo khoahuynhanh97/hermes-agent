@@ -77,6 +77,15 @@ guarantee can be treated as end-to-end workflow correctness.
 `expected_version` remains necessary. Idempotency answers "is this the same
 command?"; versioning answers "was it based on the current aggregate?".
 
+## Outbox delivery idempotency
+
+Durable outbox messaging guarantees at-least-once delivery of workflow notification messages while preserving execution idempotency:
+
+- **Atomic Conditional Claim**: Worker processes claim messages from `workflow_outbox` using an atomic conditional update (`UPDATE workflow_outbox SET status = 'leased', worker_id = ?, lease_token = ?, lease_expires_at = datetime('now', '+30 seconds'), attempt_count = attempt_count + 1 WHERE outbox_id = ? AND (status = 'pending' OR (status = 'leased' AND lease_expires_at < datetime('now'))) AND (next_attempt_at IS NULL OR next_attempt_at <= datetime('now'))`). This guarantees that only one worker holds an active lease for a given `outbox_id` at any time.
+- **Stale Lease ACK Protection**: Acknowledgements (`ack_outbox`) require the worker's unique `lease_token`. If a worker's lease expires before delivery completes and another worker claims the record, the first worker's late ACK is rejected with a `StaleLeaseError` / `LeaseExpired` exception. This ensures that a stale worker cannot delete a message currently leased by another active worker.
+- **At-Least-Once Delivery & Downstream Idempotency**: Because a worker crash or network timeout before ACK results in lease expiration and redelivery to another worker, downstream message sinks/handlers must process messages idempotently (e.g. using correlation/turn IDs or payload signatures).
+- **Poison Message Quarantine**: Messages failing repeatedly reach `max_attempts` (default 5) and transition to `quarantined` state. Operators can manually inspect and invoke `requeue_quarantined(outbox_id)` to safely reset the message to `pending` without duplicating active lease claims.
+
 ## Operator commands
 
 `OperatorCommand.idempotency_key` defaults to `command_id`. The composable HTTP
@@ -139,7 +148,7 @@ When live providers are added:
 - A different semantic request requires a new key.
 - Never delete an in-progress claim merely to unblock a retry without first
   proving the original execution cannot still produce side effects.
-- Stale-claim recovery must use a lease/heartbeat and transition atomically.
+- Stale-claim recovery uses worker lease tokens, lease expiration timestamps, and atomic conditional SQL updates.
 - Retain idempotency records at least as long as any external side effect can be
   observed or retried.
 

@@ -51,7 +51,7 @@ job states. These are implementation defects, not supported behavior.
 ## Persistence
 
 SQLite tables are `workflow`, `workflow_event`, `processed_command`, and
-`workflow_outbox`. `WorkflowRepository.commit_workflow()` owns the transaction.
+`workflow_outbox` (which supports worker lease tokens, expiration tracking, retry counters, backoff timestamps, and quarantine states). `WorkflowRepository.commit_workflow()` owns the transaction.
 Never write these tables independently from business handlers.
 
 ## Approvals
@@ -77,11 +77,15 @@ and exposes callbacks. Retries are immediate and process-local. A timed-out
 helper thread cannot be killed safely, so a timeout does not prove the underlying
 operation stopped.
 
-## Recovery
+## Recovery and Durable Outbox Delivery
 
-`WorkflowRecoveryService` lists persisted workflow IDs and replays then clears
-outbox rows. It does not rebuild a distributed worker lease, acknowledge broker
-messages, or provide a DLQ.
+`WorkflowRecoveryService` in `hermes_personal/workflows/recovery.py` implements durable outbox delivery guarantees for workflow notifications and side effects:
+
+- **State Machine**: Outbox items progress through `pending` -> `leased` -> deleted (on successful acknowledgement) or `quarantined` (upon max attempt exhaustion).
+- **Atomic Conditional Claim (`claim_outbox_batch`)**: Claims unclaimed or expired-lease outbox items using conditional SQL updates (`UPDATE workflow_outbox SET status = 'leased', worker_id = ?, lease_token = ?, leased_at = datetime('now'), lease_expires_at = datetime('now', '+30 seconds'), attempt_count = attempt_count + 1 WHERE outbox_id = ? AND (status = 'pending' OR (status = 'leased' AND lease_expires_at < datetime('now'))) AND (next_attempt_at IS NULL OR next_attempt_at <= datetime('now'))`).
+- **Stale Lease ACK Rejection (`ack_outbox`)**: Deletes an outbox row only when given matching `outbox_id` and active `lease_token`. A stale ACK with an expired or mismatched lease token is rejected (`StaleLeaseError` / `LeaseExpired`), protecting against duplicate worker deletions.
+- **Bounded Exponential Backoff**: Processing failures set `next_attempt_at` using bounded exponential backoff (`min(base_delay * 2^(attempt_count - 1), max_delay)`). Workers skip items before their scheduled retry timestamp.
+- **Poison Message Quarantine & Requeue (`requeue_quarantined`)**: Messages exceeding max attempts (default 5) move to `quarantined` status to isolate poison messages. Operators can execute `requeue_quarantined(outbox_id)` to reset state to `pending`, clear `last_error`, and zero `attempt_count` for safe reprocessing.
 
 ## Product-video HITL
 

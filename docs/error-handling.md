@@ -18,6 +18,7 @@ redacted `details`. General turn exceptions become terminal `failed`
 | HITL/precondition | `HITL_APPROVAL_REQUIRED`, `unmet_precondition` | Wait for explicit human action |
 | Capability policy | unavailable binding, unauthorized skill/workflow, budget exceeded | Follow actionable recovery; do not blind retry |
 | Budget accounting | `BudgetError`, `BudgetConflict` (idempotency key reused with mismatched payload) | Fail closed. Conflict requires new idempotency key or matching parameters. |
+| Outbox delivery | Stale lease ACK (`StaleLeaseError`/`LeaseExpired`), max attempts exceeded | Reject stale ACK; exponential backoff on transient failure (`next_attempt_at`); poison message transition to `quarantined` state and operator requeue (`requeue_quarantined`) |
 | Input integrity | `DIGEST_MISMATCH`, missing input ref, foreign artifact owner | Reconcile refs; no retry unchanged input |
 | Transient provider/stage | PI/VF `*_FAILED` marked retryable | Retry within bounded budget with same idempotency key |
 | Startup | `*_FAILED`, no readiness report/probe | Keep ingress closed; repair dependency, rerun startup |
@@ -97,13 +98,14 @@ or explicitly retryable provider codes.
 ## Recovery and outbox
 
 Workflow commit writes aggregate, event, processed command, and outbox message in
-one SQLite transaction. Recovery can list persisted workflows and replay outbox
-rows.
+one SQLite transaction.
 
-The current replay reads rows and then deletes them. It does not have per-message
-acknowledgement, visibility timeout, delivery count, poison-message isolation, or
-a dead-letter queue. If replay delivery fails between read and downstream
-completion, operational reconciliation is required.
+The durable outbox mechanism (`WorkflowRecoveryService`) provides at-least-once delivery guarantees:
+- **Outbox State Machine**: Messages transition `pending` -> `leased` -> deleted (on successful ACK) or `quarantined` (upon reaching max attempt threshold).
+- **Atomic Conditional Claim**: Workers claim pending or expired-lease items via conditional SQL update (`UPDATE workflow_outbox SET status = 'leased', worker_id = ?, lease_token = ?, leased_at = datetime('now'), lease_expires_at = datetime('now', '+30 seconds'), attempt_count = attempt_count + 1 WHERE outbox_id = ? AND (status = 'pending' OR (status = 'leased' AND lease_expires_at < datetime('now'))) AND (next_attempt_at IS NULL OR next_attempt_at <= datetime('now'))`), populating worker ID and lease token.
+- **Stale Lease ACK Rejection**: `ack_outbox(outbox_id, lease_token)` verifies that the provided `lease_token` matches the current active lease. If a lease expires and is re-leased to another worker, a stale ACK attempt is rejected with a `StaleLeaseError` / `LeaseExpired` exception to prevent premature or duplicate row deletions.
+- **Bounded Exponential Backoff**: Processing failures schedule retries by setting `next_attempt_at = now + min(base_delay * 2^(attempt_count - 1), max_delay)`. Workers ignore items whose backoff window has not elapsed.
+- **Poison Message Quarantine & Recovery**: When `attempt_count` reaches `max_attempts` (default 5), the record moves to `quarantined` status to isolate poison messages. Operators inspect quarantined messages and execute `requeue_quarantined(outbox_id)` to clear error logs, reset attempt counters to 0, and transition status back to `pending` for re-execution.
 
 The generic `WorkflowEngine` also commits before transition validation and has an
 inconsistent `job_succeeded` mapping. Until corrected, an illegal transition may

@@ -185,6 +185,40 @@ Durable budget accounting uses integer minor units (e.g. cents/tokens):
   - `state` (string): `"reserved"`, `"committed"`, or `"released"`.
   - `_committed` (boolean property): returns `state == "committed"` for backwards compatibility.
 
+## Outbox Message and Lease Contracts
+
+Durable outbox messaging relies on explicit database schemas, lease objects, and error handling contracts in `WorkflowRecoveryService`:
+
+- **`workflow_outbox` Schema**:
+  - `outbox_id` (integer, primary key auto-increment): unique outbox message identifier.
+  - `workflow_id` (string): associated workflow context ID.
+  - `message` (string): payload or JSON-encoded notification.
+  - `status` (string enum): `"pending"`, `"leased"`, or `"quarantined"`.
+  - `worker_id` (string/null): identifier of the worker currently leasing the message.
+  - `lease_token` (string/null): opaque UUID token generated upon lease claim.
+  - `leased_at` (datetime/null): ISO 8601 timestamp when lease was acquired.
+  - `lease_expires_at` (datetime/null): ISO 8601 timestamp when lease expires.
+  - `attempt_count` (integer): number of delivery attempts made (starts at 0).
+  - `max_attempts` (integer): maximum allowed attempts (default 5) before quarantine.
+  - `next_attempt_at` (datetime/null): timestamp for exponential backoff retry gate.
+  - `last_error` (string/null): error snippet or message from previous failed attempt.
+  - `created_at` (datetime): timestamp when record was created in the outbox transaction.
+
+- **`OutboxLease` Dataclass**:
+  - `outbox_id` (integer): outbox record ID.
+  - `workflow_id` (string): correlation workflow ID.
+  - `message` (string): message payload.
+  - `lease_token` (string): active lease token required for acknowledgement (`ack_outbox`).
+  - `lease_expires_at` (datetime): expiration limit of the worker's current lease.
+  - `attempt_count` (integer): current attempt count.
+
+- **Stale Lease & Expiration Errors**:
+  - `StaleLeaseError` / `LeaseExpired`: raised when `ack_outbox(outbox_id, lease_token)` is called with an invalid, mismatched, or expired `lease_token`.
+
+- **Operator Requeue Interface (`requeue_quarantined`)**:
+  - Takes `outbox_id` (integer) or list of `outbox_id`s.
+  - Resets `status` to `"pending"`, `attempt_count` to `0`, and clears `worker_id`, `lease_token`, `leased_at`, `lease_expires_at`, `next_attempt_at`, and `last_error`.
+
 ## Compatibility and evolution
 
 - Additive optional fields may retain schema version 1 when old consumers safely

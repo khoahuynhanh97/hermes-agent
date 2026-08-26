@@ -8,7 +8,7 @@ The current bounded context is local-first. Its implemented infrastructure is:
 | --- | --- | --- |
 | Relational state | Python `sqlite3` with foreign keys enabled | Durable when backed by a persistent path |
 | Turn events | `turn_execution`, `turn_event`, and `owner_event_cursor` tables | Durable, owner-global replay |
-| Workflow state | workflow aggregate, events, processed commands, outbox | Durable |
+| Workflow state | workflow aggregate, events, processed commands, durable outbox delivery (`pending`/`leased`/`quarantined`) | Durable |
 | Capability catalog | immutable snapshots plus singleton active pointer | Durable |
 | Learning | candidate, evidence, evaluation, version, event tables | Durable |
 | Artifacts and skills | Local filesystem references | Depends on configured filesystem |
@@ -18,9 +18,7 @@ The current bounded context is local-first. Its implemented infrastructure is:
 | Public App API | FastAPI loopback reverse proxy | Stateless; browser-session boundary |
 | Web frontend | React, TypeScript, Vite | Built static bundle |
 
-There is no RabbitMQ, Kafka, Redis, distributed worker pool, or dead-letter
-queue in the current source. `workflow_outbox` is a SQLite recovery mechanism;
-it is not a broker queue or DLQ.
+There is no RabbitMQ, Kafka, Redis, or external broker queue in the current implementation. `workflow_outbox` is a durable SQLite-backed transactional outbox with atomic lease claiming, worker tokens, exponential backoff, and poison message quarantine. It provides at-least-once delivery guarantees without requiring an external broker.
 
 ## SQLite layout
 
@@ -33,7 +31,7 @@ The main table groups are:
 - capabilities: `capability_snapshot`, `capability_snapshot_binding`,
   `capability_catalog_state`;
 - workflows: `workflow`, `workflow_event`, `processed_command`,
-  `workflow_outbox`, `budget_reservation`;
+  `workflow_outbox` (supporting lease state, lease expiration, backoff, and quarantine), `budget_reservation`;
 - learning: `task_outcome`, `learning_candidate`, `evidence_ref`,
   `learning_version`, `candidate_evaluation`, `learning_event`;
 - approvals: `approval_request`, created by `ApprovalService`.
@@ -102,10 +100,7 @@ cannot forcibly terminate the underlying Python thread. Handlers must therefore
 be bounded, cooperative, and safe if their result arrives after the caller has
 timed out.
 
-`WorkflowRecoveryService` lists persisted workflows and peeks SQLite outbox
-messages without deleting them. `ack_outbox` deletes one stable record only
-after confirmed delivery. This local outbox still has no lease, retry counter,
-visibility timeout, or poison-message quarantine policy.
+`WorkflowRecoveryService` manages outbox claims, execution recovery, and message leases. Workers claim pending or expired items atomically via `claim_outbox_batch`, which sets `status = 'leased'`, assigns an opaque `lease_token`, sets `lease_expires_at`, and increments `attempt_count`. On successful delivery, the worker invokes `ack_outbox(outbox_id, lease_token)` to safely delete the outbox row; any stale ACK attempt presenting an expired or mismatched lease token is rejected. Transient delivery failures schedule retries using bounded exponential backoff (`next_attempt_at`). Messages exceeding the max attempt limit (default 5) transition to `quarantined` state to isolate poison messages, where operators can inspect and recover them using `requeue_quarantined(outbox_id)`.
 
 ## Storage and backup guidance
 
@@ -132,10 +127,9 @@ of them is expected to fail its process start/readiness check rather than report
 false health. `/api/turn` and `/api/omni/turn` are mounted on the canonical
 Gateway and proxied by the App API.
 
-Additional production gaps remain: `BudgetEngine` is process-local, outbox ACK
-has no lease/quarantine protocol, application-level rate/body limits are not
+Additional production gaps remain: application-level rate/body limits are not
 implemented, and the production static digest is required by configuration but
-is not yet checked by the App API process.
+is not yet checked by the App API process. (Note: HP-006 budget reservation and HP-007 durable outbox delivery with lease/backoff/quarantine are closed).
 
 ## Future distributed infrastructure
 

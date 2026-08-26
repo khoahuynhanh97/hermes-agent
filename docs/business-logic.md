@@ -58,6 +58,16 @@ All metered or paid operations require durable budget authorization managed by `
 - **Durable Persistence**: State survives process restarts via the SQLite `budget_reservation` table. Active (`reserved`) and `committed` allocations count toward total consumption; `released` allocations do not.
 - **Fail Closed**: Database or backend failures during budget authorization immediately fail closed with `BudgetError`. Read-only `check_budget` operations do not mutate database state.
 
+## Durable Outbox Delivery Rules
+
+Workflow event notifications and side-effect messages require durable outbox delivery guarantees managed by `WorkflowRecoveryService` and `workflow_outbox` in SQLite:
+
+- **Outbox State Machine**: Outbox items follow a strict state progression: `pending` -> `leased` -> deleted (upon successful acknowledgement) or `quarantined` (upon max attempt exhaustion).
+- **Atomic Conditional Update Claim Strategy**: Workers claim pending or expired-lease outbox records atomically using conditional SQL updates (`UPDATE workflow_outbox SET status = 'leased', worker_id = ?, lease_token = ?, leased_at = datetime('now'), lease_expires_at = datetime('now', '+30 seconds'), attempt_count = attempt_count + 1 WHERE outbox_id = ? AND (status = 'pending' OR (status = 'leased' AND lease_expires_at < datetime('now'))) AND (next_attempt_at IS NULL OR next_attempt_at <= datetime('now'))`). This guarantees at-least-once delivery while preventing worker race conditions.
+- **Stale Lease ACK Rejection**: Acknowledging a delivered outbox record (`ack_outbox`) requires matching `outbox_id` and the worker's active `lease_token`. If a lease expires and is re-claimed by another worker, any late ACK attempt using the stale lease token is rejected with a `StaleLeaseError` / `LeaseExpired` exception, preventing premature or double deletion.
+- **Bounded Exponential Backoff**: Processing failures return the outbox item to unclaimed status with an updated `next_attempt_at` timestamp calculated using bounded exponential backoff (`min(base_delay * 2^(attempt_count - 1), max_delay)`). Workers skip items whose `next_attempt_at` is in the future.
+- **Poison Message Quarantine & Requeue Procedure**: Items exceeding the maximum allowed attempt threshold (default 5 retries) transition to `quarantined` status to isolate poison messages and prevent infinite retry loops. Operators can inspect quarantined messages and execute `requeue_quarantined(outbox_id)` to reset message status to `pending`, clear error history, and reset `attempt_count` for safe manual reprocessing.
+
 ## Operator command rules
 
 Supported command types are `approve`, `reject`, `retry`, `cancel`, `upload`,

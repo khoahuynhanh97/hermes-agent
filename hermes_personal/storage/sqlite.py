@@ -111,9 +111,18 @@ CREATE TABLE IF NOT EXISTS processed_command (
 );
 CREATE TABLE IF NOT EXISTS workflow_outbox (
   outbox_id INTEGER PRIMARY KEY AUTOINCREMENT,
-  workflow_id TEXT NOT NULL REFERENCES workflow(workflow_id) ON DELETE CASCADE,
+  workflow_id TEXT NOT NULL,
   message TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending', 'leased', 'quarantined')),
+  lease_token TEXT,
+  lease_owner TEXT,
+  lease_expires_at TEXT,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 5,
+  next_attempt_at TEXT,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- Governed learning tables
@@ -299,6 +308,38 @@ def _migrate_schema(connection: sqlite3.Connection) -> None:
             """
             CREATE INDEX IF NOT EXISTS budget_reservation_owner_scope_idx
               ON budget_reservation(owner_user_id, scope_id, state, channel);
+            """
+        )
+
+        wo_cols = [
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(workflow_outbox)").fetchall()
+        ]
+        if wo_cols:
+            if "state" not in wo_cols:
+                connection.execute("ALTER TABLE workflow_outbox ADD COLUMN state TEXT NOT NULL DEFAULT 'pending'")
+            if "lease_token" not in wo_cols:
+                connection.execute("ALTER TABLE workflow_outbox ADD COLUMN lease_token TEXT")
+            if "lease_owner" not in wo_cols:
+                connection.execute("ALTER TABLE workflow_outbox ADD COLUMN lease_owner TEXT")
+            if "lease_expires_at" not in wo_cols:
+                connection.execute("ALTER TABLE workflow_outbox ADD COLUMN lease_expires_at TEXT")
+            if "attempt_count" not in wo_cols:
+                connection.execute("ALTER TABLE workflow_outbox ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0")
+            if "max_attempts" not in wo_cols:
+                connection.execute("ALTER TABLE workflow_outbox ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 5")
+            if "next_attempt_at" not in wo_cols:
+                connection.execute("ALTER TABLE workflow_outbox ADD COLUMN next_attempt_at TEXT")
+            if "last_error" not in wo_cols:
+                connection.execute("ALTER TABLE workflow_outbox ADD COLUMN last_error TEXT")
+            if "updated_at" not in wo_cols:
+                connection.execute("ALTER TABLE workflow_outbox ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''")
+                connection.execute("UPDATE workflow_outbox SET updated_at = created_at WHERE updated_at = ''")
+
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS workflow_outbox_claim_idx
+              ON workflow_outbox(state, next_attempt_at, outbox_id);
             """
         )
 
