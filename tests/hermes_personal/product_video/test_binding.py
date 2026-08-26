@@ -508,3 +508,22 @@ def test_legacy_verify_binding_integrity_mismatch():
 
     # Different resource_pack should NOT match
     assert verify_binding_integrity(binding, different_pack) is False
+
+
+def test_legacy_binding_digest_is_stable_across_key_order():
+    """FINDING 3 regression: digest must be stable regardless of dict insertion order."""
+    from hermes_personal.product_video.binding import ProductVideoBindingService
+    from hermes_personal.integrations.product_video.binding import verify_binding_integrity
+
+    pack_a = {"name": "Legacy", "metadata": {"b": 2, "a": 1}}
+    pack_b = {"metadata": {"a": 1, "b": 2}, "name": "Legacy"}
+
+    svc = ProductVideoBindingService()
+    binding_a = svc.create_binding("prod-order", pack_a)
+    binding_b = svc.create_binding("prod-order", pack_b)
+
+    assert binding_a.lock_ref.digest == binding_b.lock_ref.digest
+    assert binding_a.lock_ref.digest.startswith("sha256:")
+
+    reversed_pack = {"metadata": {"a": 1, "b": 2}, "name": "Legacy"}
+    assert verify_binding_integrity(binding_a, reversed_pack) is True
