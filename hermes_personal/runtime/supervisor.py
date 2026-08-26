@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import abc
+import socket
 import subprocess
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Sequence
+from urllib.parse import urlparse
 
 from hermes_personal.observability.health import ComponentHealth, HealthReport, HealthStatus
 from hermes_personal.observability.redaction import redact
@@ -93,10 +98,21 @@ class DefaultProcessRunner(ProcessRunner):
             cwd=str(spec.cwd),
             env=env,
             shell=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=None,
+            stderr=None,
         )
         return SubprocessChild(name=spec.name, process=popen)
+
+
+class SupervisorStartError(RuntimeError):
+    """Raised when a process cannot start or pass its readiness probe."""
+
+
+class SupervisorShutdownError(RuntimeError):
+    """Raised when a child cannot be reaped during supervisor shutdown."""
+
+
+ProbeRunner = Callable[[ProcessSpec, ChildProcess], bool]
 
 
 @dataclass(frozen=True)
@@ -129,6 +145,7 @@ class Supervisor:
         sleep_fn: Callable[[float], None] = time.sleep,
         on_event: Callable[[SupervisorEvent], None] | None = None,
         on_health_update: Callable[[HealthReport], None] | None = None,
+        probe_runner: ProbeRunner | None = None,
     ) -> None:
         self._specs = tuple(specs)
         self._runner = runner
@@ -136,6 +153,7 @@ class Supervisor:
         self._sleep = sleep_fn
         self._on_event = on_event
         self._on_health_update = on_health_update
+        self._probe_runner = probe_runner
         self._states: dict[str, ProcessState] = {s.name: ProcessState(spec=s) for s in self._specs}
         self._stop_requested = False
 
@@ -164,16 +182,116 @@ class Supervisor:
 
     def start_all(self) -> None:
         """Start all processes in declared forward order."""
-        for spec in self._specs:
-            self._start_process(spec.name)
+        try:
+            for spec in self._specs:
+                self._start_process(spec.name)
+        except SupervisorStartError:
+            self._update_health()
+            self.stop_all()
+            raise
         self._update_health()
 
     def _start_process(self, name: str) -> None:
         st = self._states[name]
-        child = self._runner.start(st.spec)
+        try:
+            # Keep the historical one-argument call: several integrations use
+            # lightweight runners whose start method only accepts ProcessSpec.
+            child = self._runner.start(st.spec)
+        except Exception as exc:
+            st.status = "degraded" if not st.spec.required else "unavailable"
+            self._emit("start_failed", name, {"required": st.spec.required})
+            if st.spec.required:
+                raise SupervisorStartError(f"failed to start required process '{name}'") from exc
+            return
+
         st.child = child
+        if not self._wait_for_readiness(st.spec, child):
+            st.status = "degraded" if not st.spec.required else "unavailable"
+            self._emit(
+                "probe_failed",
+                name,
+                {"probe_type": st.spec.readiness_probe.probe_type, "required": st.spec.required},
+            )
+            self._stop_child(st, final_status=st.status)
+            if st.spec.required:
+                raise SupervisorStartError(f"required readiness probe failed for '{name}'")
+            return
+
         st.status = "healthy"
         self._emit("started", name, {"pid": child.pid})
+
+    def _wait_for_readiness(self, spec: ProcessSpec, child: ChildProcess) -> bool:
+        probe = spec.readiness_probe
+        if probe.initial_delay_seconds > 0:
+            self._sleep(probe.initial_delay_seconds)
+
+        if self._stop_requested or child.poll() is not None:
+            return False
+
+        if self._probe_runner is not None:
+            try:
+                if not bool(self._probe_runner(spec, child)):
+                    return False
+            except Exception:
+                return False
+            return child.poll() is None
+
+        return self._run_builtin_probe(spec, child)
+
+    @staticmethod
+    def _probe_deadline(timeout_seconds: float) -> float:
+        return time.monotonic() + max(0.0, timeout_seconds)
+
+    def _run_builtin_probe(self, spec: ProcessSpec, child: ChildProcess) -> bool:
+        probe = spec.readiness_probe
+        deadline = self._probe_deadline(probe.timeout_seconds)
+        if child.poll() is not None:
+            return False
+
+        if probe.probe_type == "noop" or probe.probe_type == "exec":
+            return child.is_alive()
+
+        if probe.probe_type == "http":
+            remaining = max(0.0, deadline - time.monotonic())
+            if remaining <= 0:
+                return False
+            try:
+                with urllib.request.urlopen(probe.endpoint, timeout=remaining) as response:
+                    status = getattr(response, "status", None)
+                    if status is None:
+                        status = response.getcode()
+                    return 200 <= status < 400 and child.is_alive()
+            except (OSError, TimeoutError, urllib.error.URLError, ValueError):
+                return False
+
+        if probe.probe_type == "tcp":
+            endpoint = probe.endpoint
+            parsed = urlparse(endpoint if "://" in endpoint else f"tcp://{endpoint}")
+            if not parsed.hostname or parsed.port is None:
+                return False
+            remaining = max(0.0, deadline - time.monotonic())
+            if remaining <= 0:
+                return False
+            try:
+                with socket.create_connection((parsed.hostname, parsed.port), timeout=remaining):
+                    return child.is_alive()
+            except (OSError, TimeoutError, ValueError):
+                return False
+
+        if probe.probe_type == "file":
+            marker = Path(probe.endpoint)
+            while time.monotonic() <= deadline:
+                if child.poll() is not None:
+                    return False
+                if marker.is_file():
+                    return child.is_alive()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._sleep(min(max(0.0, probe.interval_seconds), remaining))
+            return False
+
+        return False
 
     def get_process_status(self, name: str) -> HealthStatus:
         return self._states[name].status
@@ -191,6 +309,10 @@ class Supervisor:
                 # Unexpected process exit
                 st.last_exit_code = exit_code
                 self._emit("exited", st.spec.name, {"exit_code": exit_code})
+                try:
+                    st.child.wait(timeout=0)
+                except Exception:
+                    pass
 
                 # Filter restart attempts within time window
                 cutoff = now - st.spec.restart.window_seconds
@@ -215,38 +337,78 @@ class Supervisor:
                     st.restart_attempts.append(now)
                     self._emit("restarting", st.spec.name, {"backoff_seconds": backoff, "attempt": attempts + 1})
                     self._sleep(backoff)
-                    self._start_process(st.spec.name)
+                    if self._stop_requested:
+                        continue
+                    try:
+                        self._start_process(st.spec.name)
+                    except SupervisorStartError:
+                        if st.spec.required:
+                            self._update_health()
+                            return 1
 
         self._update_health()
         return 0
 
     def stop_all(self) -> None:
         """Gracefully stop all running processes in reverse order."""
+        self._stop_requested = True
+        failures: list[str] = []
         for spec in reversed(self._specs):
             st = self._states[spec.name]
-            if st.child and st.child.is_alive():
-                self._emit("stopping", spec.name)
-                st.status = "stopping"
-                st.child.terminate()
-                # Wait with timeout
-                try:
-                    st.child.wait(timeout=spec.shutdown_timeout_seconds)
-                except Exception:
-                    pass
-
-                # If still alive, forced kill
-                if st.child.is_alive():
-                    self._emit("killing", spec.name)
-                    st.child.kill()
-
-                st.status = "stopped"
-                self._emit("stopped", spec.name)
+            if st.child is None:
+                continue
+            try:
+                final_status = st.status if st.status in ("degraded", "unavailable") else "stopped"
+                self._stop_child(st, final_status=final_status)
+            except SupervisorShutdownError:
+                failures.append(spec.name)
 
         self._update_health()
+        if failures:
+            raise SupervisorShutdownError(f"failed to reap child process(es): {', '.join(failures)}")
+
+    def _stop_child(self, st: ProcessState, final_status: HealthStatus = "stopped") -> None:
+        child = st.child
+        if child is None:
+            return
+
+        if child.is_alive():
+            self._emit("stopping", st.spec.name)
+            st.status = "stopping"
+            try:
+                child.terminate()
+            except Exception:
+                pass
+
+        try:
+            child.wait(timeout=st.spec.shutdown_timeout_seconds)
+        except Exception:
+            pass
+
+        if child.is_alive():
+            self._emit("killing", st.spec.name)
+            try:
+                child.kill()
+            except Exception:
+                pass
+            try:
+                child.wait(timeout=st.spec.shutdown_timeout_seconds)
+            except Exception:
+                pass
+
+        if child.is_alive():
+            self._emit("reap_failed", st.spec.name)
+            raise SupervisorShutdownError(f"failed to reap child process '{st.spec.name}'")
+
+        st.status = final_status
+        self._emit("stopped", st.spec.name)
 
     def run(self, max_ticks: int | None = None) -> int:
         """Run supervisor until completion or failure."""
-        self.start_all()
+        try:
+            self.start_all()
+        except SupervisorStartError:
+            return 1
         ticks = 0
         while not self._stop_requested:
             exit_code = self.step()

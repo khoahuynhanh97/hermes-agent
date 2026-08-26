@@ -85,6 +85,7 @@ def test_supervisor_independent_child_kills_and_bounded_restarts():
         specs=topology,
         runner=runner,
         clock=lambda: current_time,
+        probe_runner=lambda _spec, _child: True,
     )
     supervisor.start_all()
 
@@ -267,7 +268,11 @@ def test_supervisor_clean_shutdown_no_orphan_children():
     topology = build_process_topology(config=config)
 
     runner = FakeRunner()
-    supervisor = Supervisor(specs=topology, runner=runner)
+    supervisor = Supervisor(
+        specs=topology,
+        runner=runner,
+        probe_runner=lambda _spec, _child: True,
+    )
     supervisor.start_all()
 
     # All processes started

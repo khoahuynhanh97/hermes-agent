@@ -144,7 +144,11 @@ def test_production_http_surface_runtime_smoke_cycle():
     topology = build_process_topology(config=config)
     runner = SmokeRunner()
 
-    supervisor = Supervisor(specs=topology, runner=runner)
+    supervisor = Supervisor(
+        specs=topology,
+        runner=runner,
+        probe_runner=lambda _spec, _child: True,
+    )
     supervisor.start_all()
     for spec in topology:
         assert runner.active_processes[spec.name].is_alive() is True
