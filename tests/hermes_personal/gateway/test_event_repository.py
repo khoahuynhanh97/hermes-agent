@@ -261,9 +261,9 @@ def test_owner_event_cursor_is_global_ordered_and_survives_sqlite_reopen(
         turn_id="turn_second",
     )
     repository.claim(first_request)
+    repository.append_event(make_event(first_request, 0, event_type="completed"))
     repository.claim(second_request)
-    repository.append_event(make_event(first_request, 0))
-    repository.append_event(make_event(second_request, 0))
+    repository.append_event(make_event(second_request, 0, event_type="completed"))
     connection.close()
 
     reopened = connect(database_path)

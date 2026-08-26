@@ -98,33 +98,44 @@ class EventRepository:
                 """,
                 (request.principal.owner_user_id, request.idempotency_key),
             ).fetchone()
-            if row is None:
-                now_iso = datetime.now(timezone.utc).isoformat()
-                self._connection.execute(
-                    """
-                    INSERT INTO turn_execution (
-                      owner_user_id, idempotency_key, request_digest, turn_id,
-                      session_id, user_message, status, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, 'in_progress', ?, ?)
-                    """,
-                    (
-                        request.principal.owner_user_id,
-                        request.idempotency_key,
-                        digest,
-                        request.turn_id,
-                        request.session_id,
-                        request.message,
-                        now_iso,
-                        now_iso,
-                    ),
-                )
-                return None
+            if row is not None:
+                if row["request_digest"] != digest:
+                    raise IdempotencyConflict(request.idempotency_key)
+                if row["status"] == "in_progress":
+                    raise TurnInProgress(row["turn_id"])
+                return self._load_events(row["turn_id"])
 
-            if row["request_digest"] != digest:
-                raise IdempotencyConflict(request.idempotency_key)
-            if row["status"] == "in_progress":
-                raise TurnInProgress(row["turn_id"])
-            return self._load_events(row["turn_id"])
+            active_session_turn = self._connection.execute(
+                """
+                SELECT turn_id
+                FROM turn_execution
+                WHERE owner_user_id = ? AND session_id = ? AND status = 'in_progress'
+                """,
+                (request.principal.owner_user_id, request.session_id),
+            ).fetchone()
+            if active_session_turn is not None:
+                raise TurnInProgress(active_session_turn["turn_id"])
+
+            now_iso = datetime.now(timezone.utc).isoformat()
+            self._connection.execute(
+                """
+                INSERT INTO turn_execution (
+                  owner_user_id, idempotency_key, request_digest, turn_id,
+                  session_id, user_message, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'in_progress', ?, ?)
+                """,
+                (
+                    request.principal.owner_user_id,
+                    request.idempotency_key,
+                    digest,
+                    request.turn_id,
+                    request.session_id,
+                    request.message,
+                    now_iso,
+                    now_iso,
+                ),
+            )
+            return None
 
     def append_event(self, event: AgentEvent) -> None:
         with self._connection:

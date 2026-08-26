@@ -298,3 +298,83 @@ def test_gateway_auth_and_owner_isolation(tmp_path):
         )
         assert res.status_code == 403
 
+
+def test_same_session_concurrency_rejection_and_cross_session_independence(tmp_path):
+    import threading
+    from hermes_personal.orchestration import AgentOutput
+
+    class ControlledBlockingAgent:
+        def __init__(self):
+            self.turn1_started = threading.Event()
+            self.unblock_turn1 = threading.Event()
+            self.calls = []
+
+        def run(self, request, history):
+            self.calls.append((request, history))
+            if request.message == "Turn 1":
+                self.turn1_started.set()
+                self.unblock_turn1.wait(timeout=5.0)
+            text = f"echo:{request.message}"
+            yield AgentOutput("text_delta", {"text": text})
+            yield AgentOutput("completed", {"text": text})
+
+    agent = ControlledBlockingAgent()
+    app = create_gateway_application(
+        database_path=tmp_path / "concurrency.sqlite3",
+        api_key="key-conc",
+        owner_user_id="owner-conc",
+        external_subject="owner-conc",
+        provider_mode="fake",
+        agent=agent,
+    )
+
+    with TestClient(app) as client:
+        turn1_resp = []
+
+        def run_turn1():
+            r = client.post(
+                "/api/turn",
+                json={"conversation_id": "session-A", "message": "Turn 1"},
+                headers={"Authorization": "Bearer key-conc", "Idempotency-Key": "conc-1"},
+            )
+            turn1_resp.append(r)
+
+        t1_thread = threading.Thread(target=run_turn1)
+        t1_thread.start()
+
+        # Wait deterministically via threading.Event until Turn 1 claims execution and starts agent
+        assert agent.turn1_started.wait(timeout=5.0), "Turn 1 failed to start"
+
+        # 1. Turn 2 on SAME Session A while Turn 1 is in progress -> MUST yield TURN_IN_PROGRESS failed event
+        t2_res = client.post(
+            "/api/turn",
+            json={"conversation_id": "session-A", "message": "Turn 2 concurrent"},
+            headers={"Authorization": "Bearer key-conc", "Idempotency-Key": "conc-2"},
+        )
+        assert t2_res.status_code == 200
+        t2_events = [json.loads(line) for line in t2_res.text.strip().splitlines()]
+        assert len(t2_events) == 1
+        assert t2_events[0]["event_type"] == "failed"
+        assert t2_events[0]["data"]["code"] == "TURN_IN_PROGRESS"
+
+        # 2. Turn 1 on Session B (DIFFERENT session) -> MUST succeed independently while Session A is in progress
+        tb_res = client.post(
+            "/api/turn",
+            json={"conversation_id": "session-B", "message": "Session B Turn 1"},
+            headers={"Authorization": "Bearer key-conc", "Idempotency-Key": "conc-b-1"},
+        )
+        assert tb_res.status_code == 200
+        tb_events = [json.loads(line) for line in tb_res.text.strip().splitlines()]
+        assert [e["event_type"] for e in tb_events] == ["text_delta", "completed"]
+
+        # 3. Unblock Turn 1 on Session A and finish cleanly
+        agent.unblock_turn1.set()
+        t1_thread.join(timeout=5.0)
+
+        assert len(turn1_resp) == 1
+        assert turn1_resp[0].status_code == 200
+
+        # 4. Assert agent was invoked ONCE for Session A Turn 1, ONCE for Session B Turn 1, and ZERO times for rejected concurrent Turn 2
+        assert len(agent.calls) == 2
+        session_ids = [req.session_id for req, _ in agent.calls]
+        assert len(set(session_ids)) == 2

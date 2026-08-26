@@ -20,12 +20,22 @@ Every turn has an authenticated idempotency key. `EventRepository` atomically cl
 
 Claim outcomes are fail closed:
 
-- A new key creates one `in_progress` execution.
+- A new key on an idle session creates one `in_progress` execution.
+- A new key while another turn is in progress for the SAME session raises `TurnInProgress` (yielding a canonical `TURN_IN_PROGRESS` failed event on HTTP streaming) and does NOT invoke the agent.
 - The same key and digest while running raises `TurnInProgress` and does not call the agent.
 - The same key with a different digest raises `IdempotencyConflict` and does not touch transcript or agent state.
 - The same key and digest after `completed` or `failed` reconstructs stored events and replays them without appending another user turn or invoking the agent.
 
 Each event is serialized in SQLite under `(turn_id, sequence)` with a unique `event_id`. Live execution writes the event to the replay store and transcript before yielding it. A `completed` or `failed` event marks the execution terminal before it is yielded. Replay is ordered by sequence and preserves the original event ID, canonical turn ID, timestamp, correlations, payload, and terminal type. Reconstructed event payloads are recursively immutable. Closing and reopening SQLite is part of the replay contract; there is no in-memory idempotency fallback.
+
+## Session-Scoped Agent Pool Lifecycle
+
+The configured provider mode uses `SessionScopedAgentPool` in `hermes_personal/runtime/gateway_server.py`:
+
+- **Instantiation**: `AIAgent` instances are created on-demand per `(owner_id, session_id)` when the first turn arrives.
+- **Cache-Safe Isolation**: Subsequent turns for the same `(owner_id, session_id)` reuse the exact same `AIAgent` instance, preserving prompt prefix caching while ensuring distinct sessions never share mutable agent state.
+- **Shutdown Disposal**: Upon Gateway shutdown, the lifespan/shutdown handler invokes `SessionScopedAgentPool.close()`, which closes all pooled agent instances and cleans up resources.
+- **Production Limitation**: The in-memory pool retains active session instances for the duration of the Gateway process lifetime without an LRU eviction/idle session retirement policy. In large multi-user production deployments, an explicit bounded eviction strategy should be added.
 
 ## Deterministic Controls
 

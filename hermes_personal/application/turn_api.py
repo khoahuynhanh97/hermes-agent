@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from hermes_personal.contracts import AgentTurnRequest, to_primitive
 from hermes_personal.gateway.normalizers import ChannelTurnNormalizer
-from hermes_personal.orchestration import HermesTurnService
+from hermes_personal.orchestration import HermesTurnService, TurnInProgress
 
 
 @dataclass(frozen=True)
@@ -102,9 +102,28 @@ def create_turn_router(
             return _error(400, "bad_request", str(error))
 
         async def stream():
-            async for event in turn_service.handle(turn_request):
+            try:
+                async for event in turn_service.handle(turn_request):
+                    yield json.dumps(
+                        to_primitive(event),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ) + "\n"
+            except TurnInProgress as error:
+                failed_event = {
+                    "event_type": "failed",
+                    "principal_id": turn_request.principal.owner_user_id,
+                    "session_id": turn_request.session_id,
+                    "turn_id": turn_request.turn_id,
+                    "sequence": 0,
+                    "data": {
+                        "error": f"Turn in progress for session: {error}",
+                        "code": "TURN_IN_PROGRESS",
+                    },
+                    "workflow_id": turn_request.workflow_id,
+                }
                 yield json.dumps(
-                    to_primitive(event),
+                    failed_event,
                     ensure_ascii=False,
                     separators=(",", ":"),
                 ) + "\n"
