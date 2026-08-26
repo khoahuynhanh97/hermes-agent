@@ -313,6 +313,32 @@ hermes-agent/
 `gateway.log` when running the gateway. Profile-aware via `get_hermes_home()`.
 Browse with `hermes logs [--follow] [--level ...] [--session ...]`.
 
+### Hermes Personal architecture overlay
+
+`hermes_personal/` is a bounded rearchitecture layer inside this upstream
+repository. Its canonical documentation starts at [`docs/README.md`](docs/README.md).
+Before changing this package, read the architecture, data-contract, security,
+error-handling, idempotency, and known-gaps documents linked there.
+
+Hard requirements for this bounded context:
+
+- `AgentTurnRequest` and `AgentEvent` are the channel-neutral wire contracts.
+- `HermesTurnService` is the canonical turn path; Telegram, CLI, Web, and Omni
+  remain thin ingress adapters and must not create another general-purpose brain.
+- SQLite repositories are the durable source of truth. In-memory stores and
+  thread-local deduplication are test/local fallbacks, not production durability.
+- Product-video milestones are HITL gated. Never bypass Product Lock, Brief,
+  Scene Plan, Storyboard, or Final approval.
+- A process or route listed in a topology/cutover specification is not considered
+  implemented until its import target exists and a runtime test exercises it.
+- Do not introduce RabbitMQ, Kafka, Redis, a DLQ, or provider calls by assumption;
+  document and approve that architecture change first.
+
+For focused verification on native Windows, use
+`uv run pytest tests/hermes_personal -q` and
+`uv run ruff check hermes_personal tests/hermes_personal`. Before upstream PRs,
+also run the repository-standard `scripts/run_tests.sh` from a supported shell.
+
 ## TypeScript Style
 
 Applies to TypeScript across Hermes: desktop, TUI, website, and future TS packages.

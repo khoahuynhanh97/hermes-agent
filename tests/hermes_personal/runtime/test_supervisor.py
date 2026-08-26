@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+import socket
+from unittest.mock import patch
+
 import pytest
 
 from hermes_personal.runtime.processes import ProcessSpec, ProbeSpec, RestartPolicy
 from hermes_personal.runtime.supervisor import (
     ChildProcess,
+    DefaultProcessRunner,
     ProcessRunner,
     Supervisor,
+    SupervisorStartError,
     SupervisorEvent,
 )
 
@@ -20,6 +25,7 @@ class FakeChildProcess(ChildProcess):
         self._terminated = False
         self._killed = False
         self._stubborn = stubborn
+        self.wait_calls: list[float | None] = []
 
     @property
     def name(self) -> str:
@@ -45,6 +51,7 @@ class FakeChildProcess(ChildProcess):
         self._exit_code = -9
 
     def wait(self, timeout: float | None = None) -> int:
+        self.wait_calls.append(timeout)
         if self._stubborn and not self._killed:
             raise TimeoutError(f"Process {self._name} timed out during graceful shutdown")
         return self._exit_code if self._exit_code is not None else 0
@@ -100,6 +107,7 @@ def make_spec(
     window: float = 60.0,
     base_backoff: float = 1.0,
     max_backoff: float = 10.0,
+    probe: ProbeSpec | None = None,
 ) -> ProcessSpec:
     return ProcessSpec(
         name=name,
@@ -107,7 +115,7 @@ def make_spec(
         cwd=Path("/tmp"),
         env_keys=(),
         required=required,
-        readiness_probe=ProbeSpec(probe_type="noop"),
+        readiness_probe=probe or ProbeSpec(probe_type="noop"),
         shutdown_timeout_seconds=2.0,
         restart=RestartPolicy(
             max_attempts=max_attempts,
@@ -134,6 +142,296 @@ def test_ordered_start_of_processes(fake_runner, fake_clock):
     assert [s.name for s in fake_runner.started] == ["p1", "p2", "p3"]
     assert len(events) == 3
     assert all(e.event_type == "started" for e in events)
+
+
+def test_default_runner_inherits_child_streams_without_shell(monkeypatch):
+    calls = {}
+
+    class FakePopen:
+        pid = 4242
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            pass
+
+        def kill(self):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
+    def fake_popen(*args, **kwargs):
+        calls["args"] = args
+        calls["kwargs"] = kwargs
+        return FakePopen()
+
+    monkeypatch.setattr("hermes_personal.runtime.supervisor.subprocess.Popen", fake_popen)
+
+    DefaultProcessRunner().start(make_spec("worker"))
+
+    assert calls["kwargs"]["shell"] is False
+    assert calls["kwargs"]["stdout"] is None
+    assert calls["kwargs"]["stderr"] is None
+    assert "secret" not in repr(calls)
+
+
+def test_builtin_file_probe_must_pass_before_process_is_healthy(fake_runner, fake_clock, tmp_path):
+    marker = tmp_path / "ready"
+    marker.write_text("ok", encoding="utf-8")
+    spec = make_spec(
+        "file_service",
+        probe=ProbeSpec(
+            probe_type="file",
+            endpoint=str(marker),
+            initial_delay_seconds=0.0,
+            timeout_seconds=0.01,
+        ),
+    )
+
+    Supervisor(
+        specs=(spec,),
+        runner=fake_runner,
+        clock=fake_clock.time,
+        sleep_fn=fake_clock.sleep,
+    ).start_all()
+
+    assert fake_runner.active_processes["file_service"][-1].is_alive()
+
+
+def test_probe_timeout_is_reported_as_required_start_failure(fake_runner, fake_clock):
+    spec = make_spec(
+        "http_service",
+        probe=ProbeSpec(
+            probe_type="http",
+            endpoint="http://127.0.0.1:1/healthz",
+            initial_delay_seconds=0.0,
+            timeout_seconds=0.01,
+        ),
+    )
+    with patch("urllib.request.urlopen", side_effect=TimeoutError):
+        sup = Supervisor(
+            specs=(spec,),
+            runner=fake_runner,
+            clock=fake_clock.time,
+            sleep_fn=fake_clock.sleep,
+        )
+        with pytest.raises(SupervisorStartError, match="http_service"):
+            sup.start_all()
+
+    assert not fake_runner.active_processes["http_service"][-1].is_alive()
+
+
+def test_builtin_http_probe_accepts_success_response_status(fake_runner, fake_clock):
+    class Response:
+        status = 204
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    spec = make_spec(
+        "http_service",
+        probe=ProbeSpec(
+            probe_type="http",
+            endpoint="http://127.0.0.1/healthz",
+            initial_delay_seconds=0.0,
+            timeout_seconds=1.0,
+        ),
+    )
+    with patch("urllib.request.urlopen", return_value=Response()):
+        Supervisor(
+            specs=(spec,),
+            runner=fake_runner,
+            clock=fake_clock.time,
+            sleep_fn=fake_clock.sleep,
+        ).start_all()
+
+
+def test_builtin_tcp_probe_connects_to_ready_listener(fake_runner, fake_clock):
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    try:
+        host, port = listener.getsockname()
+        spec = make_spec(
+            "tcp_service",
+            probe=ProbeSpec(
+                probe_type="tcp",
+                endpoint=f"tcp://{host}:{port}",
+                initial_delay_seconds=0.0,
+                timeout_seconds=1.0,
+            ),
+        )
+        Supervisor(
+            specs=(spec,),
+            runner=fake_runner,
+            clock=fake_clock.time,
+            sleep_fn=fake_clock.sleep,
+        ).start_all()
+    finally:
+        listener.close()
+
+
+def test_injected_probe_runner_controls_readiness_for_all_probe_types(fake_runner, fake_clock, tmp_path):
+    probe_types = ("noop", "http", "tcp", "file")
+    seen = []
+
+    def probe_runner(spec, child):
+        seen.append((spec.name, spec.readiness_probe.probe_type, child.pid))
+        return True
+
+    specs = tuple(
+        make_spec(
+            f"service_{probe_type}",
+            probe=ProbeSpec(probe_type=probe_type, endpoint=str(tmp_path / "ready")),
+        )
+        for probe_type in probe_types
+    )
+    Supervisor(
+        specs=specs,
+        runner=fake_runner,
+        probe_runner=probe_runner,
+        clock=fake_clock.time,
+        sleep_fn=fake_clock.sleep,
+    ).start_all()
+
+    assert [item[1] for item in seen] == list(probe_types)
+    assert all(fake_runner.active_processes[spec.name][-1].is_alive() for spec in specs)
+
+
+def test_required_probe_failure_stops_prior_children_and_optional_failure_degrades(fake_runner, fake_clock):
+    specs = (
+        make_spec("required_ok"),
+        make_spec("optional_bad", required=False),
+        make_spec("required_bad"),
+    )
+
+    def probe_runner(spec, child):
+        return spec.name not in {"optional_bad", "required_bad"}
+
+    sup = Supervisor(
+        specs=specs,
+        runner=fake_runner,
+        probe_runner=probe_runner,
+        clock=fake_clock.time,
+        sleep_fn=fake_clock.sleep,
+    )
+    with pytest.raises(SupervisorStartError, match="required_bad"):
+        sup.start_all()
+
+    assert sup.get_process_status("optional_bad") == "degraded"
+    assert all(not children[-1].is_alive() for children in fake_runner.active_processes.values())
+
+
+def test_child_exit_before_probe_is_a_probe_failure(fake_runner, fake_clock):
+    spec = make_spec("early_exit")
+    probe_calls = []
+
+    def probe_runner(_spec, _child):
+        probe_calls.append(True)
+        return True
+
+    original_start = fake_runner.start
+
+    def start_and_exit(start_spec):
+        child = original_start(start_spec)
+        child.exit_with(1)
+        return child
+
+    fake_runner.start = start_and_exit
+    sup = Supervisor(
+        specs=(spec,),
+        runner=fake_runner,
+        probe_runner=probe_runner,
+        clock=fake_clock.time,
+        sleep_fn=fake_clock.sleep,
+    )
+
+    with pytest.raises(SupervisorStartError, match="early_exit"):
+        sup.start_all()
+    assert probe_calls == []
+
+
+def test_child_exit_during_probe_is_not_marked_healthy(fake_runner, fake_clock):
+    spec = make_spec("probe_exit")
+
+    def probe_runner(_spec, child):
+        child.exit_with(1)
+        return True
+
+    sup = Supervisor(
+        specs=(spec,),
+        runner=fake_runner,
+        probe_runner=probe_runner,
+        clock=fake_clock.time,
+        sleep_fn=fake_clock.sleep,
+    )
+
+    with pytest.raises(SupervisorStartError, match="probe_exit"):
+        sup.start_all()
+
+
+def test_request_stop_during_backoff_does_not_restart_child(fake_runner, fake_clock):
+    spec = make_spec("backoff_service", probe=ProbeSpec(probe_type="noop", initial_delay_seconds=0.0))
+    sup = None
+
+    def sleep_and_stop(_seconds):
+        fake_clock.advance(_seconds)
+        sup.request_stop()
+
+    sup = Supervisor(
+        specs=(spec,),
+        runner=fake_runner,
+        clock=fake_clock.time,
+        sleep_fn=sleep_and_stop,
+    )
+    sup.start_all()
+    fake_runner.active_processes["backoff_service"][-1].exit_with(1)
+
+    assert sup.step() == 0
+    assert len(fake_runner.started) == 1
+
+
+def test_run_returns_zero_after_stop_requested_by_interrupt_path(fake_runner, fake_clock):
+    sup = None
+
+    def on_event(event):
+        if event.event_type == "started":
+            sup.request_stop()
+
+    sup = Supervisor(
+        specs=(make_spec("interruptible_service"),),
+        runner=fake_runner,
+        clock=fake_clock.time,
+        sleep_fn=fake_clock.sleep,
+        on_event=on_event,
+    )
+
+    assert sup.run() == 0
+    assert not fake_runner.active_processes["interruptible_service"][-1].is_alive()
+
+
+def test_shutdown_reaps_after_forced_kill(fake_runner, fake_clock):
+    spec = make_spec("stubborn_service")
+    fake_runner.stubborn_names.add(spec.name)
+    sup = Supervisor(
+        specs=(spec,),
+        runner=fake_runner,
+        clock=fake_clock.time,
+        sleep_fn=fake_clock.sleep,
+    )
+    sup.start_all()
+    child = fake_runner.active_processes[spec.name][-1]
+
+    sup.stop_all()
+
+    assert child._killed is True
+    assert len(child.wait_calls) >= 2
+    assert not child.is_alive()
 
 
 def test_unexpected_child_exit_triggers_bounded_exponential_backoff(fake_runner, fake_clock):

@@ -1,81 +1,152 @@
-# Hermes Personal Gateway Operations & Acceptance Guide
+# Hermes Personal Operations Runbook
 
-This document defines the operational procedures, offline acceptance evidence, and verified security invariants for the Hermes Personal Gateway runtime.
+This runbook covers the implemented operational surfaces and the checks required
+before deployment. Read [Infrastructure](../infrastructure.md) for topology and
+storage details and [Security](../security-and-auth.md) before exposing HTTP.
 
----
+## Current operational status
 
-## 1. Supervised Runtime Architecture (`hermes start`)
+The runtime configuration, startup coordinator, process topology, supervisor,
+readiness model, FastAPI router factory, and tests exist. The complete
+`hermes start` process set is not launchable from this checkout because five
+declared child modules are absent. Do not use a successful topology/supervisor
+unit test as production startup evidence.
 
-The Hermes Personal Gateway runtime unifies all natural-language channels (`Telegram`, `CLI`, `Web`, `Omni`) through a single upstream Agent Turn boundary (`HermesTurnService`).
+Missing modules are listed in
+[Infrastructure: Known runtime gaps](../infrastructure.md#known-runtime-gaps).
 
-### Supervised Components
-- **CLI Supervisor Entrypoint (`hermes start`)**:
-  - Arguments:
-    * `--mode {development,production}` (defaults to config-defined or development mode)
-    * `--config CONFIG` (path to `config.yaml`)
-    * `--no-open-browser` (suppresses browser launch in development mode)
-  - Manages process topology: Gateway, Application API (FastAPI), MCP Discovery, Background Worker.
-  - Implements bounded exponential backoff restarts for degraded child processes.
-- **FastAPI Application Plane (`hermes_personal/application/`)**:
-  - `/health/live`, `/health/ready`, `/health/components/{name}`
-  - `/api/events` (SSE stream with monotonic sequence resumption)
-  - `/api/events/replay` (cursor-based JSON event history)
-  - `/api/operator/command` (authenticated operator action dispatcher)
-  - `/api/artifacts/{id}` (canonical artifact metadata with owner isolation)
-- **Shared Application Plane**:
-  - `HermesTurnService`: Single natural-language turn boundary with global identity resolution.
-  - `WorkflowEngine` & `ApprovalEngine`: Deterministic workflow execution and multi-stage human-in-the-loop approvals.
-  - `CapabilityCatalogService` & `CapabilitySnapshotRepository`: Stable capability snapshot resolution with policy checks.
-  - `DurableEventStore`: Commits all turn/workflow/approval/artifact events per owner.
+## Safe offline verification
 
----
+These checks do not require a live or paid provider:
 
-## 2. Offline Verification & Operational Smoke Procedure (Zero Paid Provider Calls)
+```powershell
+uv run pytest tests/hermes_personal -q
+uv run ruff check hermes_personal tests/hermes_personal
+npm --prefix web run build
+git diff --check
+```
 
-To verify end-to-end operation locally without paid external API calls:
+For focused runtime/API coverage:
 
-1. **Start Runtime in Development Mode with Fake Profile**:
-   ```bash
-   uv run hermes start --mode development --no-open-browser
-   ```
-2. **Verify Liveness and Readiness Probes**:
-   ```bash
-   curl -i http://127.0.0.1:8000/health/live
-   curl -i http://127.0.0.1:8000/health/ready
-   ```
-   Expected: HTTP 200 `{"status": "ready", "ready": true}` once all mandatory dependencies pass startup checks.
+```powershell
+uv run pytest tests/hermes_personal/e2e -q
+uv run pytest tests/hermes_personal/runtime -q
+uv run pytest tests/hermes_personal/runtime/test_application_api.py -q
+```
 
-3. **Subscribe to SSE Event Stream**:
-   ```bash
-   curl -N http://127.0.0.1:8000/api/events?owner_id=op_admin
-   ```
-   Observe real event frames (`text_delta`, `tool_activity`, `workflow_state`, `heartbeat`) streamed with monotonic sequence IDs.
+Use actual paths returned by `rg --files tests/hermes_personal` if a focused
+directory has been renamed. Before an upstream PR, run `scripts/run_tests.sh`
+from a supported shell for CI parity.
 
-4. **Stop Runtime Cleanly**:
-   Send `SIGINT` (Ctrl+C). Verify supervisor terminates all child processes cleanly without orphaned processes or corrupt database leases.
+## FastAPI composition smoke
 
----
+The application factory can be tested in process with a configured
+`ReadinessProbe`, owner-bound `auth_validator`, durable event-store adapter,
+artifact store, and command handler. The default composition is local/test only:
 
-## 3. Security Boundaries and Operational Guardrails
+- no readiness probe means `/health/ready` returns 503;
+- default auth accepts any non-empty token;
+- default event store is process-local memory;
+- missing command handler returns `accepted` without durable processing.
 
-- **Owner Isolation**: Events, workflows, artifacts, and learning candidates are strictly scoped to `owner_user_id`. Cross-user access returns HTTP 403 / None.
-- **Optimistic Concurrency**: Operator approvals require matching `expected_version`; stale or duplicate submissions are rejected safely (`VersionConflict`).
-- **Secret Redaction**: API keys, bearer tokens, passwords, and sensitive query parameters are redacted before logging or metric reporting.
-- **Zero Fake Progress**: Frontend UI and backend services emit progress only from durable committed `AgentEvent` records. Synthetic progress timers and mock artifact IDs are strictly forbidden.
+Do not expose that default composition to an untrusted network.
 
----
+Implemented routes:
 
-## 4. Packaging and Distribution Policy
+```text
+GET  /health/live
+GET  /health/ready
+GET  /health/components/{name}
+GET  /api/events
+GET  /api/events/replay
+POST /api/operator/command
+GET  /api/artifacts/{artifact_id}
+```
 
-Upstream Hermes enforces a packaging policy where unmanaged `uv build --wheel` is intentionally blocked by `setup.py` (`RuntimeError: Building wheels or sdists for hermes-agent is not supported. Hermes is distributed via shell installer, Docker, or Nix.`).
+`/api/turn` and `/api/omni/turn` are not currently mounted.
 
-For development and testing:
-- **Editable Development Install**:
-  ```bash
-  uv sync
-  # or: uv pip install -e .
-  ```
-- **Nix / CI Build Verification**:
-  ```bash
-  $env:HERMES_NIX_BUILD="1"; uv build --wheel
-  ```
+## Startup gate
+
+Production composition must inject real callbacks for every mandatory startup
+step:
+
+1. config validation and required-secret presence;
+2. SQLite migration;
+3. expired lease recovery;
+4. workflow/outbox recovery while preserving pending approvals;
+5. MCP discovery;
+6. capability snapshot activation;
+7. mandatory dependency probes;
+8. ingress readiness.
+
+A missing callback is currently a completed no-op. Verify step details, not only
+the final `is_ready` flag.
+
+## Supervisor behavior
+
+The supervisor starts children in declared order and stops them in reverse.
+`SIGINT`/`SIGTERM` requests graceful shutdown. Each child gets its configured
+timeout, then is killed if still alive. Required restart exhaustion returns
+non-zero and triggers shutdown; optional exhaustion reports degraded.
+
+Current gaps: child readiness probes are declared but not executed; status is set
+to healthy immediately after process creation. Captured stdout/stderr are not
+drained. These must be fixed before treating supervisor health as readiness.
+
+Before enabling the launcher, perform a real smoke test that verifies:
+
+- every module imports and binds its configured port;
+- readiness reflects dependency state, not PID existence;
+- no secret appears in argv or logs;
+- repeated child crashes respect attempt windows/backoff;
+- Ctrl+C leaves no child process;
+- SQLite remains readable and workflow/event replay succeeds after restart.
+
+## Database and recovery
+
+- Use a persistent SQLite path with restricted ACLs.
+- Apply migrations before ingress becomes ready.
+- Back up using a SQLite-consistent mechanism.
+- Test restore with owner-scoped event replay and workflow version reads.
+- Treat `workflow_outbox` as an outbox, not a broker or DLQ.
+- Reconcile delivery before deleting/replaying failed external work.
+
+## Incident triage
+
+| Symptom | First checks | Safe action |
+| --- | --- | --- |
+| readiness 503 | failure code, startup step details, required components | Repair dependency and rerun startup |
+| duplicate turn in progress | canonical turn ID and last committed event | Wait/replay; do not create a new paid action |
+| idempotency conflict | owner, key, semantic request digest | Correct request or use a new logical key |
+| workflow version conflict | persisted aggregate/version and command ID | Reload, reconcile, retry intentionally |
+| HITL blocked | current state and approval record | Obtain explicit approval; never bypass |
+| digest mismatch | input ref/version/digest and binding chain | Replace stale input and invalidate descendants |
+| child restart exhausted | stderr, exit code, restart history | Keep required ingress down; fix root cause |
+| SSE appears idle | replay cursor, owner auth, committed event store | Inspect by turn; current cursor is not owner-global and must not drive production resume |
+
+## Packaging
+
+Normal upstream distribution uses the supported installer, Docker, or Nix. For
+development:
+
+```powershell
+uv sync
+```
+
+Wheel verification is permitted only through the repository's Nix/CI override:
+
+```powershell
+$env:HERMES_NIX_BUILD = "1"
+uv build --wheel
+```
+
+Delete local `build/`, `dist/`, and generated metadata after acceptance if they
+are not intended artifacts; never delete unrelated user files.
+
+## Acceptance evidence
+
+An operations completion report must include exact commands, pass counts, commit
+or diff range, remaining uncommitted files, runtime gaps, and confirmation that
+no paid provider was called. UI acceptance requires real browser evidence when
+the criterion explicitly asks for desktop/mobile rendering; build/API tests are
+not equivalent unless the acceptance plan is formally adjusted.

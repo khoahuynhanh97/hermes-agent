@@ -134,3 +134,57 @@ def test_validate_secrets_presence_without_logging_values(repo_root):
             "HERMES_TELEGRAM_TOKEN": "secret_token_val",
             "HERMES_API_KEY": "",
         })
+
+
+def test_disabled_telegram_does_not_require_telegram_secret(repo_root):
+    config = RuntimeConfig(
+        mode="development",
+        repo_root=repo_root,
+        enable_telegram=False,
+    )
+
+    config.validate_secrets_presence({"HERMES_API_KEY": "local-runtime-key"})
+
+
+def test_fake_provider_is_explicit_and_development_only(repo_root):
+    config = RuntimeConfig(
+        mode="development",
+        repo_root=repo_root,
+        provider_mode="fake",
+        enable_telegram=False,
+        enable_mcp=False,
+        enable_workers=False,
+        enable_web=False,
+    )
+
+    gateway = next(spec for spec in build_process_topology(config) if spec.name == "gateway")
+    assert gateway.argv[-2:] == ("--provider-mode", "fake")
+
+    with pytest.raises(RuntimeConfigError, match="fake provider"):
+        RuntimeConfig(
+            mode="production",
+            repo_root=repo_root,
+            provider_mode="fake",
+            web_static_dir=repo_root,
+            web_static_digest="sha256:test",
+        )
+
+
+def test_provider_mode_loads_from_runtime_config(tmp_path, repo_root):
+    config_path = tmp_path / "runtime.yaml"
+    config_path.write_text(
+        """
+runtime:
+  provider_mode: fake
+  enable_telegram: false
+  enable_mcp: false
+  enable_workers: false
+  enable_web: false
+""",
+        encoding="utf-8",
+    )
+
+    config = RuntimeConfig.from_file(config_path, repo_root=repo_root)
+
+    assert config.provider_mode == "fake"
+    assert config.enable_telegram is False

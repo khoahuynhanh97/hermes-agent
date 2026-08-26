@@ -325,6 +325,19 @@ User message → AIAgent._run_agent_loop()
 - **Provider abstraction**: The agent works with any OpenAI-compatible API. Provider resolution happens at init time (Nous Portal OAuth, OpenRouter API key, or custom endpoint).
 - **Provider routing**: When using OpenRouter, `provider_routing` in config.yaml controls provider selection (sort by throughput/latency/price, allow/ignore specific providers, data retention policies). These are injected as `extra_body.provider` in API requests.
 
+### Hermes Personal bounded context
+
+The `hermes_personal/` package adds a canonical multi-channel turn path, durable
+workflow primitives, governed capabilities, product-video HITL orchestration,
+and governed learning. Its documentation index is
+[`docs/README.md`](docs/README.md). Keep this layer compatible with the upstream
+public `AIAgent` API; do not fork the general-purpose agent loop.
+
+The package currently uses SQLite, local filesystem storage, in-process job
+threads, and subprocess supervision. Broker, DLQ, RBAC, and production launcher
+work must be proposed explicitly instead of being inferred from plans or class
+names.
+
 ---
 
 ## Code Style
@@ -932,6 +945,23 @@ refactor/description   # Code restructuring
 2. **Test manually**: Run `hermes` and exercise the code path you changed
 3. **Check cross-platform impact**: If you touch file I/O, process management, or terminal handling, consider macOS, Linux, and WSL2
 4. **Keep PRs focused**: One logical change per PR. Don't mix a bug fix with a refactor with a new feature.
+
+### Hermes Personal change checklist
+
+For a change that touches `hermes_personal/`:
+
+1. Identify the owning bounded context and update the matching document in
+   [`docs/README.md`](docs/README.md) when a contract or behavior changes.
+2. Preserve the canonical `AgentTurnRequest -> HermesTurnService -> AIAgent ->
+   AgentEvent` path and owner/session isolation.
+3. Add focused tests under `tests/hermes_personal/`; include replay, version,
+   digest, or HITL failure cases when applicable.
+4. Run `uv run pytest tests/hermes_personal -q` and
+   `uv run ruff check hermes_personal tests/hermes_personal` on native Windows.
+5. Run `git diff --check`. For upstream PR parity, also run
+   `scripts/run_tests.sh` from a supported shell and the affected Web checks.
+6. Report known implementation gaps. Do not present declarative topology,
+   deterministic fake-provider output, or an in-memory store as production proof.
 
 ### PR description
 

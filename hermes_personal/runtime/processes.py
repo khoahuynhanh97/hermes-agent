@@ -83,6 +83,8 @@ def build_process_topology(config: RuntimeConfig) -> tuple[ProcessSpec, ...]:
                 "hermes_personal.gateway.server",
                 "--port",
                 str(config.gateway_port),
+                "--provider-mode",
+                config.provider_mode,
             ),
             cwd=root,
             env_keys=("HERMES_HOME", "HERMES_PORT", "HERMES_API_KEY"),

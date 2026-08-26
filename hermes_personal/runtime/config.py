@@ -9,6 +9,7 @@ from typing import Any, Literal
 from utils import fast_safe_load
 
 RuntimeMode = Literal["development", "production", "test"]
+ProviderMode = Literal["configured", "fake"]
 
 
 class RuntimeConfigError(Exception):
@@ -36,6 +37,7 @@ class RuntimeConfig:
     enable_web: bool = True
     enable_workers: bool = True
     enable_mcp: bool = True
+    provider_mode: ProviderMode = "configured"
     secrets_env_keys: tuple[str, ...] = ("HERMES_TELEGRAM_TOKEN", "HERMES_API_KEY")
 
     def __post_init__(self) -> None:
@@ -54,12 +56,18 @@ class RuntimeConfig:
                 raise RuntimeConfigError("Production mode requires web_static_dir to be specified for Web surface")
             if not self.web_static_digest:
                 raise RuntimeConfigError("Production mode requires web_static_digest for static bundle verification")
+        if self.mode == "production" and self.provider_mode == "fake":
+            raise RuntimeConfigError("Production mode cannot use the fake provider")
+        if self.provider_mode not in {"configured", "fake"}:
+            raise RuntimeConfigError(f"Unsupported provider_mode: {self.provider_mode}")
 
     def validate_secrets_presence(self, env: dict[str, str] | None = None) -> None:
         """Check required secrets are present in environment without leaking their values in logs/errors."""
         active_env = os.environ if env is None else env
         missing: list[str] = []
         for key in self.secrets_env_keys:
+            if key == "HERMES_TELEGRAM_TOKEN" and not self.enable_telegram:
+                continue
             if not active_env.get(key):
                 missing.append(key)
         if missing:
@@ -115,6 +123,7 @@ class RuntimeConfig:
             "enable_web",
             "enable_workers",
             "enable_mcp",
+            "provider_mode",
             "web_static_digest",
         ):
             if key in runtime_data:

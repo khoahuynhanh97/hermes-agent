@@ -164,6 +164,12 @@ For the full command lists, see the [CLI guide](https://hermes-agent.nousresearc
 
 All documentation lives at **[hermes-agent.nousresearch.com/docs](https://hermes-agent.nousresearch.com/docs/)**:
 
+This branch also contains the source-backed documentation for the
+`hermes_personal` gateway rearchitecture. Start with the local
+[`docs/README.md`](docs/README.md) index. It distinguishes implemented runtime
+behavior from design-plan targets and links architecture, contracts, security,
+operations, integration, error, and idempotency references.
+
 | Section                                                                                             | What's Covered                                             |
 | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
 | [Quickstart](https://hermes-agent.nousresearch.com/docs/getting-started/quickstart)                 | Install → setup → first conversation in 2 minutes          |
@@ -217,6 +223,9 @@ See `hermes claw migrate --help` for all options, or use the `openclaw-migration
 ## Contributing
 
 We welcome contributions! See the [Contributing Guide](https://hermes-agent.nousresearch.com/docs/developer-guide/contributing) for development setup, code style, and PR process.
+
+Changes under `hermes_personal/` must also follow the bounded-context checklist
+in [`CONTRIBUTING.md`](CONTRIBUTING.md#hermes-personal-change-checklist).
 
 Quick start for contributors — use the standard installer, then work from the
 full git checkout it creates at `$HERMES_HOME/hermes-agent` (usually
