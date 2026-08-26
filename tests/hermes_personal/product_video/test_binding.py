@@ -450,18 +450,18 @@ def test_invalidate_for_artifact_exact_match_no_false_positive():
 
 
 def test_legacy_create_binding_method_on_service():
-    """FINDING 3: ProductVideoBindingService.create_binding must exist and delegate to create."""
+    """FINDING 3: ProductVideoBindingService.create_binding must accept resource_pack dict per legacy API."""
     svc = ProductVideoBindingService()
 
-    lock_ref = _pi_ref("lock-123", version=1)
+    resource_pack = {"name": "Legacy Product", "features": ["x"]}
+    binding = svc.create_binding("prod-456", resource_pack)
 
-    # Call the legacy method
-    binding = svc.create_binding("prod-456", lock_ref)
-
-    # Should be equivalent to create()
     assert binding.product_id == "prod-456"
     assert binding.version == 1
-    assert binding.lock_ref == lock_ref
+    assert binding.lock_ref is not None
+    assert binding.lock_ref.artifact_id == "prod-456"
+    assert binding.lock_ref.owner == "product_intelligence"
+    assert binding.lock_ref.digest.startswith("sha256:")
     assert binding.brief_ref is None
     assert binding.scene_plan_ref is None
 

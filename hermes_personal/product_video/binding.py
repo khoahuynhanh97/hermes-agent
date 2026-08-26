@@ -137,8 +137,21 @@ class ProductVideoBindingService:
             lock_ref=lock_ref,
         )
 
-    def create_binding(self, product_id: str, lock_ref: ArtifactRef) -> ProductVideoBinding:
-        """Deprecated compatibility method. Use `create()` instead."""
+    def create_binding(self, product_id: str, resource_pack: dict) -> ProductVideoBinding:
+        """Deprecated compatibility method. Use `create()` instead.
+
+        Accepts a resource_pack dict per legacy API, computes a stable SHA-256
+        digest, and delegates to create() with the derived ArtifactRef.
+        """
+        import hashlib, json
+        payload = json.dumps(resource_pack, sort_keys=True).encode()
+        digest = "sha256:" + hashlib.sha256(payload).hexdigest()
+        lock_ref = ArtifactRef(
+            artifact_id=product_id,
+            version=1,
+            digest=digest,
+            owner="product_intelligence",
+        )
         return self.create(product_id, lock_ref)
 
     def replace_product_lock(

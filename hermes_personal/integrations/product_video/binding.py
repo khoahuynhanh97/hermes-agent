@@ -16,13 +16,9 @@ __all__ = [
 
 
 def create_binding(product_id: str, resource_pack: dict) -> ProductVideoBinding:
-    """Legacy wrapper (deprecated). Use ProductVideoBindingService directly."""
-    import hashlib, json
-    digest = "sha256:" + hashlib.sha256(
-        json.dumps(resource_pack, sort_keys=True).encode()
-    ).hexdigest()
-    lock_ref = ArtifactRef(artifact_id=product_id, version=1, digest=digest, owner="product_intelligence")
-    return ProductVideoBindingService().create_binding(product_id, lock_ref)
+    """Legacy wrapper (deprecated). Delegates to service.create_binding to avoid
+    duplicate hashing logic."""
+    return ProductVideoBindingService().create_binding(product_id, resource_pack)
 
 
 def verify_binding_integrity(binding: ProductVideoBinding, current_resource_pack: dict) -> bool:
