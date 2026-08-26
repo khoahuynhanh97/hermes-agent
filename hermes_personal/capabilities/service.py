@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
+from hermes_personal.capabilities.bindings import ImplementationBinding
 from hermes_personal.capabilities.discovery import (
     DEFAULT_WIRE_BINDING_RULES,
     CapabilityDiscovery,
     WireBindingRule,
 )
 from hermes_personal.capabilities.errors import CapabilityError
-from hermes_personal.capabilities.manifest import INITIAL_CAPABILITIES
+from hermes_personal.capabilities.manifest import INITIAL_CAPABILITIES, CapabilitySpec
 from hermes_personal.capabilities.policy import (
     CapabilityPolicyEvaluator,
     PolicyRequestContext,
@@ -134,3 +135,41 @@ class CapabilityCatalogService:
             registry=self.registry,
         )
         return search_adapter.describe(capability_id=capability_id, context=context)
+
+    def execute_capability(
+        self,
+        spec: CapabilitySpec,
+        binding: ImplementationBinding,
+        context: PolicyRequestContext,
+        provider_fn: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        decision = self.evaluator.evaluate(spec, binding, context)
+        if not decision.allowed:
+            if decision.error is not None:
+                raise decision.error
+            raise CapabilityError(
+                code="budget_exceeded",
+                message=f"Capability {spec.capability_id!r} execution denied by policy",
+                retryable=False,
+                capability_id=spec.capability_id,
+            )
+
+        reservation = decision.reservation
+        budget_repo = getattr(self.evaluator, "budget_repository", None)
+
+        try:
+            result = provider_fn(*args, **kwargs)
+        except Exception:
+            if reservation is not None and budget_repo is not None:
+                try:
+                    budget_repo.release_budget(reservation)
+                except Exception:
+                    pass
+            raise
+
+        if reservation is not None and budget_repo is not None:
+            budget_repo.commit_budget(reservation)
+
+        return result

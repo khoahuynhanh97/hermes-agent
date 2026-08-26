@@ -18,6 +18,11 @@ from hermes_personal.application import (
     StaticBearerAuthenticator,
     create_application,
 )
+from hermes_personal.capabilities import (
+    CapabilityCatalogService,
+    CapabilityPolicyEvaluator,
+    CapabilitySnapshotRepository,
+)
 from hermes_personal.gateway.normalizers import ChannelTurnNormalizer
 from hermes_personal.identity import IdentityRepository
 from hermes_personal.observability.health import ComponentHealth, HealthReport
@@ -26,6 +31,7 @@ from hermes_personal.runtime.readiness import create_readiness_probe
 from hermes_personal.runtime.startup import StartupCoordinator
 from hermes_personal.sessions import SessionRepository
 from hermes_personal.storage.sqlite import connect
+from hermes_personal.workflows.budgets import BudgetRepository
 
 
 class _NullTranscript:
@@ -188,6 +194,13 @@ def create_gateway_application(
     identities = IdentityRepository(connection)
     sessions = SessionRepository(connection)
     events = EventRepository(connection)
+    budget_repository = BudgetRepository(connection)
+    evaluator = CapabilityPolicyEvaluator(budget_repository=budget_repository)
+    snapshots = CapabilitySnapshotRepository(connection)
+    catalog_service = CapabilityCatalogService(
+        snapshot_repository=snapshots,
+        policy_evaluator=evaluator,
+    )
     if agent is None:
         agent = (
             DevelopmentFakeAgent()
@@ -200,6 +213,7 @@ def create_gateway_application(
         events,
         _NullTranscriptFactory(),
         agent,
+        catalog_service=catalog_service,
     )
     validate_token = lambda token, owner: (
         owner == owner_user_id and hmac.compare_digest(token, api_key)
