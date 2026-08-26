@@ -90,14 +90,37 @@ class OutboxRepository:
         batch_size: int = 10,
         now_iso: str | None = None,
     ) -> list[OutboxClaim]:
+        """Atomically claim a batch of outbox rows for delivery.
+
+        attempt_count is incremented exactly once per successful claim of a
+        pending row.  Expired-lease rows are also incremented on takeover
+        (repeated crash/expiry consumes the bounded attempt budget).
+
+        Quarantine boundary: a pending row is quarantined ON CLAIM when
+        new_attempt_count > max_attempts, i.e. max_attempts deliveries have
+        already occurred and there is no budget for another one.  With
+        max_attempts=3, delivery is attempted on claims where attempt_count
+        becomes 1, 2, and 3; only the hypothetical 4th claim quarantines.
+
+        Transaction safety: if the caller has already opened a transaction,
+        claim() uses a savepoint to avoid committing/rolling back the caller's
+        work.  If no transaction is active, claim() opens BEGIN IMMEDIATE and
+        commits/rollbacks at the end.
+        """
         now = _now_iso(now_iso)
         claims: list[OutboxClaim] = []
-        with self.connection:
-            try:
-                self.connection.execute("BEGIN IMMEDIATE")
-            except sqlite3.OperationalError:
-                pass
 
+        # Determine if we own the transaction or must use a savepoint.
+        use_savepoint = self.connection.in_transaction
+        savepoint_name = f"claim_sp_{uuid4().hex[:8]}"
+
+        if use_savepoint:
+            self.connection.execute(f"SAVEPOINT {savepoint_name}")
+        else:
+            # Propagate OperationalError if we cannot get the write lock.
+            self.connection.execute("BEGIN IMMEDIATE")
+
+        try:
             cur = self.connection.execute(
                 """
                 SELECT outbox_id, workflow_id, message, state, attempt_count, max_attempts, created_at, updated_at
@@ -112,53 +135,140 @@ class OutboxRepository:
             rows = cur.fetchall()
 
             for row in rows:
-                new_attempt_count = row["attempt_count"] + 1
-                if new_attempt_count > row["max_attempts"]:
-                    self.connection.execute(
+                state = row["state"]
+                if state == "pending":
+                    new_attempt_count = row["attempt_count"] + 1
+                    if new_attempt_count > row["max_attempts"]:
+                        # All delivery budget consumed; quarantine.
+                        # Conditional WHERE guards against a concurrent UPDATE.
+                        r = self.connection.execute(
+                            """
+                            UPDATE workflow_outbox
+                            SET state = 'quarantined',
+                                attempt_count = ?,
+                                last_error = 'max_attempts_exceeded_on_claim',
+                                lease_token = NULL,
+                                lease_owner = NULL,
+                                lease_expires_at = NULL,
+                                updated_at = ?
+                            WHERE outbox_id = ? AND state = 'pending'
+                            """,
+                            (new_attempt_count, now, row["outbox_id"]),
+                        )
+                        if r.rowcount != 1:
+                            # Lost race – another worker already handled it.
+                            pass
+                        continue
+
+                    token = f"claim_{uuid4().hex}"
+                    expires_at = _add_seconds(now, lease_duration_seconds)
+                    # Conditional UPDATE: only succeeds if state is still
+                    # 'pending' and the backoff window has passed.  rowcount==0
+                    # means another worker won the race.
+                    r = self.connection.execute(
                         """
                         UPDATE workflow_outbox
-                        SET state = 'quarantined',
+                        SET state = 'leased',
+                            lease_token = ?,
+                            lease_owner = ?,
+                            lease_expires_at = ?,
                             attempt_count = ?,
-                            last_error = 'max_attempts_exceeded_on_claim',
-                            lease_token = NULL,
-                            lease_owner = NULL,
-                            lease_expires_at = NULL,
                             updated_at = ?
                         WHERE outbox_id = ?
+                          AND state = 'pending'
+                          AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
                         """,
-                        (new_attempt_count, now, row["outbox_id"]),
+                        (token, worker_id, expires_at, new_attempt_count, now, row["outbox_id"], now),
                     )
-                    continue
+                    if r.rowcount != 1:
+                        continue  # Lost race – skip this row.
+                    claims.append(
+                        OutboxClaim(
+                            outbox_id=row["outbox_id"],
+                            workflow_id=row["workflow_id"],
+                            message=row["message"],
+                            lease_token=token,
+                            lease_owner=worker_id,
+                            lease_expires_at=expires_at,
+                            attempt_count=new_attempt_count,
+                            max_attempts=row["max_attempts"],
+                            created_at=row["created_at"],
+                            updated_at=now,
+                        )
+                    )
+                else:
+                    # Expired-lease takeover: increment attempt_count to count this retry.
+                    # Repeated crash/expiry must consume the bounded attempt budget.
+                    new_attempt_count = row["attempt_count"] + 1
+                    if new_attempt_count > row["max_attempts"]:
+                        # All delivery budget consumed; quarantine.
+                        r = self.connection.execute(
+                            """
+                            UPDATE workflow_outbox
+                            SET state = 'quarantined',
+                                attempt_count = ?,
+                                last_error = 'max_attempts_exceeded_on_claim',
+                                lease_token = NULL,
+                                lease_owner = NULL,
+                                lease_expires_at = NULL,
+                                updated_at = ?
+                            WHERE outbox_id = ?
+                              AND state = 'leased'
+                              AND lease_expires_at <= ?
+                            """,
+                            (new_attempt_count, now, row["outbox_id"], now),
+                        )
+                        if r.rowcount != 1:
+                            pass  # Lost race – another worker handled it.
+                        continue
 
-                token = f"claim_{uuid4().hex}"
-                expires_at = _add_seconds(now, lease_duration_seconds)
-                self.connection.execute(
-                    """
-                    UPDATE workflow_outbox
-                    SET state = 'leased',
-                        lease_token = ?,
-                        lease_owner = ?,
-                        lease_expires_at = ?,
-                        attempt_count = ?,
-                        updated_at = ?
-                    WHERE outbox_id = ?
-                    """,
-                    (token, worker_id, expires_at, new_attempt_count, now, row["outbox_id"]),
-                )
-                claims.append(
-                    OutboxClaim(
-                        outbox_id=row["outbox_id"],
-                        workflow_id=row["workflow_id"],
-                        message=row["message"],
-                        lease_token=token,
-                        lease_owner=worker_id,
-                        lease_expires_at=expires_at,
-                        attempt_count=new_attempt_count,
-                        max_attempts=row["max_attempts"],
-                        created_at=row["created_at"],
-                        updated_at=now,
+                    token = f"claim_{uuid4().hex}"
+                    expires_at = _add_seconds(now, lease_duration_seconds)
+                    r = self.connection.execute(
+                        """
+                        UPDATE workflow_outbox
+                        SET lease_token = ?,
+                            lease_owner = ?,
+                            lease_expires_at = ?,
+                            attempt_count = ?,
+                            updated_at = ?
+                        WHERE outbox_id = ?
+                          AND state = 'leased'
+                          AND lease_expires_at <= ?
+                        """,
+                        (token, worker_id, expires_at, new_attempt_count, now, row["outbox_id"], now),
                     )
-                )
+                    if r.rowcount != 1:
+                        continue  # Lost race – skip this row.
+                    claims.append(
+                        OutboxClaim(
+                            outbox_id=row["outbox_id"],
+                            workflow_id=row["workflow_id"],
+                            message=row["message"],
+                            lease_token=token,
+                            lease_owner=worker_id,
+                            lease_expires_at=expires_at,
+                            attempt_count=new_attempt_count,
+                            max_attempts=row["max_attempts"],
+                            created_at=row["created_at"],
+                            updated_at=now,
+                        )
+                    )
+
+            if use_savepoint:
+                self.connection.execute(f"RELEASE {savepoint_name}")
+            else:
+                self.connection.execute("COMMIT")
+        except Exception:
+            try:
+                if use_savepoint:
+                    self.connection.execute(f"ROLLBACK TO {savepoint_name}")
+                else:
+                    self.connection.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise
+
         return claims
 
     def ack(
@@ -168,6 +278,7 @@ class OutboxRepository:
         worker_id: str,
         now_iso: str | None = None,
     ) -> bool:
+        """Delete the row iff the lease is still active and owned by worker_id."""
         now = _now_iso(now_iso)
         with self.connection:
             cur = self.connection.execute(
@@ -193,6 +304,10 @@ class OutboxRepository:
         max_backoff_seconds: float = 300.0,
         now_iso: str | None = None,
     ) -> str:
+        """Record a delivery failure.  attempt_count is NOT incremented here;
+        it was already incremented at claim time.  Quarantine when
+        attempt_count >= max_attempts (all allowed deliveries exhausted).
+        """
         now = _now_iso(now_iso)
         with self.connection:
             cur = self.connection.execute(
@@ -247,6 +362,14 @@ class OutboxRepository:
                 return "retry_scheduled"
 
     def reclaim_expired(self, now_iso: str | None = None) -> int:
+        """Reset or quarantine expired leases.
+
+        Rows whose lease has expired AND attempt_count >= max_attempts are
+        quarantined (they have no remaining delivery budget).  Others are
+        reset to pending so the next claim can increment and retry.
+
+        attempt_count is NOT incremented here – incrementing happens at claim.
+        """
         now = _now_iso(now_iso)
         with self.connection:
             cur1 = self.connection.execute(
@@ -277,6 +400,11 @@ class OutboxRepository:
             return cur1.rowcount + cur2.rowcount
 
     def list_unacknowledged(self) -> list[OutboxMessage]:
+        """Return only pending (not in-flight, not quarantined) outbox rows.
+
+        Leased rows are actively being processed by a worker and must not be
+        exposed as freely replayable messages.
+        """
         with self.connection:
             cur = self.connection.execute(
                 """
@@ -284,7 +412,7 @@ class OutboxRepository:
                        lease_expires_at, attempt_count, max_attempts, next_attempt_at,
                        last_error, created_at, updated_at
                 FROM workflow_outbox
-                WHERE state != 'quarantined'
+                WHERE state = 'pending'
                 ORDER BY outbox_id ASC
                 """
             )
@@ -315,11 +443,21 @@ class OutboxRepository:
         worker_id: str = "recovery_worker",
         now_iso: str | None = None,
     ) -> bool:
+        """Acknowledge one specific outbox row by workflow_id + message.
+
+        If the row has an active lease, ACK using the current active owner's
+        token – we do not override ownership.  If the row is pending or has an
+        expired lease, we do a targeted single-row claim then ACK.
+
+        Does NOT mass-claim other rows; only ever touches the one matching row.
+        Returns False if the row does not exist, is quarantined, or the claim
+        races with another worker.
+        """
         now = _now_iso(now_iso)
         with self.connection:
             cur = self.connection.execute(
                 """
-                SELECT outbox_id, lease_token, lease_owner, lease_expires_at
+                SELECT outbox_id, lease_token, lease_owner, lease_expires_at, state
                 FROM workflow_outbox
                 WHERE workflow_id = ? AND message = ? AND state != 'quarantined'
                 ORDER BY outbox_id ASC
@@ -331,12 +469,18 @@ class OutboxRepository:
             if row is None:
                 return False
 
+            # Case 1: row has an active lease owned by another worker.
+            # We MUST NOT override ownership. Return False (stale/denied).
             if (
                 row["lease_token"] is not None
                 and row["lease_owner"] is not None
                 and row["lease_expires_at"] is not None
                 and row["lease_expires_at"] > now
             ):
+                # If the caller's worker_id matches the active owner, allow ACK.
+                # Otherwise, deny – cannot steal another worker's active lease.
+                if row["lease_owner"] != worker_id:
+                    return False
                 return self.ack(
                     outbox_id=row["outbox_id"],
                     lease_token=row["lease_token"],
@@ -344,16 +488,33 @@ class OutboxRepository:
                     now_iso=now,
                 )
 
-        claims = self.claim(worker_id=worker_id, batch_size=1000, now_iso=now)
-        for claim in claims:
-            if claim.outbox_id == row["outbox_id"]:
-                return self.ack(
-                    outbox_id=claim.outbox_id,
-                    lease_token=claim.lease_token,
-                    worker_id=claim.lease_owner,
-                    now_iso=now,
-                )
-        return False
+            # Case 2: row is pending or has an expired lease – targeted claim.
+            token = f"recovery_{uuid4().hex}"
+            expires_at = _add_seconds(now, 60.0)
+            r = self.connection.execute(
+                """
+                UPDATE workflow_outbox
+                SET state = 'leased',
+                    lease_token = ?,
+                    lease_owner = ?,
+                    lease_expires_at = ?,
+                    attempt_count = attempt_count + 1,
+                    updated_at = ?
+                WHERE outbox_id = ?
+                  AND state != 'quarantined'
+                  AND (state = 'pending' OR (state = 'leased' AND lease_expires_at <= ?))
+                  AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+                """,
+                (token, worker_id, expires_at, now, row["outbox_id"], now, now),
+            )
+            if r.rowcount != 1:
+                return False  # Lost race with another worker.
+            return self.ack(
+                outbox_id=row["outbox_id"],
+                lease_token=token,
+                worker_id=worker_id,
+                now_iso=now,
+            )
 
     def requeue_quarantined(self, outbox_id: int, now_iso: str | None = None) -> bool:
         now = _now_iso(now_iso)

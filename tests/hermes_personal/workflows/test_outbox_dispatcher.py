@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from hermes_personal.storage.sqlite import connect
 from hermes_personal.workflows.outbox_dispatcher import (
     DispatchReport,
-    OutboxClaim,
     OutboxDispatcher,
-    OutboxRepository,
 )
+from hermes_personal.workflows.outbox_repository import OutboxClaim, OutboxRepository
 
 
 def test_dispatcher_delivers_and_acks_message():

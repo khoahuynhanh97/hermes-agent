@@ -33,31 +33,32 @@ def test_replay_outbox_remains_durable_until_acknowledged():
     assert service.replay_outbox() == []
 
 
-def test_recovery_delegates_to_outbox_repository_without_lease_bypass():
+def test_recovery_delegates_to_outbox_repository_with_ownership_check():
     from unittest.mock import MagicMock
 
     conn = connect(":memory:")
     service = WorkflowRecoveryService(conn)
 
+    # 1. Enqueue and claim a row
     service.outbox_repository.enqueue("wf_del", "msg_del")
     claims = service.outbox_repository.claim("worker_del")
     assert len(claims) == 1
-    c = claims[0]
 
     original_ack = service.outbox_repository.ack
     spy_ack = MagicMock(side_effect=original_ack)
     service.outbox_repository.ack = spy_ack
 
+    # 2. Case 1: Wrong worker identity (recovery_worker vs worker_del) – MUST NOT ACK.
     service.ack_outbox("wf_del", "msg_del")
+    assert not spy_ack.called, "Must not ACK another worker's active lease"
 
-    from unittest.mock import ANY
+    # 3. Case 2: Row is pending (no lease) – SHOULD ACK.
+    service.outbox_repository.enqueue("wf_pending", "msg_pending")
+    service.ack_outbox("wf_pending", "msg_pending")
 
+    # Verify ack was called (it might have been called with recovery_worker identity)
     assert spy_ack.called
-    kwargs = spy_ack.call_args.kwargs
-    assert kwargs["outbox_id"] == c.outbox_id
-    assert kwargs["lease_token"] == c.lease_token
-    assert kwargs["worker_id"] == c.lease_owner
 
     cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) as cnt FROM workflow_outbox")
+    cur.execute("SELECT COUNT(*) as cnt FROM workflow_outbox WHERE workflow_id = 'wf_pending'")
     assert cur.fetchone()["cnt"] == 0

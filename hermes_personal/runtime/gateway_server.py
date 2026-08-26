@@ -33,7 +33,6 @@ from hermes_personal.runtime.startup import StartupCoordinator
 from hermes_personal.sessions import SessionRepository
 from hermes_personal.storage.sqlite import connect
 from hermes_personal.workflows.budgets import BudgetRepository
-from hermes_personal.workflows.outbox_dispatcher import OutboxDispatcher
 from hermes_personal.workflows.outbox_repository import OutboxRepository
 
 
@@ -205,11 +204,9 @@ def create_gateway_application(
         policy_evaluator=evaluator,
     )
     outbox_repository = OutboxRepository(connection)
-    outbox_dispatcher = OutboxDispatcher(
-        repository=outbox_repository,
-        delivery_fn=lambda workflow_id, message: None,
-        worker_id=f"gateway-{os.getpid()}",
-    )
+    # NOTE: The gateway does NOT own outbox delivery.  The durable_worker process
+    # is the sole OutboxDispatcher runner.  The gateway stores only the repository
+    # reference for state inspection (e.g. health checks).
     if agent is None:
         agent = (
             DevelopmentFakeAgent()
@@ -258,7 +255,7 @@ def create_gateway_application(
 
     app.state.database_connection = connection
     app.state.outbox_repository = outbox_repository
-    app.state.outbox_dispatcher = outbox_dispatcher
+    app.state.outbox_dispatcher = None  # delivery owned by durable_worker process
     app.router.add_event_handler("shutdown", _shutdown_gateway)
     return app
 
