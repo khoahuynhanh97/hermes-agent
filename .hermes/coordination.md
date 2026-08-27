@@ -120,32 +120,37 @@ remaining happy-path blocker. Append History, set both owners to PLANNER, then e
 
 ## Last Worker Report
 
-Iteration: 92 (REWORK)
+Iteration: 93 (REWORK on 9c70186687)
 Phase: Phase 7 Continuation - Personal Happy Path and Bounded Hardening
 
 Implemented:
-- **Worker Bootstrap Lifecycle**: Integrated Hermes `load_config()`, `load_hermes_dotenv()`, `discover_mcp_tools()`, and clean shutdown with `shutdown_mcp_servers()` in `hermes_personal/workflows/worker.py` for live MCP initialization without importing assumptions.
-- **Robust MCP Payload Decoding**: Implemented `_decode_mcp_output` in `hermes_personal/product_video/handlers.py` to normalize real MCP responses: standard text content blocks (`{"content": [{"type": "text", "text": "..."}]}`), JSON result strings, and `structuredContent`, while strictly handling `isError`/`is_error` and `error` payloads.
-- **Fail-Closed & No False Success Without Output**:
-  - `render_video` and `export_video` now strictly require valid non-empty output references (`video_url`/`render_id`, `final_video_url`/`export_url`), eliminating artificial ID fallbacks (`render_live`/`export_live`).
-  - Async rendering performs bounded status polling against registered polling tools (`mcp__video_factory__get_job_status`); fails closed if job fails or if polling tool is missing.
-  - `build_resource_pack` in configured mode fails closed when the real tool is unmapped rather than generating fake `kw_asset` mock assets.
-  - Local locking in `lock_resource_pack` validates non-empty real assets before locking.
-- **Real ToolRegistry Integration Tests**: Added test fixtures using real `ToolRegistry` and authentic MCP response envelopes, testing multi-stage decode, async render polling, fail-closed missing pack tool, and MCP error propagation.
-- **Documentation & Runbook**: Updated `docs/hermes-personal/product-video-runbook.md` with explicit configuration template warnings, verification tiers (`Adapter Implemented`, `Runtime Integration Verified Offline`, `Live Verified`), and a concise checklist of user-provided requirements for live execution.
+- **Finding 1 (Completion Contracts & No ID-only Assumption)**:
+  - Code: `hermes_personal/product_video/handlers.py` (`render_video`, `export_video`).
+  - Logic: In `render_video` and `export_video`, `status` in `("pending", "processing", "in_progress", "queued")` polls registered status tools (`get_job_status`/`get_export_status`) and fails closed on error/timeout. Output reference (`video_url`/`render_id`, `final_video_url`/`export_id`) must be present from completed status; bare `job_id` or `id` with pending/failed status is rejected.
+  - Tests: `test_failed_render_with_id_fails_closed`, `test_configured_mode_export_missing_output_fails_closed`, `test_configured_mode_render_pending_without_polling_tool_fails_closed`.
+- **Finding 2 (Recursive Error Detection After Unwrap)**:
+  - Code: `hermes_personal/product_video/handlers.py` (`_check_for_errors`, `_decode_mcp_output`, `create_creative_brief`).
+  - Logic: Recursive validation for `isError`, `is_error`, `"error"`, and `"status" in ("failed", "error", "cancelled")` on outer envelopes and unwrapped payloads (`result`, `structuredContent`, text blocks). `create_creative_brief` checks for non-empty brief content (`script`/`angle`/`scenes`/`brief_config`/`brief_id`), rejecting empty echo payloads.
+  - Tests: `test_wrapped_error_in_result_string_fails_closed`, `test_wrapped_error_in_structured_content_fails_closed`, `test_creative_brief_empty_content_fails_closed`.
+- **Finding 3 (Config-Driven Provider Mode and Polling Settings)**:
+  - Code: `hermes_personal/workflows/worker.py` (`main`, `run_worker`), `hermes_personal/product_video/handlers.py` (`ProductVideoJobHandlers`, `create_product_video_topic_handlers`).
+  - Logic: `provider_mode` resolves CLI override first, then falls back to `config.yaml` (`provider_mode` / `workflows.provider_mode`), then `.env` (`HERMES_PROVIDER_MODE`). Polling timeout/interval are read from `config.yaml` (`video_factory.polling_timeout_seconds`, `polling_interval_seconds`) and passed to adapters.
+  - Tests: `test_worker_bootstrap_with_config_yaml_and_env` with temp `HERMES_HOME`.
+- **Finding 4 (Full-Flow End-to-End Test Across 14 States & 5 HITL Approvals)**:
+  - Code: `tests/hermes_personal/workflows/test_product_video_outbox.py`.
+  - Logic: Extended `test_configured_mode_with_real_mcp_response_shapes_and_polling` across all 14 states and 5 HITL gates until `COMPLETED`, asserting every wire tool was called with valid correlation/job IDs, async render polling executed, and final output was saved.
 
 Files Changed:
-- `hermes_personal/workflows/worker.py`
 - `hermes_personal/product_video/handlers.py`
+- `hermes_personal/workflows/worker.py`
 - `tests/hermes_personal/workflows/test_product_video_outbox.py`
-- `docs/hermes-personal/product-video-runbook.md`
 
 Verification:
-- `uv run pytest tests/hermes_personal/workflows/test_product_video_outbox.py tests/hermes_personal/workflows/test_outbox_dispatcher.py tests/hermes_personal/workflows/test_worker.py tests/hermes_personal/workflows/test_outbox_repository.py tests/hermes_personal/product_video/test_product_to_video_e2e.py tests/hermes_personal/product_video/test_job_handlers.py tests/hermes_personal/product_video/test_handlers.py tests/hermes_personal/product_video/test_video_factory_client.py -q`: 87 passed in 4.33s.
+- `uv run pytest tests/hermes_personal/workflows/test_product_video_outbox.py tests/hermes_personal/workflows/test_outbox_dispatcher.py tests/hermes_personal/workflows/test_worker.py tests/hermes_personal/workflows/test_outbox_repository.py tests/hermes_personal/product_video/test_product_to_video_e2e.py tests/hermes_personal/product_video/test_job_handlers.py tests/hermes_personal/product_video/test_handlers.py tests/hermes_personal/product_video/test_video_factory_client.py -q`: 92 passed in 4.53s.
 - `uv run ruff check hermes_personal/product_video/handlers.py hermes_personal/workflows/worker.py tests/hermes_personal/workflows/test_product_video_outbox.py`: All checks passed.
 - `git diff --check`: Clean.
 
-Commit: `9c70186687`
+Commit: `433f151916`
 
 Remaining Issues / Blockers:
 - Running live end-to-end video generation requires user to configure live MCP servers (`mcp_servers` in `config.yaml`) with external API credentials in `~/.hermes/.env`.
@@ -188,6 +193,9 @@ WORKER proves or minimally wires the concrete Product Intelligence -> Video Fact
 
 ## History
 ...
+### Iteration 93
+WORKER completed REWORK on 9c70186687: (1) enforced strict completion contracts without ID-only assumption (async polling and valid output check for render and export), (2) recursive error detection after unwrapping result strings/structuredContent, (3) resolved provider_mode and polling timeouts from config.yaml with CLI override support, (4) extended full-flow offline MCP test through all 14 states and 5 HITL gates with real ToolRegistry, (5) verified with 92 targeted tests passing and clean ruff / diff-check (commit `433f151916`). Handed off to PLANNER.
+
 ### Iteration 92
 WORKER completed REWORK: (1) worker bootstrap with Hermes dotenv/config loaders and MCP discovery/shutdown lifecycle, (2) robust MCP payload decoding for CallToolResult text blocks, JSON strings, and structuredContent, (3) elimination of false success / fake fallbacks (removed `render_live`/`export_live`, enforced real output refs, async polling with timeout, and fail-closed resource pack build), (4) exact approval target ID resolution, (5) verified with 87 targeted tests passing on real `ToolRegistry` and clean ruff / diff-check (commit `9c70186687`). Handed off to PLANNER.
 
