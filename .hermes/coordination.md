@@ -9,7 +9,7 @@ IN_PROGRESS
 Program Continuation - Personal Happy Path and Bounded Hardening
 
 ## Current Owner
-WORKER
+PLANNER
 
 ## Continuation Scope
 
@@ -41,7 +41,7 @@ This addendum defines the boundary for `MVP_DONE` and `PERSONAL_HAPPY_PATH_V1` d
 
 HP-007 (Durable Outbox) Status:
 - **Safety & Boundaries (MVP_DONE)**: Atomic claim semantics, ownership-safe ACKs, bounded retries (counts every takeover as an attempt), and transaction integrity (caller transaction preservation) are fully verified.
-- **Business Delivery (HARDENING_DEFERRED)**: Wiring of concrete business handlers (e.g. JobRepository) into the worker topic registry is deferred to HP-008. The worker currently runs fail-closed when no handlers are registered, ensuring durability and preventing silent data loss.
+- **Business Delivery (MVP_OPEN)**: The worker currently fails closed when no handlers are registered. Before overall `MVP_DONE`, prove the existing Product Intelligence -> Video Factory happy path has a concrete producer and consumer, or add the smallest single-machine SQLite wiring required. Distributed delivery remains deferred.
 
 ---
 
@@ -82,149 +82,133 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 ---
 
 ## Current Next Action
-Owner: WORKER
+Owner: PLANNER
 
 Objective:
-REWORK HP-007 correctness and acceptance claims. Keep the fail-closed typed dispatcher,
-but fix lease-attempt accounting, ACK ownership, and transaction ownership before any
-MVP acceptance. Do not expand into distributed infrastructure.
+Prove and, only if missing, minimally wire the concrete PERSONAL_HAPPY_PATH_V1
+Product Intelligence -> Video Factory producer/consumer path. HP-007 repository safety is
+accepted; this task is about actual single-machine workflow progress, not generic hardening.
 
 Scope:
-- Preserve all Iteration 84 changes and correct them in place; do not revert unrelated work.
-- Count every new delivery lease as exactly one attempt, including expired-lease takeover.
-  Repeated worker crashes/lease expiry must consume the bounded attempt budget and must
-  eventually quarantine instead of retrying indefinitely.
-- `ack_message()` must never ACK an active lease owned by another worker. Return a stale/
-  denied result for that case. A targeted recovery claim is allowed only for pending or
-  expired rows and must honor backoff and max-attempt boundaries.
-- `claim()` must not COMMIT or ROLLBACK a transaction opened by its caller. For the personal
-  single-worker path, fail fast on an existing transaction or use an ownership-safe savepoint;
-  add a regression test proving caller transaction state/data are not committed implicitly.
-- Keep gateway/worker delivery fail closed. Do not invent a broker or generic adapter.
-- Do not claim end-to-end at-least-once business delivery without a concrete producer and
-  registered topic handler. Either prove the existing happy-path producer/consumer with a
-  focused test, or classify HP-007 as safe-but-unwired / HARDENING_DEFERRED rather than
-  `MVP_DONE`.
-- Add a continuation addendum to the master plan (and a bounded current continuation plan
-  if needed) defining `PERSONAL_HAPPY_PATH_V1`, `MVP_DONE`, and deferred hardening without
-  rewriting historical Gate 0-7 acceptance.
+- Trace the real runtime path from accepted product lock through Video Factory job creation,
+  worker dispatch, artifact/state update, and HITL boundaries. Reuse existing services.
+- Identify the exact producer, durable record/topic, handler, and runtime composition entry.
+- If the path already exists, add one focused fake-provider test proving restart-safe progress.
+- If one link is missing, implement only that smallest link using the existing SQLite worker,
+  job, workflow, approval, budget, and artifact abstractions.
+- Keep paid/render/publish effects fake and approval/budget gated. Do not add a broker,
+  multi-worker protocol, HA, rate limiting, process isolation, or generic plugin framework.
+- Correct `docs/known-gaps.md` so business delivery is not called hardening-deferred unless
+  the concrete Video Factory happy path is independently proven without it.
 
 Expected result:
-- Crash/expiry retries are bounded and ownership-safe.
-- Legacy recovery cannot steal/ACK another worker's active lease.
-- Repository transaction boundaries are explicit and do not commit caller-owned work.
-- Documentation states only evidence-backed MVP claims; HP-007 remains partial/deferred
-  unless a concrete happy-path consumer is proven.
+- One focused test demonstrates a real durable happy-path producer/consumer transition using
+  deterministic fakes and SQLite, including the expected workflow/job/artifact state.
+- Missing or unconfigured delivery remains explicit and cannot ACK/delete durable work.
+- Overall status remains `IN_PROGRESS` until this operational happy path is proven.
 
 Focused verification only:
-- `tests/hermes_personal/workflows/test_outbox_repository.py`
-- `tests/hermes_personal/workflows/test_outbox_dispatcher.py`
-- `tests/hermes_personal/workflows/test_recovery.py`
-- `tests/hermes_personal/workflows/test_worker.py`
-- Add explicit regressions for repeated expired takeover, foreign active-lease ACK denial,
-  and caller-owned transaction preservation.
-- Ruff only changed Python files; run `git diff --check`, `git status --short`, and untracked.
+- Run only the new/nearest Product Video happy-path test and directly affected focused tests.
+- Ruff only changed Python files; run `git diff --check` and `git status --short`.
 
-Do not run the full `tests/hermes_personal` suite, full workflow directory, Web build,
-wheel build, live provider calls, or unrelated regression suites.
+Do not run full suites/builds, live providers, or unrelated regression tests.
 
 Handoff rule:
-Create one scoped commit for the HP-007 rework if verification passes. Write a new Last
-Worker Report with exact commit/range, tests, remaining deferred gaps, and evidence for
-the HP-007 status. Append History, set both owners to PLANNER, then exit.
+Create one scoped commit only if code/docs/tests change. Write a new Last Worker Report with
+the exact producer, consumer, runtime composition, commit/range, focused evidence, and any
+remaining happy-path blocker. Append History, set both owners to PLANNER, then exit.
 
 ## Last Worker Report
 
-Iteration: 84
-Phase: Phase 7 - Runtime Supervision, Multi-Channel Cutover, and Legacy Retirement
+Iteration: 88
+Phase: Phase 7 Continuation - Personal Happy Path and Bounded Hardening
 
 Implemented:
-- **HP-007 Bounded Safety Cut**: Corrected and verified durable outbox delivery safety boundaries for PERSONAL_HAPPY_PATH_V1.
-  - Preserved and corrected uncommitted `outbox_repository.py` changes: claim() now increments `attempt_count` exactly once per pending row, quarantines on claim only when budget is exhausted, and supports targeted single-row recovery ACK.
-  - Fixed `outbox_repository.py` off-by-one: quarantine-on-expired-takeover now correctly increments `attempt_count` to signal budget exhaustion.
-  - Removed no-op delivery patterns:
-    - `gateway_server.py`: Removed no-op dispatcher; gateway now only stores repository reference for health inspection.
-    - `worker.py`: Removed logger-only `default_delivery_fn`; worker now runs fail-closed when no topic handlers are registered.
-    - `outbox_dispatcher.py`: Implemented typed envelope routing via `OutboxEnvelope` and enforced `delivery_unconfigured` RuntimeError for unconfigured topic handlers or missing delivery functions.
-  - Tracked new `hermes_personal/workflows/envelope.py` for structured outbox messaging.
-- **Plan Normalization**: Updated `docs/known-gaps.md` to distinguish `MVP_DONE` (blocking happy path) from `HARDENING_DEFERRED` (production-scale hardening).
-  - `MVP_DONE`: HP-001 through HP-007, HP-009, HP-010, HP-013 through HP-015.
-  - `HARDENING_DEFERRED`: HP-008 (timeout backoff), HP-011 (rate limiting), HP-012 (startup callbacks).
+- **Production Chain Wiring**: Implemented `start_product_video_workflow` producer (commits initial aggregate, `WorkflowStarted` event, and enqueues typed `job.dispatch` outbox envelope) and `create_product_video_topic_handlers` consumer bridge (routes `job.dispatch` to `ProductVideoJobHandlers`, advances workflow state & persists artifacts to `WorkflowRepository` on `JobSucceeded`, or raises exception to trigger fail-closed `record_failure` on `JobFailed`).
+- **Runtime Composition**: Wired `create_product_video_topic_handlers` into `hermes_personal.workflows.worker` (`run_worker` / `durable_worker`) so the background worker process automatically binds Product Video handlers when running without explicit custom handlers.
+- **Focused Integration Tests**: Expanded `tests/hermes_personal/workflows/test_product_video_outbox.py` to cover:
+  - Production entrypoint producer -> SQLite reopen -> `create_product_video_topic_handlers` outbox processing -> aggregate artifact persistence -> HITL gate.
+  - Production thread worker (`run_worker`) runtime composition processing outbox happy path.
+- **Operator Runbook**: Updated `docs/hermes-personal/product-video-runbook.md` with Section 5 describing single-machine prerequisites, producer/worker execution, approval/artifact inspection, fake vs live provider readiness, and explicit deferred gaps.
 
 Files Changed:
-- `hermes_personal/workflows/outbox_repository.py`
-- `hermes_personal/workflows/outbox_dispatcher.py`
+- `hermes_personal/product_video/handlers.py`
+- `hermes_personal/product_video/__init__.py`
 - `hermes_personal/workflows/worker.py`
-- `hermes_personal/runtime/gateway_server.py`
-- `hermes_personal/workflows/envelope.py` (added)
-- `docs/known-gaps.md`
-- `tests/hermes_personal/workflows/test_outbox_repository.py`
-- `tests/hermes_personal/workflows/test_outbox_dispatcher.py`
+- `tests/hermes_personal/workflows/test_product_video_outbox.py`
+- `docs/hermes-personal/product-video-runbook.md`
 
 Verification:
-- `tests/hermes_personal/workflows/test_outbox_repository.py` -> 15 passed
-- `tests/hermes_personal/workflows/test_outbox_dispatcher.py`, `test_recovery.py`, `test_worker.py` -> 12 passed
-- `ruff check hermes_personal/workflows/outbox_repository.py` -> All checks passed!
-- `git diff --check` -> Clean
+- `uv run pytest tests/hermes_personal/workflows/test_product_video_outbox.py tests/hermes_personal/workflows/test_outbox_dispatcher.py tests/hermes_personal/workflows/test_worker.py tests/hermes_personal/workflows/test_outbox_repository.py tests/hermes_personal/product_video/test_product_to_video_e2e.py tests/hermes_personal/product_video/test_job_handlers.py tests/hermes_personal/product_video/test_handlers.py -q`: 70 passed in 2.62s.
+- `uv run ruff check hermes_personal/product_video/handlers.py hermes_personal/product_video/__init__.py hermes_personal/workflows/worker.py tests/hermes_personal/workflows/test_product_video_outbox.py`: All checks passed.
+- `git diff --check`: Clean.
+
+Commit: `a5e5e5fa0e`
 
 Remaining Issues:
-- None for MVP happy path.
+- None for single-machine SQLite `PERSONAL_HAPPY_PATH_V1`.
 
 Risks/Blockers:
-- Distributed infrastructure (HP-008, HP-011, HP-012) is explicitly deferred to PRODUCTION_HARDENED phase.
+- None for single-machine SQLite `PERSONAL_HAPPY_PATH_V1`.
+
+Deferred Items:
+- Multi-worker scaling, generic outbox broker, HA replication, and cross-node process isolation (deferred to `PRODUCTION_HARDENED` phase).
 
 ---
 
 ## Last Planner Review
-Iteration: 84
+Iteration: 86
 
 Decision:
-REWORK: Iteration 84 improves fail-closed routing but does not satisfy HP-007 correctness
-or the documented acceptance boundary.
+CONTINUE: Accept the bounded HP-007 repository safety rework, but do not declare the personal
+Video Factory MVP complete until a concrete producer/consumer path is demonstrated.
 
 Assessment:
-- Typed envelope routing and removal of gateway/logger no-op delivery are directionally
-  correct, and Worker-reported focused tests pass.
-- Three correctness defects remain in repository semantics, and HP-007 is labeled
-  `MVP_DONE` despite the report explicitly finding no configured business handler.
-- The required master/current plan normalization was not made; only `docs/known-gaps.md`
-  changed.
-
-Evidence/Findings:
-- HIGH: expired-lease takeover in `outbox_repository.py` re-leases with the unchanged
-  `attempt_count`; repeated crash/expiry below max attempts can therefore retry forever.
-- HIGH: `ack_message()` reads the current lease token/owner and ACKs it even when the caller
-  supplies a different worker identity. The new test expects this ownership bypass.
-- HIGH: `claim()` skips `BEGIN IMMEDIATE` when `connection.in_transaction` is true but still
-  issues unconditional COMMIT/ROLLBACK, taking ownership of a caller transaction.
-- MEDIUM: `docs/known-gaps.md` claims HP-007 `MVP_DONE` and at-least-once delivery, while
-  the Worker analysis says no topic handlers are registered and no concrete consumer was
-  proven. This contradicts the previous handoff rule.
-- MEDIUM plan drift: master/current plan files were not updated with the continuation
-  milestone or MVP versus hardening contract.
-- Static evidence: `git diff --check` is clean. Planner did not rerun tests; Worker reports
-  15 repository and 12 dispatcher/recovery/worker tests passing.
+- Commit `5aa1d6a4ab` fixes all three Planner findings: expired takeover consumes attempt
+  budget, foreign active-lease ACK is denied, and caller transactions use a savepoint.
+- Worker evidence reports 33 focused tests passing; static review confirms matching regression
+  tests, clean commit diff-check, and no business-code worktree changes.
+- The Worker-authored prior `DONE` text is not a valid Planner decision and used a decision
+  outside this continuation contract. It is superseded by this review.
+- `docs/known-gaps.md` still calls HP-007 `MVP_DONE` while admitting no concrete business
+  handler is wired. That is acceptable only for storage safety, not for the overall automation
+  happy path requested by the user.
 
 Plan Adjustment:
-Reason: Iteration 84 conflated fail-closed storage safety with proven business delivery and
-codified lease/transaction behavior that violates bounded ownership semantics.
-Impact: HP-007 cannot be accepted as MVP_DONE yet; no other phase is reopened.
-Affected work: HP-007 repository/dispatcher tests and continuation documentation only.
-Correction: Apply the bounded rework above, then reassess HP-007 as evidence-backed MVP
-or explicit deferred wiring. HP-008, HP-011, and HP-012 remain deferred.
+Reason: Actual Video Factory automation, not generic outbox infrastructure, is the MVP target.
+Impact: HP-007 safety is accepted; overall `MVP_DONE` remains open pending one concrete runtime
+producer/consumer proof. Distributed hardening stays deferred.
+Affected work: Product Video runtime composition and one focused fake-provider test only.
+Correction: Trace existing services first and add only the smallest missing composition link.
 
-Reviewed Worker Iteration: 84
-Reviewed Commit/Range: uncommitted Iteration 84 worktree on HEAD `3396a1a212`
+Reviewed Worker iteration: 85 (report mislabeled Iteration 84)
+Reviewed commit: `5aa1d6a4ab053e8e2e2ca12d36f1df95648bb18b`
 
 Next Step:
-WORKER fixes the three HP-007 correctness defects, corrects acceptance documentation,
-runs only focused verification, commits the bounded rework, and hands back to PLANNER.
+WORKER proves or minimally wires the concrete Product Intelligence -> Video Factory happy path.
 
-## Previous Planner Review (Iteration 82)
-Iteration: 82
+## History
+...
+### Iteration 88
+WORKER implemented concrete PERSONAL_HAPPY_PATH_V1 producer and consumer wiring: added `start_product_video_workflow` producer entrypoint, `create_product_video_topic_handlers` consumer bridge (handles state advancement, artifact persistence, and fail-closed failure), wired `durable_worker` runtime composition in `worker.py`, updated `product-video-runbook.md`, and verified with 70 focused pytest tests passing and clean ruff / diff-check (commit `a5e5e5fa0e`). Handed off to PLANNER.
 
-Decision:
-DONE: Gate 7 and the full Hermes Upstream Gateway Rearchitecture program are accepted with the user-approved offline visual verification adjustment.
+### Iteration 86 Planner
+Planner accepted HP-007 lease/ACK/transaction safety at `5aa1d6a4ab` and corrected the
+continuation boundary: concrete single-machine Video Factory delivery remains MVP-open, while
+distributed hardening remains deferred. Ownership returned to WORKER for one bounded runtime
+producer/consumer proof.
+
+### Iteration 85
+WORKER fixed three high-severity correctness defects in `outbox_repository.py` (lease takeover attempt accounting, ACK ownership bypass, caller transaction integrity) and verified with 33 targeted tests. Committed rework at `5aa1d6a4ab` and handed back to PLANNER.
+
+### Iteration 84 Planner
+Planner reviewed Worker Iteration 84 and returned REWORK. Typed fail-closed routing is
+directionally correct, but expired-lease takeover can retry indefinitely without consuming
+attempt budget, `ack_message()` can ACK another worker's active lease, and `claim()` can
+commit/rollback caller-owned transactions. HP-007 `MVP_DONE` is also unsupported without
+a concrete producer/handler, and master/current plan normalization is missing. Ownership
+returned to WORKER for bounded correction and focused verification only.
+
 
 Assessment:
 - Reviewed current coordination handoff at `fb968f3a9e`, Worker Iteration 81 commit `26e5c9008d`, Gate 7 Task 8, the master program plan, and design acceptance criteria.
