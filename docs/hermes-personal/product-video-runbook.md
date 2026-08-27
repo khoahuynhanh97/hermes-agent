@@ -240,3 +240,49 @@ To proceed from Static Readiness to Live Execution, confirm the following inputs
 # Run durable background worker in live configured mode
 uv run python -m hermes_personal.workflows.worker --db-path ~/.hermes/hermes.db --poll-interval 1.0 --provider-mode configured
 ```
+
+---
+
+## 7. Current Static MCP Readiness Evidence
+
+This section records bounded static-readiness facts from source/config inspection only. No live discovery, provider calls, runtime execution, or secret values are included.
+
+### 7.1 Verified Setup Facts
+
+- Canonical `HERMES_HOME` resolution follows `get_hermes_home()`: `HERMES_HOME` env override → platform-native default (`~/.hermes` on POSIX, `%LOCALAPPDATA%\hermes` on Windows).
+- Effective local config path is `$HERMES_HOME/config.yaml`. This inspection found config at `C:\Users\ninak\AppData\Local\hermes\config.yaml`.
+- Local `.env` exists at the same `HERMES_HOME`.
+- `mcp_servers` section contains 6 configured stdio servers; no `url` transport entries observed in inspected config.
+- Observed video-related server keys: `hermes_video_factory`, `hermes_video`. Observed Product Intelligence key: `product_intelligence`.
+- Configured server executables resolve to existing interpreter paths on this machine. Module targets are present in config as `-m` args. Importability or successful startup is not verified.
+- Current `runtime.provider_mode`: not set in inspected config. Its absence means worker runtime must resolve from env/default explicitly; do not assume `configured`.
+- Current `runtime.enable_mcp`: not set in inspected config.
+
+### 7.2 Source-Grounded Tool Inventory and Contracts
+
+These names and contracts are observed in repo source, not from live MCP discovery:
+
+- Product Intelligence canonical tools: `mcp__product_intelligence__research_product`, `mcp__product_intelligence__build_resource_pack`, `mcp__product_intelligence__lock_resource_pack`. Accepted aliases include `product_intelligence_*`.
+- Video Factory canonical tools: `mcp__video_factory__create_brief`, `mcp__video_factory__create_scene_plan`, `mcp__video_factory__create_storyboard`, `mcp__video_factory__render`, `mcp__video_factory__export`, `mcp__video_factory__get_job_status`. Accepted aliases include `video_factory_*` and `video_generate`.
+- Input/output decoding accepts text blocks, JSON strings, and `structuredContent`; empty responses fail closed.
+- `render` and `export` support async polling when the provider returns pending/processing/in_progress/queued with a `job_id`. In that case status polling is required; otherwise the adapter fails closed with `MISSING_POLLING_TOOL`.
+
+### 7.3 Unresolved Inputs Requiring Operator Confirmation
+
+- Server key alignment: confirm whether `video_factory` or `hermes_video_factory` is the intended Video Factory key for MCP wiring and alias mapping.
+- Confirm `product_intelligence` is the intended live source for Product Intelligence stages, and that it exposes the expected tool names above.
+- Credentials: confirm required secrets are present in local `.env` via the secret mechanism only. Do not provide values in chat/logs. Required credential names are not enumerated in repo source; confirm them with the user or server documentation.
+- Explicit authorization and spending cap: no live generation/render/export/publish should start without operator approval and a confirmed budget limit.
+
+### 7.4 Staged Validation Plan
+
+1. **Static Contract Check**
+   - Verify required tool names and aliases against actual server registration.
+   - Stop Gate: mismatch or missing required tools → halt before worker startup.
+2. **Safe Non-Paid Discovery**
+   - Use reviewed safe discovery command to confirm tool registration without invoking tool bodies.
+   - Stop Gate: discovery failure, missing tools, or startup errors → halt.
+3. **Operator-Supervised Live Run**
+   - Start worker only after explicit operator authorization.
+   - Stop Gate: require human review at each HITL gate.
+   - Stop Gate: enforce SQLite budget reservation before render/export.
