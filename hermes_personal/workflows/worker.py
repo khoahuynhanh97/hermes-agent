@@ -48,6 +48,18 @@ def run_worker(
     connection = connect(db_path)
     repo = OutboxRepository(connection)
 
+    if topic_handlers is None and delivery_fn is None:
+        from hermes_personal.product_video.handlers import create_product_video_topic_handlers
+        from hermes_personal.workflows.engine import WorkflowEngine
+        from hermes_personal.workflows.repository import WorkflowRepository
+
+        wf_repo = WorkflowRepository(connection)
+        wf_engine = WorkflowEngine(wf_repo)
+        topic_handlers = create_product_video_topic_handlers(
+            workflow_engine=wf_engine,
+            workflow_repository=wf_repo,
+        )
+
     _worker_id = worker_id or f"durable-worker-{os.getpid()}"
     dispatcher = OutboxDispatcher(
         repository=repo,

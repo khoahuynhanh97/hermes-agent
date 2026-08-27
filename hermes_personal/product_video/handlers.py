@@ -4,6 +4,7 @@ import hashlib
 import json
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable
 
@@ -11,6 +12,11 @@ from hermes_personal.integrations.product_intelligence.client import ProductInte
 from hermes_personal.integrations.video_factory.client import VideoFactoryClient
 from hermes_personal.workflows.budgets import reserve_budget, commit_budget, release_budget
 from hermes_personal.workflows.engine import WorkflowEngine
+from hermes_personal.workflows.envelope import (
+    MalformedEnvelopeError,
+    OutboxEnvelope,
+    build_envelope,
+)
 from hermes_personal.workflows.jobs import JobDispatcher, JobResult, JobSpec, JobStatus
 from hermes_personal.workflows.repository import WorkflowRepository
 
@@ -459,3 +465,137 @@ def register_product_video_job_handlers(
     elif isinstance(dispatcher, dict):
         dispatcher.update(service.get_handlers_map())
     return service
+
+
+def create_product_video_topic_handlers(
+    workflow_engine: WorkflowEngine | None = None,
+    workflow_repository: WorkflowRepository | None = None,
+    handlers_service: ProductVideoJobHandlers | None = None,
+    pi_client: ProductIntelligenceClient | None = None,
+    video_client: VideoFactoryClient | None = None,
+) -> dict[str, Callable[[OutboxEnvelope], None]]:
+    """Create production topic handlers for durable outbox delivery.
+
+    Binds topic 'job.dispatch' to ProductVideoJobHandlers.
+    """
+    if handlers_service is None:
+        handlers_service = ProductVideoJobHandlers(
+            pi_client=pi_client,
+            video_client=video_client,
+            workflow_engine=workflow_engine,
+            workflow_repository=workflow_repository,
+        )
+    handlers_map = handlers_service.get_handlers_map()
+
+    def handle_job_dispatch(envelope: OutboxEnvelope) -> None:
+        payload = envelope.payload
+        job_name = payload.get("job_name")
+        if not job_name:
+            raise MalformedEnvelopeError("Missing 'job_name' in job.dispatch payload")
+
+        if job_name not in handlers_map:
+            raise ValueError(f"Unconfigured product_video job handler: {job_name!r}")
+
+        target_wf = envelope.workflow_id
+        current_version = None
+        if workflow_engine:
+            res = workflow_engine.get_workflow_state(target_wf)
+            if res is not None:
+                current_version = res[1]
+        elif workflow_repository:
+            data = workflow_repository.get_workflow(target_wf)
+            if data is not None:
+                current_version = data[1]
+
+        ctx = JobContext(
+            workflow_id=target_wf,
+            job_id=f"{job_name}.{envelope.message_id}",
+            owner_user_id=payload.get("owner_user_id", "local-owner"),
+            expected_version=current_version,
+            idempotency_key=envelope.idempotency_key,
+        )
+
+        handler_fn = handlers_map[job_name]
+        args = payload.get("args", [])
+        kwargs = payload.get("kwargs", {})
+
+        result = handler_fn(ctx, *args, **kwargs)
+
+        if isinstance(result, JobFailed):
+            raise RuntimeError(f"Job execution failed [{result.code}]: {result.message}")
+
+        if isinstance(result, JobSucceeded):
+            repo = workflow_repository or (workflow_engine.repo if workflow_engine else None)
+            if repo and result.artifact_ref:
+                wf_data = repo.get_workflow(target_wf)
+                if wf_data:
+                    agg, version = wf_data
+                    agg["latest_artifact"] = result.artifact_ref
+                    if result.next_command and "command" in result.next_command:
+                        agg["last_completed_job"] = job_name
+                    repo.commit_workflow(
+                        workflow_id=target_wf,
+                        aggregate_json=json.dumps(agg),
+                        events=[
+                            {
+                                "event_id": f"evt_{envelope.message_id}",
+                                "command_id": f"cmd_{envelope.message_id}",
+                                "event_type": "JobSucceeded",
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                                "payload": {"job_name": job_name, "artifact_ref": result.artifact_ref},
+                            }
+                        ],
+                        expected_version=version,
+                    )
+
+    return {"job.dispatch": handle_job_dispatch}
+
+
+def start_product_video_workflow(
+    workflow_repository: WorkflowRepository,
+    workflow_id: str,
+    product_name: str,
+    keywords: list[str],
+    pdp_url: str | None = None,
+    owner_user_id: str = "local-owner",
+    idempotency_key: str | None = None,
+) -> str:
+    """Production entrypoint to create and enqueue a durable Product-to-Video workflow.
+
+    Commits aggregate state 'researching', appends 'WorkflowStarted' event,
+    and enqueues the 'job.dispatch' OutboxEnvelope for product_video.research.
+    """
+    idemp = idempotency_key or f"idemp_res_{workflow_id}"
+    outbox_msg = build_envelope(
+        workflow_id=workflow_id,
+        topic="job.dispatch",
+        idempotency_key=idemp,
+        payload={
+            "job_name": "product_video.research",
+            "workflow_id": workflow_id,
+            "args": [product_name, keywords, pdp_url],
+            "owner_user_id": owner_user_id,
+        },
+    )
+    workflow_repository.commit_workflow(
+        workflow_id=workflow_id,
+        aggregate_json=json.dumps(
+            {
+                "state": ProductVideoWorkflowState.RESEARCHING.value,
+                "owner_user_id": owner_user_id,
+                "pdp_url": pdp_url,
+            }
+        ),
+        events=[
+            {
+                "event_id": f"evt_start_{workflow_id}",
+                "command_id": f"cmd_start_{workflow_id}",
+                "event_type": "WorkflowStarted",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "payload": {"product_name": product_name, "keywords": keywords, "pdp_url": pdp_url},
+            }
+        ],
+        outbox_message=outbox_msg,
+        expected_version=0,
+    )
+    return workflow_id

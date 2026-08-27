@@ -54,3 +54,67 @@ The current Gate 5 test suites are organized as follows:
 ```bash
 uv run pytest tests/hermes_personal/product_video tests/hermes_personal/migration tests/hermes_personal/workflows tests/hermes_personal/capabilities -q
 ```
+
+---
+
+## 5. Single-Machine Operator Runbook & Execution
+
+### Minimum Configuration & Prerequisites
+- Environment setting: `HERMES_HOME` pointing to runtime directory (default `~/.hermes`).
+- SQLite storage: persistent database at `$env:HERMES_HOME/hermes.db`.
+- Default budget policy: initialized via `init_default_engine(BudgetPolicy(max_total=1000, per_channel={"video_factory": 500, "product_intelligence": 500}))`.
+
+### Starting the Pipeline Producer & Worker
+1. **Producer Entry Point**:
+   ```python
+   from hermes_personal.storage.sqlite import connect
+   from hermes_personal.workflows.repository import WorkflowRepository
+   from hermes_personal.product_video import start_product_video_workflow
+
+   conn = connect("~/.hermes/hermes.db")
+   repo = WorkflowRepository(conn)
+   wf_id = start_product_video_workflow(
+       workflow_repository=repo,
+       workflow_id="wf_prod_01",
+       product_name="TikTok Wireless Earbuds",
+       keywords=["bluetooth", "anc"],
+       pdp_url="https://shop.tiktok.com/view/product/17294829104",
+   )
+   ```
+2. **Durable Worker Process**:
+   ```powershell
+   uv run python -m hermes_personal.workflows.worker --db-path ~/.hermes/hermes.db --poll-interval 1.0
+   ```
+   The `durable_worker` process automatically binds `job.dispatch` topic handlers to `ProductVideoJobHandlers` via `create_product_video_topic_handlers`.
+
+### Operator Approval, Status Inspection & Artifact Retrieval
+- **Check Workflow Status & Artifacts**:
+  ```python
+  agg, version = repo.get_workflow("wf_prod_01")
+  current_state = agg.get("state")
+  latest_artifact = agg.get("latest_artifact")
+  ```
+- **Operator HITL Approval**:
+  ```python
+  from hermes_personal.workflows.approvals import ApprovalService
+
+  approval_service = ApprovalService(conn)
+  req_id = approval_service.submit_request({
+      "workflow_id": "wf_prod_01",
+      "gate": "AwaitingProductLock",
+      "channel": "web",
+      "workflow_version": version,
+  })
+  approval_service.approve(req_id)
+  ```
+
+### Fake-Provider Verification vs. Live-Provider Readiness
+- **Fake-Provider Verification (MVP / PERSONAL_HAPPY_PATH_V1)**:
+  - Uses `ProductIntelligenceClient` and `VideoFactoryClient` in deterministic fake mode.
+  - Zero external network calls, zero paid API spend, 100% offline verification.
+- **Live-Provider Readiness**:
+  - Requires setting `runtime.provider_mode: configured` in `config.yaml` and providing valid API credentials (`HERMES_API_KEY`, GPU render endpoints).
+  - Paid render calls ($50 GPU render, $20 export) remain strictly HITL-gated and budget-checked.
+
+### Deferred Gaps
+- Distributed outbox broker, multi-worker leader election, high-availability replication, and cross-node process isolation remain deferred to `PRODUCTION_HARDENED` phase. Single-machine SQLite happy path is fully verified.
