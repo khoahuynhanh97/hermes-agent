@@ -4,6 +4,7 @@ import sqlite3
 import pytest
 from fastapi.testclient import TestClient
 
+from hermes_personal.capabilities.manifest import INITIAL_CAPABILITIES
 from hermes_personal.runtime.gateway_server import create_gateway_application, _health_api
 from hermes_personal.runtime.startup import StartupCoordinator, StartupFailure
 from hermes_personal.storage.sqlite import connect
@@ -100,3 +101,83 @@ def test_gateway_application_readiness_configured_mode_fails_when_no_active_snap
     assert data["ready"] is False
     assert data["status"] == "not_ready"
     assert data["failure_code"] in ("CAPABILITY_ACTIVATION_FAILED", "NOT_READY")
+
+
+def test_gateway_application_readiness_configured_mode_fails_with_existing_fake_snapshot_and_no_tools(tmp_path):
+    """If DB was previously seeded with fake bindings, restarting in configured mode without tools must still fail closed (503)."""
+    db_file = tmp_path / "gateway_restarted.db"
+
+    # Step 1: Boot once in fake mode (seeds SQLite with baseline snapshot)
+    app_fake = create_gateway_application(
+        database_path=db_file,
+        api_key="test_secret_key_12345",
+        provider_mode="fake",
+    )
+    client_fake = TestClient(app_fake)
+    res_fake = client_fake.get("/health/ready")
+    assert res_fake.status_code == 200
+    assert res_fake.json()["ready"] is True
+
+    # Step 2: Restart against the same DB in configured mode without a tool registry
+    app_configured = create_gateway_application(
+        database_path=db_file,
+        api_key="test_secret_key_12345",
+        provider_mode="configured",
+    )
+    client_configured = TestClient(app_configured)
+
+    # /health/ready MUST FAIL closed (503) — presence of leftover snapshot does not bypass validation
+    res_configured = client_configured.get("/health/ready")
+    assert res_configured.status_code == 503
+    data = res_configured.json()
+    assert data["ready"] is False
+    assert data["failure_code"] in ("CAPABILITY_ACTIVATION_FAILED", "NOT_READY")
+
+
+def test_gateway_application_readiness_configured_mode_succeeds_with_valid_supplied_registry(tmp_path):
+    """In configured mode with a valid tool registry providing all required capabilities, gateway boots and returns 200 OK."""
+    db_file = tmp_path / "gateway_configured_valid.db"
+
+    # Construct mock registry with OpenAI-format tool definitions matching DEFAULT_WIRE_BINDING_RULES
+    wires = [
+        "mcp__learning__create_candidate",
+        "mcp__learning__retrieve",
+        "mcp__product_intelligence__research_product",
+        "mcp__product_intelligence__build_resource_pack",
+        "mcp__product_intelligence__lock_resource_pack",
+        "mcp__video_factory__create_brief",
+        "mcp__video_factory__export",
+        "mcp__video_factory__render",
+        "mcp__video_factory__create_scene_plan",
+        "mcp__video_factory__create_storyboard",
+    ]
+    mock_registry = {
+        wire: {
+            "type": "function",
+            "function": {
+                "name": wire,
+                "description": f"Tool for {wire}",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+        for wire in wires
+    }
+
+    app = create_gateway_application(
+        database_path=db_file,
+        api_key="test_secret_key_12345",
+        provider_mode="configured",
+        tool_registry=mock_registry,
+    )
+
+    client = TestClient(app)
+
+    res_live = client.get("/health/live")
+    assert res_live.status_code == 200
+    assert res_live.json()["live"] is True
+
+    res_ready = client.get("/health/ready")
+    assert res_ready.status_code == 200, f"Expected 200 OK but got: {res_ready.json()}"
+    data = res_ready.json()
+    assert data["ready"] is True
+    assert data["status"] == "ready"

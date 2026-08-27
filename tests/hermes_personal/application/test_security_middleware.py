@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import BaseModel
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
@@ -10,6 +11,10 @@ from hermes_personal.application.middleware import (
     RateLimitMiddleware,
     configure_security_middleware,
 )
+
+
+class TypedPayload(BaseModel):
+    name: str
 
 
 def test_request_body_size_limit_middleware_declared_content_length():
@@ -83,6 +88,105 @@ def test_request_body_size_limit_chunked_streaming_payload_rejected_when_exceedi
     res_stream_over = client.post("/test-stream", content=data_generator_over())
     assert res_stream_over.status_code == 413
     assert res_stream_over.json()["error"] == "Payload Too Large"
+
+
+def test_request_body_size_limit_typed_json_streaming_rejected_with_413():
+    """FastAPI typed endpoint parsing JSON must return 413 (not 400/422) when chunked body exceeds limit."""
+    app = FastAPI()
+    app.add_middleware(RequestBodySizeLimitMiddleware, max_body_bytes=50)
+
+    endpoint_invoked = False
+
+    @app.post("/test-typed")
+    def typed_handler(payload: TypedPayload):
+        nonlocal endpoint_invoked
+        endpoint_invoked = True
+        return {"name": payload.name}
+
+    client = TestClient(app)
+
+    # 1. Normal typed JSON under limit -> 200 OK
+    res_ok = client.post("/test-typed", json={"name": "alice"})
+    assert res_ok.status_code == 200
+    assert res_ok.json()["name"] == "alice"
+    assert endpoint_invoked is True
+
+    # 2. Oversized typed JSON chunked stream without Content-Length -> 413 (NOT 400 or 422)
+    endpoint_invoked = False
+
+    def chunked_json_generator():
+        yield b'{"name": "'
+        yield b'a' * 100
+        yield b'"}'
+
+    res_stream_typed = client.post(
+        "/test-typed",
+        content=chunked_json_generator(),
+        headers={"Content-Type": "application/json"},
+    )
+    assert res_stream_typed.status_code == 413
+    assert res_stream_typed.json()["error"] == "Payload Too Large"
+    assert res_stream_typed.json()["max_bytes"] == 50
+    assert endpoint_invoked is False
+
+
+@pytest.mark.anyio
+async def test_request_body_size_limit_direct_asgi_rejection_at_crossing_chunk_no_further_read():
+    """Direct ASGI execution proves rejection at crossing chunk with no further chunk reads and no endpoint execution."""
+    endpoint_invoked = False
+
+    async def sample_app(scope, receive, send):
+        nonlocal endpoint_invoked
+        # Consume all chunks in request body
+        while True:
+            msg = await receive()
+            if not msg.get("more_body", False):
+                break
+        endpoint_invoked = True
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    middleware = RequestBodySizeLimitMiddleware(sample_app, max_body_bytes=30)
+
+    chunks = [
+        {"type": "http.request", "body": b"1234567890", "more_body": True},   # 10 bytes (< 30)
+        {"type": "http.request", "body": b"1234567890", "more_body": True},   # 20 bytes (< 30)
+        {"type": "http.request", "body": b"123456789012345", "more_body": True}, # 35 bytes (> 30 -> CROSSING)
+        {"type": "http.request", "body": b"should_not_be_read", "more_body": True}, # 4th chunk
+        {"type": "http.request", "body": b"should_not_be_read_either", "more_body": False}, # 5th chunk
+    ]
+
+    read_count = 0
+
+    async def mock_receive():
+        nonlocal read_count
+        if read_count < len(chunks):
+            chunk = chunks[read_count]
+            read_count += 1
+            return chunk
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    sent_messages = []
+
+    async def mock_send(message):
+        sent_messages.append(message)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/direct-asgi",
+        "headers": [],
+    }
+
+    await middleware(scope, mock_receive, mock_send)
+
+    # Assert exactly 3 chunks were read (stopped at crossing chunk)
+    assert read_count == 3
+    assert endpoint_invoked is False
+
+    # Assert response sent was 413
+    assert sent_messages[0]["type"] == "http.response.start"
+    assert sent_messages[0]["status"] == 413
 
 
 def test_token_bucket_rate_limiter_allows_burst_and_enforces_limit():
