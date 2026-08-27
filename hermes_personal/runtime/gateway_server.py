@@ -168,7 +168,11 @@ def _health_api(
     outbox_repository: OutboxRepository | None = None,
     catalog_service: CapabilityCatalogService | None = None,
     snapshots: CapabilitySnapshotRepository | None = None,
+    provider_mode: str = "configured",
 ) -> HealthAPI:
+    if snapshots is None and connection is not None:
+        snapshots = CapabilitySnapshotRepository(connection)
+
     def _run_migrations() -> None:
         if connection is not None:
             from hermes_personal.storage.sqlite import _migrate_schema
@@ -200,29 +204,54 @@ def _health_api(
         return True
 
     def _activate_snapshot() -> None:
-        if catalog_service is not None and snapshots is not None:
-            if snapshots.get_active() is None:
-                try:
-                    from hermes_personal.capabilities.bindings import ImplementationBinding
-                    from hermes_personal.capabilities.manifest import INITIAL_CAPABILITIES
+        if snapshots is not None:
+            active = snapshots.get_active()
+            if active is not None:
+                return
 
-                    bindings = tuple(
-                        ImplementationBinding(
-                            capability_id=spec.capability_id,
-                            wire_name=spec.capability_id.replace(".", "_"),
-                            source="builtin",
-                            provider=spec.owner,
-                            implementation_version="1.0.0",
-                            input_schema_version=spec.input_schema_version,
-                            output_schema_version=spec.output_schema_version,
-                            schema_digest=f"sha256:{spec.capability_id}",
-                            health="healthy",
-                        )
-                        for spec in INITIAL_CAPABILITIES.values()
+            if provider_mode == "fake":
+                # Explicit fake development mode: allow seeding test baseline
+                from hermes_personal.capabilities.bindings import ImplementationBinding
+                from hermes_personal.capabilities.manifest import INITIAL_CAPABILITIES
+
+                bindings = tuple(
+                    ImplementationBinding(
+                        capability_id=spec.capability_id,
+                        wire_name=spec.capability_id.replace(".", "_"),
+                        source="builtin",
+                        provider=spec.owner,
+                        implementation_version="1.0.0",
+                        input_schema_version=spec.input_schema_version,
+                        output_schema_version=spec.output_schema_version,
+                        schema_digest=f"sha256:{spec.capability_id}",
+                        health="healthy",
                     )
-                    snapshots.save_and_activate(bindings)
-                except Exception:
-                    pass
+                    for spec in INITIAL_CAPABILITIES.values()
+                )
+                snapshots.save_and_activate(bindings)
+            else:
+                # Configured production mode: perform real reload from registry; do NOT fabricate fake bindings
+                from hermes_personal.runtime.startup import (
+                    StartupErrorCode,
+                    StartupFailure,
+                    StartupStep,
+                )
+
+                if catalog_service is None:
+                    raise StartupFailure(
+                        StartupStep.CAPABILITY_SNAPSHOT_ACTIVATION,
+                        "No catalog service configured for capability discovery reload",
+                        StartupErrorCode.CAPABILITY_ACTIVATION_FAILED,
+                    )
+
+                try:
+                    catalog_service.reload()
+                except Exception as exc:
+                    raise StartupFailure(
+                        StartupStep.CAPABILITY_SNAPSHOT_ACTIVATION,
+                        f"Configured capability discovery failed: {exc}",
+                        StartupErrorCode.CAPABILITY_ACTIVATION_FAILED,
+                    ) from exc
 
     coordinator = StartupCoordinator(
         migration_runner=_run_migrations,
@@ -238,7 +267,7 @@ def _health_api(
     probe = create_readiness_probe(
         report,
         get_health_report=lambda: health_report,
-        check_capability_snapshot=lambda: (snapshots.get_active() is not None if snapshots is not None else True),
+        check_capability_snapshot=lambda: (snapshots.get_active() is not None if snapshots is not None else False),
         check_dependency_probes=_probe_db,
     )
     return HealthAPI(probe)
@@ -299,6 +328,7 @@ def create_gateway_application(
             outbox_repository=outbox_repository,
             catalog_service=catalog_service,
             snapshots=snapshots,
+            provider_mode=provider_mode,
         ),
         events_api=EventsAPI(events, auth_validator=validate_token, command_handler=cmd_handler),
         turn_service=service,

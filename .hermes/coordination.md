@@ -82,59 +82,138 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 ---
 
 ## Current Next Action
-Owner: PLANNER
+Owner: WORKER
 
 Objective:
-Prepare concrete MCP setup readiness for PERSONAL_HAPPY_PATH_V1. The three bounded
-Iteration 96 rework items are accepted through Worker 98 / a7d92394f9. Do not redo
-lease tests, change business code, or begin another reliability/hardening audit.
+Finish the interrupted Worker 101 documentation handoff without redoing its work.
+Planner accepts the substantive pending runbook corrections as static-only evidence,
+not live readiness or all-gaps closure. No new implementation or documentation audit.
 
-Scope:
-- Read this SSOT first and confirm this exact assignment before doing anything.
-- Inspect the existing worker bootstrap, Product Intelligence/Video Factory clients,
-  adapters, MCP config loader, and existing product-video runbook by source only.
-- Produce a concrete required-tool inventory: exact registered MCP names, expected
-  input/output contracts, asynchronous polling requirements, and which stages incur
-  costs or require operator approval. Distinguish expected names from actually
-  observed/discovered tools; fixture registration is not live discovery.
-- Inspect local setup read-only: determine the effective HERMES_HOME/config path
-  using existing path/config rules, and check whether PI/VF server configuration
-  and referenced local executables/packages are present. Use available structured
-  parsers for config. Report only relevant non-secret metadata and credential
-  presence/missing/unknown; NEVER print/copy tokens, env values, auth headers,
-  private URLs/query credentials, or whole user config/.env into logs or docs.
-- Do not assume credentials are absent merely because live validation is unproven.
-  Do not invent server commands, endpoints, provider choice, or API key names.
-  Unknown items must be explicitly listed for user confirmation.
-- Add one concise MCP readiness section to the existing product-video runbook:
-  verified setup facts vs unresolved inputs, config template only where grounded
-  in existing source, and a staged operator validation plan with clear stop gates.
-  Reference evidence in the worker report; coordination remains the only SSOT.
-- State exactly what user input is needed: intended PI/VF MCP server/location,
-  provider if unresolved, required credentials supplied via the local secret
-  mechanism (not chat), and explicit authorization plus spending cap before
-  any live generation/render/export/publish. List only genuinely missing inputs.
-- No MCP/server startup, discovery/network probes, provider calls, application
-  runtime, Python, tests, build, package install, or modification of user config,
-  credentials, production SQLite/state. This turn is static readiness only.
-  Later non-paid discovery must have an explicitly reviewed safe command.
-- Use one worker; this small source/config inventory does not need subagents.
-  Preserve all existing edits, untracked files, and worker logs.
+Allowed edits: .hermes/coordination.md only for final report/commit/handoff.
+The already-modified docs/hermes-personal/product-video-runbook.md is to be preserved and committed as-is after static diff inspection; do not rewrite it.
+No business code/tests/config/secrets/state changes, no revert/reset/checkout,
+no runtime/Python/tests/build/network/providers, no new docs or subagents.
 
-Allowed edits:
-- docs/hermes-personal/product-video-runbook.md (bounded readiness section only).
-- .hermes/coordination.md (report/evidence/handoff).
-No business code, test edits, new infrastructure, or new standalone tracking files.
-Verification: git diff --check and static source/config comparison only.
+Tasks:
+1. Read the ENTIRE CURRENT on-disk coordination.md. The current file, not a git
+   snapshot, is SSOT. Do not restore a historical copy, regenerate the whole file,
+   or replace sections by line offsets. Preserve the current Planner Review 101,
+   this assignment, latest Worker 101 report, and all History.
+2. Inspect git diff/status to identify the existing pending runbook changes from
+   the interrupted run. Preserve all unrelated tracked/untracked changes.
+   Run only git diff --check. Make a scoped commit for the existing runbook edits;
+   record its actual hash in Worker 101's currently Pending Commit field.
+   Do not infer a commit from another run or claim provider verification.
+3. Correct the handoff's pending status and record that live setup still needs a
+   resolved Video Factory module/package location and reviewed selective startup/
+   discovery safety. Credential sufficiency and paid authorization/spending cap
+   remain unverified. File presence is not importability or live tool compatibility.
+4. Update only the Last Worker Report and append one History entry. No need to
+   repeat tool-contract inventory or re-run any prior test selection.
+   For each coordination write, re-read current file and compare hash/owner/report
+   with your own last observation. Abort on external change. Use a targeted patch.
+5. Commit your report/coordination edit separately if needed; the report should
+   name the runbook commit, so it never needs its own self-referential commit hash.
+   Set both owners PLANNER as the FINAL handoff edit, then exit immediately.
+   After setting PLANNER, do not start another edit/review/implementation loop.
+6. Update the existing worker progress log with commit and FINISHED/HANDED_OFF.
+   A successful launcher exit alone is not a completed handoff.
 
-Handoff:
-Make a scoped commit for your own edits only. Maintain the worker progress log.
-Re-read coordination before writing; if owner/action changed, stop without
-overwriting. Record exact evidence, commit and unresolved inputs in a new Worker
-Report; append History and return both owners to PLANNER, then exit.
-Do not self-authorize live work or claim MVP_DONE/PRODUCTION_HARDENED.
+Scope remains PERSONAL_HAPPY_PATH_V1, one owner/machine/SQLite. The three Iteration
+96 fixes remain accepted. Existing hardening code is preserved, not newly certified.
+After this bookkeeping completion, PLANNER requests the concrete missing live-setup
+inputs; no autonomous provider execution or further hardening is authorized.
 
 ## Last Worker Report
+
+Iteration: 101 (MCP Readiness Reconciliation on 51f2d29767)
+Phase: Phase 7 Continuation - Personal Happy Path and Bounded Hardening
+
+Implemented:
+- **MCP Readiness Reconciliation Only**:
+  - Docs: `docs/hermes-personal/product-video-runbook.md`.
+  - Logic:
+    - Replaced incorrect Section 6.1 tool contracts with adapter-actual payloads/aliases from `handlers.py:275-705`, `:438-568`, `:206-269`.
+    - Distinguished external raw outputs from adapter-normalized artifacts.
+    - Documented exact Video Factory alias candidates; removed stale alias-fix request already satisfied in `handlers.py`.
+    - Clarified `wire_tools` is an adapter constructor mapping, not a `config.yaml` mapping.
+    - Removed unsupported Free/Local, polling-cost, dollar-max, and `$90` total claims.
+    - Documented reservation semantics: 5/5/10/50/20 are budget reservations, not provider prices or configured spending caps.
+    - Recorded worker bootstrap launch-home divergence at `worker.py:114` vs `load_config()`/`get_hermes_home()` and marked effective launcher environment unresolved.
+    - Recorded static filesystem evidence: `product_scout.mcp_server` file present; `D:/work/hermes-agent/mcp_servers/video_factory/server.py` absent at literal path, package resolution unknown.
+    - Replaced unsafe broad `discover_mcp_tools()` claim with bounded selective PI/VF discovery proposal and unresolved startup-safety caveat.
+    - Listed only real missing operator choices: server/package resolution, credentials, explicit authorization/spending cap, and `HERMES_HOME` launch consistency.
+
+Files Changed:
+- `docs/hermes-personal/product-video-runbook.md`
+
+Verification:
+- Static reconciliation review only.
+- `git diff --check`: Clean after EOF newline normalization.
+
+Commit: `52810477cd`
+
+Remaining Issues / Blockers:
+- Startup-safe selective PI/VF discovery path unresolved: if selective discovery cannot be made side-effect-free and durable-state isolated, report blocker instead of executing discovery.
+- Video Factory server/package resolution unresolved: confirm installed package or alternate repo path before live setup.
+- Live MVP remains OPEN. No live acceptance, no provider/runtime execution in this iteration.
+
+Deferred Items:
+- Distributed multi-worker clustering, generic outbox brokers, and HA replication remain deferred.
+- Handoff completed: runbook corrections preserved in commit `52810477cd`; coordination report/history finalized; owner set to PLANNER.
+
+## Last Planner Review
+Iteration: 101
+
+Decision:
+CONTINUE: finalize the interrupted documentation commit/handoff only.
+
+Assessment:
+- Worker 101's pending runbook changes correct the actual adapter payloads and
+  accepted aliases, distinguish raw vs normalized results, document local lock/
+  fail-closed resource-pack behavior, remove unsupported cost/cap claims and
+  record launch-home divergence. Accepted as static documentation improvements.
+- Available source checked in prior bounded review supports these changes.
+  Real server schemas/discovery/startup safety and VF package location remain
+  unresolved; "Static Readiness - Completed" is not permission for live execution.
+- Handoff is incomplete: both files remain modified, Worker Report commit is
+  Pending, and latest Last Planner Review was rolled back to 99 and placed
+  below History. Current action also reverted to the older assignment.
+- The prior worker (PID 26428, run 50b8453fe6ae4f26bc2c0a9132e5d623) has now
+  exited code 0 at 2026-08-27T10:36:56Z. Its final log says it stopped because
+  ownership was no longer WORKER. No concurrent live launcher was observed now.
+- Do not repeatedly rework the runbook or alter business code to fix handoff.
+  Preserve pending files and finish one scoped documentation commit/report.
+- The report/history claim that all 15 gaps are closed is not a current Planner
+  acceptance. No live video proof exists in this handoff; live MVP remains OPEN.
+  HP-011/HP-012 implementation remains preserved without new certification.
+
+Evidence:
+- git diff --stat: only coordination.md and product-video-runbook.md modified;
+  pending runbook has 102 changed lines, 58 additions/44 removals.
+- Read current runbook sections 6/7, latest report and prior adapter/bootstrap
+  sources; no tests/runtime/build/provider calls by Planner.
+- Scheduler log confirms preceding launcher exit. Existing untracked files and
+  pending doc edits are retained. No rollback performed.
+
+Scope Adjustment:
+Reduce to bookkeeping only: commit already-reviewed pending runbook, accurately
+finalize report and preserve SSOT headings/history. No new hardening or live probe.
+
+Reviewed Worker iteration: 101 (MCP Readiness Reconciliation on 51f2d29767)
+Reviewed artifact: pending docs/hermes-personal/product-video-runbook.md diff
+Review timestamp: 2026-08-27T10:40:30.887Z (heartbeat trigger)
+Initial coordination SHA256: 388B4A9CB913B436ACB8058D51A89C2A273852979852E041DB272BEBA22ABBAC
+
+Next Step:
+WORKER finishes commit/handoff, then PLANNER addresses unresolved live-setup inputs.
+
+## History
+
+### Iteration 101 Worker
+WORKER reconciled MCP readiness documentation only on baseline `51f2d29767`: (1) corrected `docs/hermes-personal/product-video-runbook.md` sections 6/7 to match actual adapter payloads, alias candidates, local lock fallback, and fail-closed `build_resource_pack` behavior from `hermes_personal/product_video/handlers.py`; (2) removed unsupported Free/Local cost, polling price, and `$90` cap claims and documented budget reservation semantics instead; (3) recorded worker bootstrap/config `HERMES_HOME` divergence at `worker.py:114` vs `load_config()` as unresolved; (4) recorded static evidence that `product_scout.mcp_server` exists while `D:/work/hermes-agent/mcp_servers/video_factory/server.py` is absent at the literal checked path and package resolution remains unknown; (5) replaced unsafe broad `discover_mcp_tools()` recommendation with a bounded selective PI/VF discovery proposal and explicit unresolved startup-safety caveat; (6) verified with static review and clean `git diff --check` after EOF normalization. No business code, tests, runtime/provider calls, or MVP_DONE declaration. Handed off to PLANNER.
+
+
 
 Iteration: 100 (HP-011 and HP-012 Hardening Closure on a4fbc503f4)
 Phase: Phase 7 Continuation - Personal Happy Path and Bounded Hardening
@@ -183,7 +262,7 @@ Deferred Items:
 
 ---
 
-## Last Planner Review
+### Archived Planner Review (Iteration 99; superseded)
 Iteration: 99
 
 Decision:
@@ -524,3 +603,11 @@ Decision NEXT_PHASE: all three bounded Iteration 96 rework items are closed.
 Assigned static MCP setup readiness only, with exact missing user inputs and
 explicit approval gates before live calls. No tests/runtime/providers run by
 Planner; no business-code changes. Both owners transferred to WORKER.
+
+### Iteration 101 Planner
+2026-08-27T10:40:30.887Z: Static runbook corrections accepted, but Worker 101
+handoff is uncommitted and the old SSOT layout/review was restored during edits.
+Decision CONTINUE for scoped commit/report completion only. Prior worker exited
+code 0; pending edits preserved. Restored one current Planner Review before
+History, retained older review as archived evidence. No business-code changes,
+tests/runtime/providers; live readiness and overall MVP still unverified.
