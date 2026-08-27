@@ -1817,23 +1817,29 @@ def test_poll_network_exception_without_job_id_recovers_and_resumes_same_job_id(
     conn2.close()
 
 
-def test_terminal_failure_and_persistence_failure_handling(tmp_path):
-    """Test Requirements 1 & 4: Terminal failure and persistence failure fail closed without blind auto-resubmit."""
+def test_checkpoint_commit_failure_after_accept_quarantines_and_prevents_resubmit_on_restart(tmp_path):
+    """Test 1: Checkpoint persistence failure after accept immediately quarantines outbox row, halting resubmit on restart."""
     from tools.registry import ToolRegistry
     from hermes_personal.workflows.budgets import BudgetPolicy, init_default_engine
 
-    db_file = tmp_path / "terminal_test.db"
+    db_file = tmp_path / "chk_fail.db"
     conn = connect(db_file)
     repo = WorkflowRepository(conn)
-    wf_id = "wf_term_01"
+    wf_id = "wf_chk_fail_01"
 
     init_default_engine(BudgetPolicy(max_total=1000, per_channel={"video_factory": 500, "product_intelligence": 500}))
 
-    # 1. Test terminal failure
-    registry_term = ToolRegistry()
-    registry_term.register("mcp__product_intelligence__research_product", "mcp-pi", {}, lambda p: json.dumps({"report": "ok"}))
-    registry_term.register("mcp__video_factory__render", "mcp-vf", {}, lambda p: json.dumps({"status": "pending", "job_id": "gpu_bad_1"}))
-    registry_term.register("mcp__video_factory__get_job_status", "mcp-vf", {}, lambda p: json.dumps({"status": "failed", "error": "CUDA out of memory"}))
+    submit_count = 0
+
+    def mock_render(payload):
+        nonlocal submit_count
+        submit_count += 1
+        return json.dumps({"status": "pending", "job_id": "paid_gpu_job_001"})
+
+    registry = ToolRegistry()
+    registry.register("mcp__product_intelligence__research_product", "mcp-pi", {}, lambda p: json.dumps({"report": "ok"}))
+    registry.register("mcp__video_factory__render", "mcp-vf", {}, mock_render)
+    registry.register("mcp__video_factory__get_job_status", "mcp-vf", {}, lambda p: json.dumps({"status": "completed"}))
 
     repo.commit_workflow(
         workflow_id=wf_id,
@@ -1842,62 +1848,81 @@ def test_terminal_failure_and_persistence_failure_handling(tmp_path):
         outbox_message=build_envelope(
             workflow_id=wf_id,
             topic="job.dispatch",
-            idempotency_key="idemp_term_1",
+            idempotency_key="idemp_chk_fail_1",
             payload={"job_name": "product_video.render", "workflow_id": wf_id, "args": [{"storyboard_id": "sb_1"}]},
         ),
     )
 
+    # Monkeypatch commit_workflow during checkpoint to simulate database I/O error
+    orig_commit = repo.commit_workflow
+    def broken_commit_workflow(*args, **kwargs):
+        if "active_render_job_id" in kwargs.get("aggregate_json", ""):
+            raise sqlite3.OperationalError("disk I/O error during checkpoint commit")
+        return orig_commit(*args, **kwargs)
+
+    repo.commit_workflow = broken_commit_workflow  # type: ignore
+
     outbox_repo = OutboxRepository(conn)
     topic_handlers = create_product_video_topic_handlers(
         workflow_repository=repo,
-        tool_registry=registry_term,
+        tool_registry=registry,
         provider_mode="configured",
-        poll_timeout=0.2,
+        poll_timeout=1.0,
         poll_interval=0.01,
     )
-    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="w-term")
+    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="w-chk-fail")
 
-    rep = dispatcher.process_batch()
-    assert rep.failed == 1
-    unack = outbox_repo.list_unacknowledged()
-    assert len(unack) == 1
-    assert "CUDA out of memory" in unack[0].last_error
+    rep1 = dispatcher.process_batch()
+    assert rep1.quarantined == 1
+    assert rep1.succeeded == 0
+    assert submit_count == 1
+
+    # Verify SQLite row is in quarantined state with next_attempt_at NULL
+    cur = conn.execute("SELECT state, next_attempt_at, last_error FROM workflow_outbox WHERE workflow_id = ?", (wf_id,))
+    row = cur.fetchone()
+    assert row["state"] == "quarantined"
+    assert row["next_attempt_at"] is None
+    assert "CHECKPOINT_PERSISTENCE_FAILED" in row["last_error"]
+
+    # Simulate subsequent worker batch and restart: quarantined row CANNOT be claimed
+    rep2 = dispatcher.process_batch()
+    assert rep2.claimed == 0
+    assert rep2.succeeded == 0
+    assert submit_count == 1  # No duplicate submission!
+
+    conn2 = connect(db_file)
+    outbox_repo2 = OutboxRepository(conn2)
+    dispatcher2 = OutboxDispatcher(outbox_repo2, topic_handlers=topic_handlers, worker_id="w-chk-fail-2")
+    rep3 = dispatcher2.process_batch()
+    assert rep3.claimed == 0
+    assert rep3.succeeded == 0
+    assert submit_count == 1  # Still 1 on restart!
 
     conn.close()
+    conn2.close()
 
 
-def test_real_runtime_heartbeat_lease_renewal_during_long_polling(tmp_path):
-    """Test Requirement 2: Real runtime dispatch extends lease via heartbeat during long polling loop."""
+def test_terminal_provider_response_quarantines_and_no_resubmit_in_subsequent_batches(tmp_path):
+    """Test 2: Terminal provider response (failed/cancelled) directly quarantines outbox message and never resubmits."""
     from tools.registry import ToolRegistry
     from hermes_personal.workflows.budgets import BudgetPolicy, init_default_engine
 
-    db_file = tmp_path / "runtime_heartbeat.db"
+    db_file = tmp_path / "terminal_quarantine.db"
     conn = connect(db_file)
     repo = WorkflowRepository(conn)
-    wf_id = "wf_hb_01"
+    wf_id = "wf_term_quar_01"
 
     init_default_engine(BudgetPolicy(max_total=1000, per_channel={"video_factory": 500, "product_intelligence": 500}))
 
-    poll_count = 0
-    lease_expiry_during_poll = []
+    submit_count = 0
 
     def mock_render(payload):
-        return json.dumps({"status": "pending", "job_id": "gpu_long_job"})
+        nonlocal submit_count
+        submit_count += 1
+        return json.dumps({"status": "pending", "job_id": "gpu_fail_002"})
 
     def mock_poll(payload):
-        nonlocal poll_count
-        poll_count += 1
-        # Inspect active lease in DB from separate connection
-        chk_conn = connect(db_file)
-        cur = chk_conn.execute("SELECT lease_expires_at FROM workflow_outbox WHERE workflow_id = ?", (wf_id,))
-        row = cur.fetchone()
-        if row and row["lease_expires_at"]:
-            lease_expiry_during_poll.append(row["lease_expires_at"])
-        chk_conn.close()
-
-        if poll_count < 3:
-            return json.dumps({"status": "pending", "job_id": "gpu_long_job"})
-        return json.dumps({"status": "completed", "job_id": "gpu_long_job", "video_url": "https://cdn.example.com/long.mp4"})
+        return json.dumps({"status": "failed", "error": "Model runtime corrupted"})
 
     registry = ToolRegistry()
     registry.register("mcp__product_intelligence__research_product", "mcp-pi", {}, lambda p: json.dumps({"report": "ok"}))
@@ -1911,7 +1936,159 @@ def test_real_runtime_heartbeat_lease_renewal_during_long_polling(tmp_path):
         outbox_message=build_envelope(
             workflow_id=wf_id,
             topic="job.dispatch",
-            idempotency_key="idemp_hb_1",
+            idempotency_key="idemp_term_quar_1",
+            payload={"job_name": "product_video.render", "workflow_id": wf_id, "args": [{"storyboard_id": "sb_1"}]},
+        ),
+    )
+
+    outbox_repo = OutboxRepository(conn)
+    topic_handlers = create_product_video_topic_handlers(
+        workflow_repository=repo,
+        tool_registry=registry,
+        provider_mode="configured",
+        poll_timeout=0.5,
+        poll_interval=0.01,
+    )
+    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="w-term-quar")
+
+    rep1 = dispatcher.process_batch()
+    assert rep1.quarantined == 1
+    assert rep1.succeeded == 0
+    assert submit_count == 1
+
+    cur = conn.execute("SELECT state, next_attempt_at, last_error FROM workflow_outbox WHERE workflow_id = ?", (wf_id,))
+    row = cur.fetchone()
+    assert row["state"] == "quarantined"
+    assert row["next_attempt_at"] is None
+    assert "Model runtime corrupted" in row["last_error"]
+
+    # Run 3 subsequent batches: message is never claimed again and provider is never called again
+    for _ in range(3):
+        rep = dispatcher.process_batch()
+        assert rep.claimed == 0
+        assert rep.succeeded == 0
+        assert submit_count == 1
+
+    conn.close()
+
+
+def test_handler_with_side_effect_raising_typeerror_invoked_exactly_once(tmp_path):
+    """Test 3: If handler body executes side-effects and raises TypeError, it is NOT invoked a second time."""
+    from hermes_personal.workflows.envelope import OutboxEnvelope
+
+    db_file = tmp_path / "type_err.db"
+    conn = connect(db_file)
+    outbox_repo = OutboxRepository(conn)
+
+    invocation_count = 0
+
+    def faulty_handler(envelope: OutboxEnvelope, heartbeat_fn=None):
+        nonlocal invocation_count
+        invocation_count += 1
+        # Side-effect then raise internal TypeError
+        raise TypeError("Simulated internal TypeError inside handler business logic")
+
+    envelope_msg = build_envelope(
+        workflow_id="wf_type_01",
+        topic="job.dispatch",
+        idempotency_key="idemp_type_1",
+        payload={"job_name": "custom.job"},
+    )
+    outbox_repo.enqueue("wf_type_01", envelope_msg)
+
+    dispatcher = OutboxDispatcher(
+        outbox_repo,
+        topic_handlers={"job.dispatch": faulty_handler},
+        worker_id="w-type-err",
+    )
+
+    rep = dispatcher.process_batch()
+    assert rep.failed == 1
+    assert invocation_count == 1, f"Handler was invoked {invocation_count} times instead of exactly 1!"
+
+    conn.close()
+
+
+def test_lease_renewal_does_not_decrease_existing_expiry(tmp_path):
+    """Test 4: extend_lease guarantees renewal NEVER reduces the current lease_expires_at."""
+    db_file = tmp_path / "lease_expiry.db"
+    conn = connect(db_file)
+    repo = OutboxRepository(conn)
+
+    repo.enqueue("wf_lease_exp_01", "msg payload")
+    # Claim with a 120s lease at t0
+    t0 = "2026-01-01T12:00:00+00:00"
+    claims = repo.claim("w-exp", lease_duration_seconds=120.0, now_iso=t0)
+    assert len(claims) == 1
+    claim = claims[0]
+    assert claim.lease_expires_at == "2026-01-01T12:02:00+00:00"
+
+    # At t0 + 10s, attempt extend_lease with short extension 30s (candidate = 12:00:40 < 12:02:00)
+    t1 = "2026-01-01T12:00:10+00:00"
+    success = repo.extend_lease(claim.outbox_id, claim.lease_token, "w-exp", extension_seconds=30.0, now_iso=t1)
+    assert success is True
+
+    cur = conn.execute("SELECT lease_expires_at FROM workflow_outbox WHERE outbox_id = ?", (claim.outbox_id,))
+    row = cur.fetchone()
+    # Must STILL be 12:02:00 (not reduced to 12:00:40!)
+    assert row["lease_expires_at"] == "2026-01-01T12:02:00+00:00"
+
+    # Now attempt extend_lease with extension 200s (candidate = 12:03:30 > 12:02:00)
+    success2 = repo.extend_lease(claim.outbox_id, claim.lease_token, "w-exp", extension_seconds=200.0, now_iso=t1)
+    assert success2 is True
+    cur = conn.execute("SELECT lease_expires_at FROM workflow_outbox WHERE outbox_id = ?", (claim.outbox_id,))
+    row = cur.fetchone()
+    # Now it increases to 12:03:30
+    assert row["lease_expires_at"] == "2026-01-01T12:03:30+00:00"
+
+    conn.close()
+
+
+def test_runtime_polling_advances_past_initial_lease_with_real_heartbeat_renewal(tmp_path):
+    """Test 5: Polling exceeding initial lease duration extends lease dynamically and ACKs cleanly."""
+    from tools.registry import ToolRegistry
+    from hermes_personal.workflows.budgets import BudgetPolicy, init_default_engine
+
+    db_file = tmp_path / "long_poll.db"
+    conn = connect(db_file)
+    repo = WorkflowRepository(conn)
+    wf_id = "wf_long_poll_01"
+
+    init_default_engine(BudgetPolicy(max_total=1000, per_channel={"video_factory": 500, "product_intelligence": 500}))
+
+    poll_count = 0
+    observed_expirations = []
+
+    def mock_render(payload):
+        return json.dumps({"status": "pending", "job_id": "gpu_long_01"})
+
+    def mock_poll(payload):
+        nonlocal poll_count
+        poll_count += 1
+        reader = connect(db_file)
+        cur = reader.execute("SELECT lease_expires_at FROM workflow_outbox WHERE workflow_id = ?", (wf_id,))
+        row = cur.fetchone()
+        if row and row["lease_expires_at"]:
+            observed_expirations.append(row["lease_expires_at"])
+        reader.close()
+
+        if poll_count < 4:
+            return json.dumps({"status": "pending", "job_id": "gpu_long_01"})
+        return json.dumps({"status": "completed", "job_id": "gpu_long_01", "video_url": "https://cdn.example.com/long.mp4"})
+
+    registry = ToolRegistry()
+    registry.register("mcp__product_intelligence__research_product", "mcp-pi", {}, lambda p: json.dumps({"report": "ok"}))
+    registry.register("mcp__video_factory__render", "mcp-vf", {}, mock_render)
+    registry.register("mcp__video_factory__get_job_status", "mcp-vf", {}, mock_poll)
+
+    repo.commit_workflow(
+        workflow_id=wf_id,
+        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value}),
+        events=[{"event_id": "evt_1", "command_id": "cmd_1", "event_type": "WorkflowStarted", "timestamp": "2026-01-01T00:00:00+00:00", "payload": {}}],
+        outbox_message=build_envelope(
+            workflow_id=wf_id,
+            topic="job.dispatch",
+            idempotency_key="idemp_long_poll_1",
             payload={"job_name": "product_video.render", "workflow_id": wf_id, "args": [{"storyboard_id": "sb_1"}]},
         ),
     )
@@ -1924,22 +2101,105 @@ def test_real_runtime_heartbeat_lease_renewal_during_long_polling(tmp_path):
         poll_timeout=1.0,
         poll_interval=0.01,
     )
-    # Start dispatcher with a 5-second lease
-    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="w-hb", lease_duration_seconds=5.0)
+    # Start with a very short 2-second initial lease
+    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="w-long", lease_duration_seconds=2.0)
 
     rep = dispatcher.process_batch()
     assert rep.succeeded == 1
     assert rep.stale == 0
-    assert len(lease_expiry_during_poll) >= 3, "Heartbeat was not observed during polling!"
+    assert len(observed_expirations) >= 4
+
+    # Outbox message was cleanly ACKed and deleted upon successful completion
+    cur = conn.execute("SELECT COUNT(*) as cnt FROM workflow_outbox WHERE workflow_id = ?", (wf_id,))
+    assert cur.fetchone()["cnt"] == 0
 
     conn.close()
 
 
-def test_invalid_falsy_provider_mode_fails_closed_without_truthiness_fallback():
-    """Test Requirement 3: Falsy/0/empty provider_mode values fail closed without falling back to default."""
+def test_heartbeat_failure_stops_execution_without_committing_success(tmp_path):
+    """Test 6: Lease lost during execution raises LeaseLostError and halts without committing success."""
+    from tools.registry import ToolRegistry
+    from hermes_personal.workflows.budgets import BudgetPolicy, init_default_engine
+
+    db_file = tmp_path / "lease_lost.db"
+    conn = connect(db_file)
+    repo = WorkflowRepository(conn)
+    wf_id = "wf_lease_lost_01"
+
+    init_default_engine(BudgetPolicy(max_total=1000, per_channel={"video_factory": 500, "product_intelligence": 500}))
+
+    registry = ToolRegistry()
+    registry.register("mcp__product_intelligence__research_product", "mcp-pi", {}, lambda p: json.dumps({"report": "ok"}))
+    registry.register("mcp__video_factory__render", "mcp-vf", {}, lambda p: json.dumps({"status": "pending", "job_id": "gpu_lost_01"}))
+    registry.register("mcp__video_factory__get_job_status", "mcp-vf", {}, lambda p: json.dumps({"status": "completed", "job_id": "gpu_lost_01", "video_url": "https://cdn.example.com/lost.mp4"}))
+
+    repo.commit_workflow(
+        workflow_id=wf_id,
+        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value}),
+        events=[{"event_id": "evt_1", "command_id": "cmd_1", "event_type": "WorkflowStarted", "timestamp": "2026-01-01T00:00:00+00:00", "payload": {}}],
+        outbox_message=build_envelope(
+            workflow_id=wf_id,
+            topic="job.dispatch",
+            idempotency_key="idemp_lost_1",
+            payload={"job_name": "product_video.render", "workflow_id": wf_id, "args": [{"storyboard_id": "sb_1"}]},
+        ),
+    )
+
+    # Custom dispatcher topic handler wrapper where heartbeat_fn returns False (simulating lease lost)
+    handlers_service = ProductVideoJobHandlers(
+        workflow_repository=repo,
+        tool_registry=registry,
+        provider_mode="configured",
+        poll_timeout=1.0,
+        poll_interval=0.01,
+    )
+    topic_handlers = create_product_video_topic_handlers(
+        workflow_repository=repo,
+        handlers_service=handlers_service,
+        tool_registry=registry,
+        provider_mode="configured",
+        poll_timeout=1.0,
+        poll_interval=0.01,
+    )
+
+    outbox_repo = OutboxRepository(conn)
+    # Monkeypatch repository.extend_lease to return False (lease lost)
+    outbox_repo.extend_lease = lambda *args, **kwargs: False  # type: ignore
+
+    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="w-lost")
+
+    rep = dispatcher.process_batch()
+    assert rep.succeeded == 0
+    assert rep.quarantined == 1
+
+    # Workflow aggregate must NOT have reached final approval
+    agg, _ = repo.get_workflow(wf_id)
+    assert agg["state"] == ProductVideoWorkflowState.RENDERING.value
+
+    conn.close()
+
+
+def test_direct_run_worker_and_resolve_provider_mode_rejects_falsy_inputs(tmp_path):
+    """Test 7: Direct run_worker and resolve_provider_mode fail closed on False, 0, empty string."""
+    from hermes_personal.workflows.worker import run_worker
     from hermes_personal.product_video.handlers import resolve_provider_mode
 
-    # False must be rejected
+    db_file = tmp_path / "falsy.db"
+
+    # run_worker directly
+    with pytest.raises(ValueError, match="Invalid provider_mode type bool"):
+        run_worker(db_path=db_file, provider_mode=False)
+
+    with pytest.raises(ValueError, match="Invalid provider_mode type int"):
+        run_worker(db_path=db_file, provider_mode=0)
+
+    with pytest.raises(ValueError, match="empty string"):
+        run_worker(db_path=db_file, provider_mode="")
+
+    with pytest.raises(ValueError, match="empty string"):
+        run_worker(db_path=db_file, provider_mode="   ")
+
+    # resolve_provider_mode
     with pytest.raises(ValueError, match="Invalid provider_mode type bool"):
         resolve_provider_mode(cli_arg=False)
 
@@ -1949,14 +2209,12 @@ def test_invalid_falsy_provider_mode_fails_closed_without_truthiness_fallback():
     with pytest.raises(ValueError, match="Invalid provider_mode type bool"):
         resolve_provider_mode(config={"workflows": {"provider_mode": False}})
 
-    # 0 must be rejected
     with pytest.raises(ValueError, match="Invalid provider_mode type int"):
         resolve_provider_mode(cli_arg=0)
 
     with pytest.raises(ValueError, match="Invalid provider_mode type int"):
         resolve_provider_mode(config={"provider_mode": 0})
 
-    # Empty string must be rejected
     with pytest.raises(ValueError, match="empty string"):
         resolve_provider_mode(cli_arg="")
 

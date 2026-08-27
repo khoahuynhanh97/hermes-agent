@@ -39,7 +39,10 @@ def run_worker(
         validate_provider_mode,
     )
 
-    _provider_mode = validate_provider_mode(provider_mode or os.environ.get("HERMES_PROVIDER_MODE", "configured"))
+    _provider_mode = resolve_provider_mode(
+        cli_arg=provider_mode,
+        env_val=os.environ.get("HERMES_PROVIDER_MODE"),
+    )
     _render_poll_timeout = validate_polling_setting("render_poll_timeout", render_poll_timeout, 60.0)
     _render_poll_interval = validate_polling_setting("render_poll_interval", render_poll_interval, 0.5)
 

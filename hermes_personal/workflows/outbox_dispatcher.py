@@ -81,15 +81,23 @@ class OutboxDispatcher:
                 self._deliver_claim(claim)
                 delivery_ok = True
             except Exception as ex:
-                status = self.repository.record_failure(
-                    claim.outbox_id,
-                    claim.lease_token,
-                    self.worker_id,
-                    str(ex),
-                    self.backoff_base_seconds,
-                    self.max_backoff_seconds,
-                    now_iso,
-                )
+                retryable = getattr(ex, "retryable", True)
+                force_quarantine = not retryable
+                try:
+                    status = self.repository.record_failure(
+                        claim.outbox_id,
+                        claim.lease_token,
+                        self.worker_id,
+                        str(ex),
+                        self.backoff_base_seconds,
+                        self.max_backoff_seconds,
+                        now_iso,
+                        force_quarantine=force_quarantine,
+                    )
+                except Exception as db_ex:
+                    # Halt worker on failure to persist error state
+                    raise RuntimeError(f"CRITICAL: Failed to persist outbox error state: {db_ex}") from db_ex
+
                 if status == "quarantined":
                     quarantined += 1
                 elif status in ("stale", "stale_lease"):
@@ -137,9 +145,15 @@ class OutboxDispatcher:
             hb = lambda ext=60.0: self.repository.extend_lease(
                 claim.outbox_id, claim.lease_token, self.worker_id, extension_seconds=ext
             )
-            try:
+            import inspect
+            sig = inspect.signature(handler)
+            accepts_heartbeat = (
+                "heartbeat_fn" in sig.parameters
+                or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+            )
+            if accepts_heartbeat:
                 handler(envelope, heartbeat_fn=hb)
-            except TypeError:
+            else:
                 handler(envelope)
         else:
             # Legacy raw delivery mode (backward compat for tests).

@@ -132,6 +132,26 @@ class JobFailed:
     message: str | None = None
 
 
+class JobDispatchError(RuntimeError):
+    """Base error for job dispatch failures."""
+    def __init__(self, message: str, code: str = "JOB_FAILED", retryable: bool = True):
+        super().__init__(message)
+        self.code = code
+        self.retryable = retryable
+
+
+class TerminalJobError(JobDispatchError):
+    """Non-retryable terminal job error requiring quarantine and operator intervention."""
+    def __init__(self, message: str, code: str = "TERMINAL_JOB_ERROR"):
+        super().__init__(message, code=code, retryable=False)
+
+
+class LeaseLostError(JobDispatchError):
+    """Raised when lease renewal fails / lease is lost to another worker."""
+    def __init__(self, message: str = "Lease lost during execution"):
+        super().__init__(message, code="LEASE_LOST", retryable=False)
+
+
 def _compute_digest(obj: Any) -> str:
     payload = json.dumps(obj, sort_keys=True).encode()
     return "sha256:" + hashlib.sha256(payload).hexdigest()
@@ -166,6 +186,10 @@ def _get_tool_names_from_registry(registry: Any) -> set[str]:
 
 def _check_for_errors(obj: Any) -> None:
     if isinstance(obj, dict):
+        if obj.get("status") in ("failed", "error", "cancelled"):
+            err_msg = obj.get("error") or obj.get("message") or f"Operation terminated with status '{obj.get('status')}'"
+            raise TerminalJobError(f"Tool operation failed with status '{obj.get('status')}': {err_msg}", code="TOOL_OPERATION_TERMINAL_FAILED")
+
         if obj.get("isError") is True or obj.get("is_error") is True:
             err_text = ""
             if isinstance(obj.get("content"), list):
@@ -177,10 +201,6 @@ def _check_for_errors(obj: Any) -> None:
 
         if "error" in obj and obj["error"]:
             raise RuntimeError(f"Tool error: {obj['error']}")
-
-        if obj.get("status") in ("failed", "error", "cancelled"):
-            err_msg = obj.get("error") or obj.get("message") or f"Operation terminated with status '{obj.get('status')}'"
-            raise RuntimeError(f"Tool operation failed with status '{obj.get('status')}': {err_msg}")
 
 
 def _decode_mcp_output(raw: Any) -> dict[str, Any]:
@@ -410,7 +430,7 @@ class MCPVideoFactoryAdapter:
         if isinstance(raw, dict) and raw.get("status") in ("pending", "processing", "in_progress", "queued"):
             job_id_val = str(raw.get("job_id") or raw.get("id") or existing_job_id or "")
             if not job_id_val:
-                raise RuntimeError("Async video render job returned pending status but missing job_id in response")
+                raise TerminalJobError("Async video render job returned pending status but missing job_id in response", code="MISSING_JOB_ID")
 
             # Checkpoint provider job_id immediately upon receipt BEFORE starting polling
             if not existing_job_id and on_job_accepted is not None:
@@ -422,10 +442,9 @@ class MCPVideoFactoryAdapter:
                 deadline = start_mono + self.poll_timeout
                 while True:
                     if heartbeat_fn is not None:
-                        try:
-                            heartbeat_fn()
-                        except Exception:
-                            pass
+                        hb_ok = heartbeat_fn()
+                        if hb_ok is False:
+                            raise LeaseLostError(f"Lease lost during async video render job '{job_id_val}' polling. Halting execution.")
                     time.sleep(self.poll_interval)
                     status_raw = _dispatch_tool(self.registry, poll_tool, {"job_id": job_id_val})
                     st = str(status_raw.get("status", "")).lower()
@@ -434,16 +453,17 @@ class MCPVideoFactoryAdapter:
                         break
                     if st in ("failed", "error", "cancelled"):
                         err_detail = status_raw.get("error") or status_raw.get("message") or f"status '{st}'"
-                        raise RuntimeError(f"Async video render job '{job_id_val}' failed (terminal): {err_detail}")
+                        raise TerminalJobError(f"Async video render job '{job_id_val}' failed: {err_detail}", code="VF_RENDER_TERMINAL_FAILED")
                     if time.monotonic() >= deadline:
                         raise RuntimeError(
                             f"Async video render job '{job_id_val}' timed out after {self.poll_timeout}s. "
                             f"Action required: operator intervention or resume polling with active_job_id='{job_id_val}'. Do not resubmit paid job."
                         )
             else:
-                raise RuntimeError(
+                raise TerminalJobError(
                     f"Async render job '{job_id_val}' returned status '{raw.get('status')}', but no status polling tool "
-                    f"('{poll_tool}') is registered (terminal). Cannot mark render completed without final video output reference."
+                    f"('{poll_tool}') is registered. Cannot mark render completed without final video output reference.",
+                    code="MISSING_POLLING_TOOL",
                 )
 
         # Enforce that output reference is present and non-empty
@@ -490,7 +510,7 @@ class MCPVideoFactoryAdapter:
         if isinstance(raw, dict) and raw.get("status") in ("pending", "processing", "in_progress", "queued"):
             job_id_val = str(raw.get("job_id") or raw.get("export_id") or raw.get("id") or existing_job_id or "")
             if not job_id_val:
-                raise RuntimeError("Async video export job returned pending status but missing job_id in response")
+                raise TerminalJobError("Async video export job returned pending status but missing job_id in response", code="MISSING_JOB_ID")
 
             # Checkpoint provider job_id immediately upon receipt BEFORE starting polling
             if not existing_job_id and on_job_accepted is not None:
@@ -502,10 +522,9 @@ class MCPVideoFactoryAdapter:
                 deadline = start_mono + self.poll_timeout
                 while True:
                     if heartbeat_fn is not None:
-                        try:
-                            heartbeat_fn()
-                        except Exception:
-                            pass
+                        hb_ok = heartbeat_fn()
+                        if hb_ok is False:
+                            raise LeaseLostError(f"Lease lost during async video export job '{job_id_val}' polling. Halting execution.")
                     time.sleep(self.poll_interval)
                     status_raw = _dispatch_tool(self.registry, poll_tool, {"job_id": job_id_val, "export_id": job_id_val})
                     st = str(status_raw.get("status", "")).lower()
@@ -514,16 +533,17 @@ class MCPVideoFactoryAdapter:
                         break
                     if st in ("failed", "error", "cancelled"):
                         err_detail = status_raw.get("error") or status_raw.get("message") or f"status '{st}'"
-                        raise RuntimeError(f"Async video export job '{job_id_val}' failed (terminal): {err_detail}")
+                        raise TerminalJobError(f"Async video export job '{job_id_val}' failed: {err_detail}", code="VF_EXPORT_TERMINAL_FAILED")
                     if time.monotonic() >= deadline:
                         raise RuntimeError(
                             f"Async video export job '{job_id_val}' timed out after {self.poll_timeout}s. "
                             f"Action required: operator intervention or resume polling with active_job_id='{job_id_val}'. Do not resubmit paid job."
                         )
             else:
-                raise RuntimeError(
-                    f"Async export job '{job_id_val}' returned status '{raw.get('status')}', but no status polling tool is registered (terminal). "
-                    "Cannot mark export completed without final exported video output reference."
+                raise TerminalJobError(
+                    f"Async export job '{job_id_val}' returned status '{raw.get('status')}', but no status polling tool is registered. "
+                    "Cannot mark export completed without final exported video output reference.",
+                    code="MISSING_POLLING_TOOL",
                 )
 
         final_video_url = raw.get("final_video_url") or raw.get("export_url") or raw.get("url")
@@ -921,9 +941,10 @@ class ProductVideoJobHandlers:
                     expected_version=ver,
                 )
             except Exception as ex:
-                raise RuntimeError(
+                raise TerminalJobError(
                     f"CHECKPOINT_PERSISTENCE_FAILED: Failed to checkpoint accepted provider job_id '{prov_job_id}' in workflow repository: {ex}. "
-                    "Auto-resubmission halted to prevent duplicate provider job submission."
+                    "Auto-resubmission halted to prevent duplicate provider job submission.",
+                    code="VF_CHECKPOINT_FAILED",
                 ) from ex
 
         alloc = None
@@ -943,20 +964,18 @@ class ProductVideoJobHandlers:
             if cache_key:
                 self._idempotency_cache[cache_key] = res
             return res
+        except TerminalJobError as te:
+            if alloc:
+                release_budget(alloc)
+            return JobFailed(retryable=False, code=te.code, message=str(te))
+        except LeaseLostError as le:
+            if alloc:
+                release_budget(alloc)
+            return JobFailed(retryable=False, code="LEASE_LOST", message=str(le))
         except Exception as e:
             if alloc:
                 release_budget(alloc)
-            err_msg = str(e)
-            is_terminal = (
-                "(terminal)" in err_msg
-                or "CHECKPOINT_PERSISTENCE_FAILED" in err_msg
-                or "status polling tool" in err_msg
-            )
-            return JobFailed(
-                retryable=not is_terminal,
-                code="VF_CHECKPOINT_FAILED" if "CHECKPOINT_PERSISTENCE_FAILED" in err_msg else ("VF_RENDER_TERMINAL_FAILED" if is_terminal else "VF_RENDER_FAILED"),
-                message=err_msg,
-            )
+            return JobFailed(retryable=True, code="VF_RENDER_FAILED", message=str(e))
 
     def export_job(self, ctx: JobContext, render_ref: Any, export_params: dict | None = None) -> JobSucceeded | JobFailed:
         cache_key = f"{ctx.workflow_id}:export:{ctx.idempotency_key}" if ctx.idempotency_key else None
@@ -995,9 +1014,10 @@ class ProductVideoJobHandlers:
                     expected_version=ver,
                 )
             except Exception as ex:
-                raise RuntimeError(
+                raise TerminalJobError(
                     f"CHECKPOINT_PERSISTENCE_FAILED: Failed to checkpoint accepted provider job_id '{prov_job_id}' in workflow repository: {ex}. "
-                    "Auto-resubmission halted to prevent duplicate provider job submission."
+                    "Auto-resubmission halted to prevent duplicate provider job submission.",
+                    code="VF_CHECKPOINT_FAILED",
                 ) from ex
 
         alloc = None
@@ -1017,20 +1037,18 @@ class ProductVideoJobHandlers:
             if cache_key:
                 self._idempotency_cache[cache_key] = res
             return res
+        except TerminalJobError as te:
+            if alloc:
+                release_budget(alloc)
+            return JobFailed(retryable=False, code=te.code, message=str(te))
+        except LeaseLostError as le:
+            if alloc:
+                release_budget(alloc)
+            return JobFailed(retryable=False, code="LEASE_LOST", message=str(le))
         except Exception as e:
             if alloc:
                 release_budget(alloc)
-            err_msg = str(e)
-            is_terminal = (
-                "(terminal)" in err_msg
-                or "CHECKPOINT_PERSISTENCE_FAILED" in err_msg
-                or "status polling tool" in err_msg
-            )
-            return JobFailed(
-                retryable=not is_terminal,
-                code="VF_CHECKPOINT_FAILED" if "CHECKPOINT_PERSISTENCE_FAILED" in err_msg else ("VF_EXPORT_TERMINAL_FAILED" if is_terminal else "VF_EXPORT_FAILED"),
-                message=err_msg,
-            )
+            return JobFailed(retryable=True, code="VF_EXPORT_FAILED", message=str(e))
 
     def get_handlers_map(self) -> dict[str, Callable[..., Any]]:
         return {
@@ -1176,7 +1194,9 @@ def create_product_video_topic_handlers(
         result = handler_fn(ctx, *args, **kwargs)
 
         if isinstance(result, JobFailed):
-            raise RuntimeError(f"Job execution failed [{result.code}]: {result.message}")
+            if not result.retryable:
+                raise TerminalJobError(f"Job execution failed [{result.code}]: {result.message}", code=result.code)
+            raise JobDispatchError(f"Job execution failed [{result.code}]: {result.message}", code=result.code, retryable=True)
 
         if isinstance(result, JobSucceeded):
             repo = workflow_repository or (workflow_engine.repo if workflow_engine else None)

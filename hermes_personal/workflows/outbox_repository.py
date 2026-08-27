@@ -279,21 +279,28 @@ class OutboxRepository:
         extension_seconds: float = 60.0,
         now_iso: str | None = None,
     ) -> bool:
-        """Extend the active lease expiration time for a running job (heartbeat)."""
+        """Extend the active lease expiration time for a running job (heartbeat).
+
+        Guarantees that renewal NEVER reduces the current lease_expires_at.
+        """
         now = _now_iso(now_iso)
-        new_expires_at = _add_seconds(now, extension_seconds)
+        candidate_expires_at = _add_seconds(now, extension_seconds)
         with self.connection:
             cur = self.connection.execute(
                 """
                 UPDATE workflow_outbox
-                SET lease_expires_at = ?, updated_at = ?
+                SET lease_expires_at = CASE
+                        WHEN lease_expires_at IS NOT NULL AND lease_expires_at > ? THEN lease_expires_at
+                        ELSE ?
+                    END,
+                    updated_at = ?
                 WHERE outbox_id = ?
                   AND lease_token = ?
                   AND lease_owner = ?
                   AND state = 'leased'
                   AND lease_expires_at > ?
                 """,
-                (new_expires_at, now, outbox_id, lease_token, worker_id, now),
+                (candidate_expires_at, candidate_expires_at, now, outbox_id, lease_token, worker_id, now),
             )
             return cur.rowcount > 0
 
@@ -329,10 +336,11 @@ class OutboxRepository:
         backoff_base_seconds: float = 2.0,
         max_backoff_seconds: float = 300.0,
         now_iso: str | None = None,
+        force_quarantine: bool = False,
     ) -> str:
-        """Record a delivery failure.  attempt_count is NOT incremented here;
-        it was already incremented at claim time.  Quarantine when
-        attempt_count >= max_attempts (all allowed deliveries exhausted).
+        """Record a delivery failure. attempt_count is NOT incremented here;
+        it was already incremented at claim time. Quarantine immediately if
+        force_quarantine is True or when attempt_count >= max_attempts.
         """
         now = _now_iso(now_iso)
         with self.connection:
@@ -350,7 +358,7 @@ class OutboxRepository:
             attempt_count = row["attempt_count"]
             max_attempts = row["max_attempts"]
 
-            if attempt_count >= max_attempts:
+            if force_quarantine or attempt_count >= max_attempts:
                 self.connection.execute(
                     """
                     UPDATE workflow_outbox
@@ -359,6 +367,7 @@ class OutboxRepository:
                         lease_token = NULL,
                         lease_owner = NULL,
                         lease_expires_at = NULL,
+                        next_attempt_at = NULL,
                         updated_at = ?
                     WHERE outbox_id = ?
                     """,
