@@ -348,6 +348,21 @@ class MCPVideoFactoryAdapter:
         self.poll_timeout = poll_timeout
         self.poll_interval = poll_interval
 
+    @staticmethod
+    def _run_heartbeat(heartbeat_fn: Callable[[], bool] | None, job_id_val: str, stage: str, poll_interval: float = 0.0) -> None:
+        if heartbeat_fn is None:
+            if poll_interval:
+                time.sleep(poll_interval)
+            return
+        try:
+            hb_ok = heartbeat_fn()
+        except Exception as exc:
+            raise LeaseLostError(f"Heartbeat failure during async video {stage} job '{job_id_val}' polling: {exc}") from exc
+        if hb_ok is False:
+            raise LeaseLostError(f"Lease lost during async video {stage} job '{job_id_val}' polling. Halting execution.")
+        if poll_interval:
+            time.sleep(poll_interval)
+
     def create_creative_brief(self, product_id: str = "", brief_config: dict | None = None, **kwargs: Any) -> dict[str, Any]:
         tool_name = self.wire_tools.get("brief", "mcp__video_factory__create_brief")
         payload = {"product_id": product_id, "brief_config": brief_config or {}}
@@ -441,11 +456,7 @@ class MCPVideoFactoryAdapter:
                 start_mono = time.monotonic()
                 deadline = start_mono + self.poll_timeout
                 while True:
-                    if heartbeat_fn is not None:
-                        hb_ok = heartbeat_fn()
-                        if hb_ok is False:
-                            raise LeaseLostError(f"Lease lost during async video render job '{job_id_val}' polling. Halting execution.")
-                    time.sleep(self.poll_interval)
+                    self._run_heartbeat(heartbeat_fn, job_id_val, "render", self.poll_interval)
                     status_raw = _dispatch_tool(self.registry, poll_tool, {"job_id": job_id_val})
                     st = str(status_raw.get("status", "")).lower()
                     if st in ("completed", "ready", "succeeded"):
@@ -521,11 +532,7 @@ class MCPVideoFactoryAdapter:
                 start_mono = time.monotonic()
                 deadline = start_mono + self.poll_timeout
                 while True:
-                    if heartbeat_fn is not None:
-                        hb_ok = heartbeat_fn()
-                        if hb_ok is False:
-                            raise LeaseLostError(f"Lease lost during async video export job '{job_id_val}' polling. Halting execution.")
-                    time.sleep(self.poll_interval)
+                    self._run_heartbeat(heartbeat_fn, job_id_val, "export", self.poll_interval)
                     status_raw = _dispatch_tool(self.registry, poll_tool, {"job_id": job_id_val, "export_id": job_id_val})
                     st = str(status_raw.get("status", "")).lower()
                     if st in ("completed", "ready", "succeeded"):

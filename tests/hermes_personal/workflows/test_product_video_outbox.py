@@ -2044,7 +2044,7 @@ def test_lease_renewal_does_not_decrease_existing_expiry(tmp_path):
     conn.close()
 
 
-def test_runtime_polling_advances_past_initial_lease_with_real_heartbeat_renewal(tmp_path):
+def test_runtime_polling_advances_past_initial_lease_with_real_heartbeat_renewal(tmp_path, monkeypatch):
     """Test 5: Polling exceeding initial lease duration extends lease dynamically and ACKs cleanly."""
     from tools.registry import ToolRegistry
     from hermes_personal.workflows.budgets import BudgetPolicy, init_default_engine
@@ -2056,6 +2056,21 @@ def test_runtime_polling_advances_past_initial_lease_with_real_heartbeat_renewal
 
     init_default_engine(BudgetPolicy(max_total=1000, per_channel={"video_factory": 500, "product_intelligence": 500}))
 
+    # Fake clock progression:
+    # t0 = 2026-01-01T12:00:00+00:00 (initial lease 10s -> expires at 12:00:10)
+    # Poll 1 at t=12:00:04 (extends lease by 60s -> expires at 12:01:04)
+    # Poll 2 at t=12:00:12 (time passes initial 10s expiry: 12:00:12 > 12:00:10!)
+    # Poll 3 at t=12:00:15 (returns completed)
+    # ACK at t=12:00:15 succeeds because lease is 12:01:04 > 12:00:15!
+
+    current_fake_time = [1767268800.0]  # 2026-01-01T12:00:00+00:00
+
+    def fake_time():
+        return current_fake_time[0]
+
+    monkeypatch.setattr("time.time", fake_time)
+    monkeypatch.setattr("time.monotonic", fake_time)
+
     poll_count = 0
     observed_expirations = []
 
@@ -2065,6 +2080,9 @@ def test_runtime_polling_advances_past_initial_lease_with_real_heartbeat_renewal
     def mock_poll(payload):
         nonlocal poll_count
         poll_count += 1
+        # Advance fake time by 4 seconds per poll
+        current_fake_time[0] += 4.0
+
         reader = connect(db_file)
         cur = reader.execute("SELECT lease_expires_at FROM workflow_outbox WHERE workflow_id = ?", (wf_id,))
         row = cur.fetchone()
@@ -2072,7 +2090,7 @@ def test_runtime_polling_advances_past_initial_lease_with_real_heartbeat_renewal
             observed_expirations.append(row["lease_expires_at"])
         reader.close()
 
-        if poll_count < 4:
+        if poll_count < 3:
             return json.dumps({"status": "pending", "job_id": "gpu_long_01"})
         return json.dumps({"status": "completed", "job_id": "gpu_long_01", "video_url": "https://cdn.example.com/long.mp4"})
 
@@ -2098,16 +2116,25 @@ def test_runtime_polling_advances_past_initial_lease_with_real_heartbeat_renewal
         workflow_repository=repo,
         tool_registry=registry,
         provider_mode="configured",
-        poll_timeout=1.0,
-        poll_interval=0.01,
+        poll_timeout=60.0,
+        poll_interval=0.001,
     )
-    # Start with a very short 2-second initial lease
-    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="w-long", lease_duration_seconds=2.0)
+    # Start with an initial 10-second lease
+    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="w-long", lease_duration_seconds=10.0)
 
     rep = dispatcher.process_batch()
     assert rep.succeeded == 1
     assert rep.stale == 0
-    assert len(observed_expirations) >= 4
+    assert len(observed_expirations) >= 3
+
+    # Assert that fake clock advanced past initial 10s lease duration
+    initial_start_time = 1767268800.0
+    assert current_fake_time[0] >= initial_start_time + 12.0
+
+    # Assert that the latest observed lease expiration in SQLite was extended well beyond the initial 10s expiry
+    initial_expiry_iso = "2026-01-01T12:00:10+00:00"
+    latest_expiry = observed_expirations[-1]
+    assert latest_expiry > initial_expiry_iso
 
     # Outbox message was cleanly ACKed and deleted upon successful completion
     cur = conn.execute("SELECT COUNT(*) as cnt FROM workflow_outbox WHERE workflow_id = ?", (wf_id,))
@@ -2117,7 +2144,7 @@ def test_runtime_polling_advances_past_initial_lease_with_real_heartbeat_renewal
 
 
 def test_heartbeat_failure_stops_execution_without_committing_success(tmp_path):
-    """Test 6: Lease lost during execution raises LeaseLostError and halts without committing success."""
+    """Test 6: Lease lost (heartbeat returns False) raises LeaseLostError and halts without committing success."""
     from tools.registry import ToolRegistry
     from hermes_personal.workflows.budgets import BudgetPolicy, init_default_engine
 
@@ -2145,7 +2172,6 @@ def test_heartbeat_failure_stops_execution_without_committing_success(tmp_path):
         ),
     )
 
-    # Custom dispatcher topic handler wrapper where heartbeat_fn returns False (simulating lease lost)
     handlers_service = ProductVideoJobHandlers(
         workflow_repository=repo,
         tool_registry=registry,
@@ -2173,6 +2199,62 @@ def test_heartbeat_failure_stops_execution_without_committing_success(tmp_path):
     assert rep.quarantined == 1
 
     # Workflow aggregate must NOT have reached final approval
+    agg, _ = repo.get_workflow(wf_id)
+    assert agg["state"] == ProductVideoWorkflowState.RENDERING.value
+
+    conn.close()
+
+
+def test_heartbeat_exception_raises_lease_lost_and_quarantines(tmp_path):
+    """Test 6b: Heartbeat raising an exception is normalized to LeaseLostError, halting execution and quarantining."""
+    from tools.registry import ToolRegistry
+    from hermes_personal.workflows.budgets import BudgetPolicy, init_default_engine
+
+    db_file = tmp_path / "hb_exc.db"
+    conn = connect(db_file)
+    repo = WorkflowRepository(conn)
+    wf_id = "wf_hb_exc_01"
+
+    init_default_engine(BudgetPolicy(max_total=1000, per_channel={"video_factory": 500, "product_intelligence": 500}))
+
+    registry = ToolRegistry()
+    registry.register("mcp__product_intelligence__research_product", "mcp-pi", {}, lambda p: json.dumps({"report": "ok"}))
+    registry.register("mcp__video_factory__render", "mcp-vf", {}, lambda p: json.dumps({"status": "pending", "job_id": "gpu_exc_01"}))
+    registry.register("mcp__video_factory__get_job_status", "mcp-vf", {}, lambda p: json.dumps({"status": "completed", "job_id": "gpu_exc_01", "video_url": "https://cdn.example.com/exc.mp4"}))
+
+    repo.commit_workflow(
+        workflow_id=wf_id,
+        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value}),
+        events=[{"event_id": "evt_1", "command_id": "cmd_1", "event_type": "WorkflowStarted", "timestamp": "2026-01-01T00:00:00+00:00", "payload": {}}],
+        outbox_message=build_envelope(
+            workflow_id=wf_id,
+            topic="job.dispatch",
+            idempotency_key="idemp_hb_exc_1",
+            payload={"job_name": "product_video.render", "workflow_id": wf_id, "args": [{"storyboard_id": "sb_1"}]},
+        ),
+    )
+
+    outbox_repo = OutboxRepository(conn)
+    # Monkeypatch repository.extend_lease to raise an OperationalError (e.g. database network loss)
+    def broken_extend_lease(*args, **kwargs):
+        raise sqlite3.OperationalError("database locked during heartbeat")
+
+    outbox_repo.extend_lease = broken_extend_lease  # type: ignore
+
+    topic_handlers = create_product_video_topic_handlers(
+        workflow_repository=repo,
+        tool_registry=registry,
+        provider_mode="configured",
+        poll_timeout=1.0,
+        poll_interval=0.01,
+    )
+    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="w-hb-exc")
+
+    rep = dispatcher.process_batch()
+    assert rep.succeeded == 0
+    assert rep.quarantined == 1
+
+    # Workflow aggregate must NOT have completed
     agg, _ = repo.get_workflow(wf_id)
     assert agg["state"] == ProductVideoWorkflowState.RENDERING.value
 

@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, Optional
 
 from hermes_personal.storage.sqlite import connect
 from hermes_personal.workflows.envelope import OutboxEnvelope
-from hermes_personal.workflows.outbox_dispatcher import OutboxDispatcher
+from hermes_personal.workflows.outbox_dispatcher import FatalPersistenceError, OutboxDispatcher
 from hermes_personal.workflows.outbox_repository import OutboxRepository
 
 logger = logging.getLogger(__name__)
@@ -83,8 +83,10 @@ def run_worker(
         while not stop_event.is_set():
             try:
                 dispatcher.reclaim_expired()
-                # Process single-worker batches one by one to avoid lease expiration during long operations
                 dispatcher.process_batch(batch_size=1)
+            except FatalPersistenceError as exc:
+                logger.error("Fatal persistence error in durable worker: %s", exc, exc_info=True)
+                raise
             except Exception as exc:  # noqa: BLE001
                 logger.error("Error in durable worker polling loop: %s", exc, exc_info=True)
             stop_event.wait(poll_interval)

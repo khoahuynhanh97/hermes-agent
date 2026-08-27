@@ -89,3 +89,37 @@ def test_worker_process_startup_delivery_ack_and_clean_shutdown(tmp_path):
     stop_evt.set()
     worker_thread.join(timeout=2.0)
     assert not worker_thread.is_alive()
+
+
+def test_worker_stops_on_fatal_persistence_error(tmp_path):
+    """Test that FatalPersistenceError in durable worker polling loop halts the worker immediately."""
+    from hermes_personal.workflows.worker import run_worker
+    from hermes_personal.workflows.outbox_dispatcher import FatalPersistenceError
+
+    db_file = tmp_path / "fatal_db.db"
+    conn = connect(db_file)
+    repo = OutboxRepository(conn)
+    repo.enqueue("wf_fatal_1", "msg_1")
+    conn.close()
+
+    def faulty_delivery(wf_id, msg):
+        raise ValueError("Simulated delivery error")
+
+    orig_record = OutboxRepository.record_failure
+
+    def broken_record_failure(self, *args, **kwargs):
+        raise sqlite3.OperationalError("disk I/O error during record_failure")
+
+    OutboxRepository.record_failure = broken_record_failure  # type: ignore
+    try:
+        stop_evt = threading.Event()
+        with pytest.raises(FatalPersistenceError, match="Failed to persist outbox error state"):
+            run_worker(
+                db_path=db_file,
+                poll_interval=0.01,
+                stop_event=stop_evt,
+                delivery_fn=faulty_delivery,
+                provider_mode="fake",
+            )
+    finally:
+        OutboxRepository.record_failure = orig_record  # type: ignore

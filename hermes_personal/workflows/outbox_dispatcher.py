@@ -24,6 +24,10 @@ class DispatchReport:
     stale: int = 0
 
 
+class FatalPersistenceError(RuntimeError):
+    """Raised when durable persistence fails and the worker must stop."""
+
+
 class OutboxDispatcher:
     """Durable outbox dispatcher with typed envelope routing.
 
@@ -95,8 +99,7 @@ class OutboxDispatcher:
                         force_quarantine=force_quarantine,
                     )
                 except Exception as db_ex:
-                    # Halt worker on failure to persist error state
-                    raise RuntimeError(f"CRITICAL: Failed to persist outbox error state: {db_ex}") from db_ex
+                    raise FatalPersistenceError(f"Failed to persist outbox error state: {db_ex}") from db_ex
 
                 if status == "quarantined":
                     quarantined += 1
