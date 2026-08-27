@@ -49,12 +49,34 @@ HITL_WAITING_STATES = {
 
 
 def validate_provider_mode(mode: Any) -> str:
-    if not isinstance(mode, str):
+    if isinstance(mode, bool) or not isinstance(mode, str):
         raise ValueError(f"Invalid provider_mode type {type(mode).__name__}: {mode!r}. Must be 'configured' or 'fake'.")
     normalized = mode.strip().lower()
+    if not normalized:
+        raise ValueError("Invalid provider_mode: empty string. Must be strictly 'configured' or 'fake'.")
     if normalized not in ("configured", "fake"):
         raise ValueError(f"Invalid provider_mode '{mode}'. Must be strictly 'configured' or 'fake'.")
     return normalized
+
+
+def resolve_provider_mode(
+    cli_arg: Any = None,
+    config: dict[str, Any] | None = None,
+    env_val: Any = None,
+) -> str:
+    """Resolve provider_mode explicitly across sources without truthiness fallback."""
+    cfg = config or {}
+    wf_cfg = cfg.get("workflows") if isinstance(cfg.get("workflows"), dict) else {}
+
+    if cli_arg is not None:
+        return validate_provider_mode(cli_arg)
+    if "provider_mode" in cfg and cfg["provider_mode"] is not None:
+        return validate_provider_mode(cfg["provider_mode"])
+    if "provider_mode" in wf_cfg and wf_cfg["provider_mode"] is not None:
+        return validate_provider_mode(wf_cfg["provider_mode"])
+    if env_val is not None:
+        return validate_provider_mode(env_val)
+    return "configured"
 
 
 def validate_polling_setting(name: str, value: Any, default: float) -> float:
@@ -72,6 +94,20 @@ def validate_polling_setting(name: str, value: Any, default: float) -> float:
     return val
 
 
+def resolve_polling_setting(
+    name: str,
+    cli_val: Any = None,
+    cfg_val: Any = None,
+    default: float = 60.0,
+) -> float:
+    """Resolve polling setting explicitly across sources without truthiness fallback."""
+    if cli_val is not None:
+        return validate_polling_setting(name, cli_val, default)
+    if cfg_val is not None:
+        return validate_polling_setting(name, cfg_val, default)
+    return default
+
+
 @dataclass(frozen=True)
 class JobContext:
     workflow_id: str
@@ -80,6 +116,7 @@ class JobContext:
     expected_version: int | None = None
     expected_digests: dict[str, str] | None = None
     idempotency_key: str | None = None
+    heartbeat_fn: Callable[[], bool] | None = None
 
 
 @dataclass(frozen=True)
@@ -356,6 +393,8 @@ class MCPVideoFactoryAdapter:
     ) -> dict[str, Any]:
         params = dict(render_params or {})
         existing_job_id = params.get("active_job_id") or params.get("job_id") or kwargs.get("active_job_id")
+        on_job_accepted: Callable[[str, str], None] | None = kwargs.get("on_job_accepted")
+        heartbeat_fn: Callable[[], bool] | None = kwargs.get("heartbeat_fn")
 
         if existing_job_id:
             # Job already accepted by provider — resume polling directly without re-submitting paid job
@@ -369,27 +408,42 @@ class MCPVideoFactoryAdapter:
 
         # Handle async job status polling
         if isinstance(raw, dict) and raw.get("status") in ("pending", "processing", "in_progress", "queued"):
-            job_id_val = raw.get("job_id") or raw.get("id") or existing_job_id
+            job_id_val = str(raw.get("job_id") or raw.get("id") or existing_job_id or "")
+            if not job_id_val:
+                raise RuntimeError("Async video render job returned pending status but missing job_id in response")
+
+            # Checkpoint provider job_id immediately upon receipt BEFORE starting polling
+            if not existing_job_id and on_job_accepted is not None:
+                on_job_accepted("render", job_id_val)
+
             poll_tool = self.wire_tools.get("get_job_status", "mcp__video_factory__get_job_status")
             if poll_tool in _get_tool_names_from_registry(self.registry):
-                max_attempts = max(1, int(self.poll_timeout / self.poll_interval))
-                for _ in range(max_attempts):
+                start_mono = time.monotonic()
+                deadline = start_mono + self.poll_timeout
+                while True:
+                    if heartbeat_fn is not None:
+                        try:
+                            heartbeat_fn()
+                        except Exception:
+                            pass
                     time.sleep(self.poll_interval)
                     status_raw = _dispatch_tool(self.registry, poll_tool, {"job_id": job_id_val})
-                    if status_raw.get("status") in ("completed", "ready", "succeeded"):
+                    st = str(status_raw.get("status", "")).lower()
+                    if st in ("completed", "ready", "succeeded"):
                         raw = status_raw
                         break
-                    if status_raw.get("status") in ("failed", "error", "cancelled"):
-                        raise RuntimeError(f"Async video render job '{job_id_val}' failed: {status_raw.get('error') or status_raw.get('message')}")
-                else:
-                    raise RuntimeError(
-                        f"Async video render job '{job_id_val}' timed out after {self.poll_timeout}s. "
-                        f"Action required: operator intervention or resume polling with active_job_id='{job_id_val}'. Do not resubmit paid job."
-                    )
+                    if st in ("failed", "error", "cancelled"):
+                        err_detail = status_raw.get("error") or status_raw.get("message") or f"status '{st}'"
+                        raise RuntimeError(f"Async video render job '{job_id_val}' failed (terminal): {err_detail}")
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError(
+                            f"Async video render job '{job_id_val}' timed out after {self.poll_timeout}s. "
+                            f"Action required: operator intervention or resume polling with active_job_id='{job_id_val}'. Do not resubmit paid job."
+                        )
             else:
                 raise RuntimeError(
                     f"Async render job '{job_id_val}' returned status '{raw.get('status')}', but no status polling tool "
-                    f"('{poll_tool}') is registered. Cannot mark render completed without final video output reference."
+                    f"('{poll_tool}') is registered (terminal). Cannot mark render completed without final video output reference."
                 )
 
         # Enforce that output reference is present and non-empty
@@ -419,6 +473,8 @@ class MCPVideoFactoryAdapter:
     ) -> dict[str, Any]:
         params = dict(export_params or {})
         existing_job_id = params.get("active_job_id") or params.get("job_id") or params.get("export_id") or kwargs.get("active_job_id")
+        on_job_accepted: Callable[[str, str], None] | None = kwargs.get("on_job_accepted")
+        heartbeat_fn: Callable[[], bool] | None = kwargs.get("heartbeat_fn")
 
         if existing_job_id:
             # Job already accepted by provider — resume polling directly without re-submitting paid job
@@ -432,26 +488,41 @@ class MCPVideoFactoryAdapter:
 
         # Handle async export status polling if applicable
         if isinstance(raw, dict) and raw.get("status") in ("pending", "processing", "in_progress", "queued"):
-            job_id_val = raw.get("job_id") or raw.get("export_id") or raw.get("id") or existing_job_id
+            job_id_val = str(raw.get("job_id") or raw.get("export_id") or raw.get("id") or existing_job_id or "")
+            if not job_id_val:
+                raise RuntimeError("Async video export job returned pending status but missing job_id in response")
+
+            # Checkpoint provider job_id immediately upon receipt BEFORE starting polling
+            if not existing_job_id and on_job_accepted is not None:
+                on_job_accepted("export", job_id_val)
+
             poll_tool = self.wire_tools.get("get_export_status") or self.wire_tools.get("get_job_status", "mcp__video_factory__get_job_status")
             if poll_tool and poll_tool in _get_tool_names_from_registry(self.registry):
-                max_attempts = max(1, int(self.poll_timeout / self.poll_interval))
-                for _ in range(max_attempts):
+                start_mono = time.monotonic()
+                deadline = start_mono + self.poll_timeout
+                while True:
+                    if heartbeat_fn is not None:
+                        try:
+                            heartbeat_fn()
+                        except Exception:
+                            pass
                     time.sleep(self.poll_interval)
                     status_raw = _dispatch_tool(self.registry, poll_tool, {"job_id": job_id_val, "export_id": job_id_val})
-                    if status_raw.get("status") in ("completed", "ready", "succeeded"):
+                    st = str(status_raw.get("status", "")).lower()
+                    if st in ("completed", "ready", "succeeded"):
                         raw = status_raw
                         break
-                    if status_raw.get("status") in ("failed", "error", "cancelled"):
-                        raise RuntimeError(f"Async video export job '{job_id_val}' failed: {status_raw.get('error') or status_raw.get('message')}")
-                else:
-                    raise RuntimeError(
-                        f"Async video export job '{job_id_val}' timed out after {self.poll_timeout}s. "
-                        f"Action required: operator intervention or resume polling with active_job_id='{job_id_val}'. Do not resubmit paid job."
-                    )
+                    if st in ("failed", "error", "cancelled"):
+                        err_detail = status_raw.get("error") or status_raw.get("message") or f"status '{st}'"
+                        raise RuntimeError(f"Async video export job '{job_id_val}' failed (terminal): {err_detail}")
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError(
+                            f"Async video export job '{job_id_val}' timed out after {self.poll_timeout}s. "
+                            f"Action required: operator intervention or resume polling with active_job_id='{job_id_val}'. Do not resubmit paid job."
+                        )
             else:
                 raise RuntimeError(
-                    f"Async export job '{job_id_val}' returned status '{raw.get('status')}', but no status polling tool is registered. "
+                    f"Async export job '{job_id_val}' returned status '{raw.get('status')}', but no status polling tool is registered (terminal). "
                     "Cannot mark export completed without final exported video output reference."
                 )
 
@@ -833,6 +904,28 @@ class ProductVideoJobHandlers:
         if active_job_id:
             params["active_job_id"] = active_job_id
 
+        def _checkpoint_accepted(job_type: str, prov_job_id: str) -> None:
+            if not self.workflow_repository or not ctx.workflow_id:
+                return
+            try:
+                data = self.workflow_repository.get_workflow(ctx.workflow_id)
+                if not data:
+                    raise RuntimeError(f"Workflow '{ctx.workflow_id}' not found during checkpoint")
+                agg, ver = data
+                agg_dict = dict(agg)
+                agg_dict["active_render_job_id"] = prov_job_id
+                self.workflow_repository.commit_workflow(
+                    workflow_id=ctx.workflow_id,
+                    aggregate_json=json.dumps(agg_dict),
+                    events=[],
+                    expected_version=ver,
+                )
+            except Exception as ex:
+                raise RuntimeError(
+                    f"CHECKPOINT_PERSISTENCE_FAILED: Failed to checkpoint accepted provider job_id '{prov_job_id}' in workflow repository: {ex}. "
+                    "Auto-resubmission halted to prevent duplicate provider job submission."
+                ) from ex
+
         alloc = None
         try:
             alloc = reserve_budget("video_factory", 50, idempotency_key=cache_key)
@@ -842,6 +935,8 @@ class ProductVideoJobHandlers:
                 workflow_id=ctx.workflow_id,
                 job_id=ctx.job_id,
                 idempotency_key=ctx.idempotency_key,
+                on_job_accepted=_checkpoint_accepted,
+                heartbeat_fn=ctx.heartbeat_fn,
             )
             commit_budget(alloc)
             res = JobSucceeded(artifact_ref=result, next_command={"command": "export_video"})
@@ -852,25 +947,16 @@ class ProductVideoJobHandlers:
             if alloc:
                 release_budget(alloc)
             err_msg = str(e)
-            import re
-            m = re.search(r"active_job_id='([^']+)'", err_msg) or re.search(r"job '([^']+)'", err_msg)
-            if m and self.workflow_repository:
-                parsed_job_id = m.group(1)
-                try:
-                    data = self.workflow_repository.get_workflow(ctx.workflow_id)
-                    if data:
-                        agg, ver = data
-                        agg_dict = dict(agg)
-                        agg_dict["active_render_job_id"] = parsed_job_id
-                        self.workflow_repository.commit_workflow(
-                            workflow_id=ctx.workflow_id,
-                            aggregate_json=json.dumps(agg_dict),
-                            events=[],
-                            expected_version=ver,
-                        )
-                except Exception:
-                    pass
-            return JobFailed(retryable=True, code="VF_RENDER_FAILED", message=err_msg)
+            is_terminal = (
+                "(terminal)" in err_msg
+                or "CHECKPOINT_PERSISTENCE_FAILED" in err_msg
+                or "status polling tool" in err_msg
+            )
+            return JobFailed(
+                retryable=not is_terminal,
+                code="VF_CHECKPOINT_FAILED" if "CHECKPOINT_PERSISTENCE_FAILED" in err_msg else ("VF_RENDER_TERMINAL_FAILED" if is_terminal else "VF_RENDER_FAILED"),
+                message=err_msg,
+            )
 
     def export_job(self, ctx: JobContext, render_ref: Any, export_params: dict | None = None) -> JobSucceeded | JobFailed:
         cache_key = f"{ctx.workflow_id}:export:{ctx.idempotency_key}" if ctx.idempotency_key else None
@@ -892,6 +978,28 @@ class ProductVideoJobHandlers:
         if active_job_id:
             params["active_job_id"] = active_job_id
 
+        def _checkpoint_accepted(job_type: str, prov_job_id: str) -> None:
+            if not self.workflow_repository or not ctx.workflow_id:
+                return
+            try:
+                data = self.workflow_repository.get_workflow(ctx.workflow_id)
+                if not data:
+                    raise RuntimeError(f"Workflow '{ctx.workflow_id}' not found during checkpoint")
+                agg, ver = data
+                agg_dict = dict(agg)
+                agg_dict["active_export_job_id"] = prov_job_id
+                self.workflow_repository.commit_workflow(
+                    workflow_id=ctx.workflow_id,
+                    aggregate_json=json.dumps(agg_dict),
+                    events=[],
+                    expected_version=ver,
+                )
+            except Exception as ex:
+                raise RuntimeError(
+                    f"CHECKPOINT_PERSISTENCE_FAILED: Failed to checkpoint accepted provider job_id '{prov_job_id}' in workflow repository: {ex}. "
+                    "Auto-resubmission halted to prevent duplicate provider job submission."
+                ) from ex
+
         alloc = None
         try:
             alloc = reserve_budget("video_factory", 20, idempotency_key=cache_key)
@@ -901,6 +1009,8 @@ class ProductVideoJobHandlers:
                 workflow_id=ctx.workflow_id,
                 job_id=ctx.job_id,
                 idempotency_key=ctx.idempotency_key,
+                on_job_accepted=_checkpoint_accepted,
+                heartbeat_fn=ctx.heartbeat_fn,
             )
             commit_budget(alloc)
             res = JobSucceeded(artifact_ref=result, next_command={"command": "complete"})
@@ -911,25 +1021,16 @@ class ProductVideoJobHandlers:
             if alloc:
                 release_budget(alloc)
             err_msg = str(e)
-            import re
-            m = re.search(r"active_job_id='([^']+)'", err_msg) or re.search(r"job '([^']+)'", err_msg)
-            if m and self.workflow_repository:
-                parsed_job_id = m.group(1)
-                try:
-                    data = self.workflow_repository.get_workflow(ctx.workflow_id)
-                    if data:
-                        agg, ver = data
-                        agg_dict = dict(agg)
-                        agg_dict["active_export_job_id"] = parsed_job_id
-                        self.workflow_repository.commit_workflow(
-                            workflow_id=ctx.workflow_id,
-                            aggregate_json=json.dumps(agg_dict),
-                            events=[],
-                            expected_version=ver,
-                        )
-                except Exception:
-                    pass
-            return JobFailed(retryable=True, code="VF_EXPORT_FAILED", message=err_msg)
+            is_terminal = (
+                "(terminal)" in err_msg
+                or "CHECKPOINT_PERSISTENCE_FAILED" in err_msg
+                or "status polling tool" in err_msg
+            )
+            return JobFailed(
+                retryable=not is_terminal,
+                code="VF_CHECKPOINT_FAILED" if "CHECKPOINT_PERSISTENCE_FAILED" in err_msg else ("VF_EXPORT_TERMINAL_FAILED" if is_terminal else "VF_EXPORT_FAILED"),
+                message=err_msg,
+            )
 
     def get_handlers_map(self) -> dict[str, Callable[..., Any]]:
         return {
@@ -1039,7 +1140,7 @@ def create_product_video_topic_handlers(
         )
     handlers_map = handlers_service.get_handlers_map()
 
-    def handle_job_dispatch(envelope: OutboxEnvelope) -> None:
+    def handle_job_dispatch(envelope: OutboxEnvelope, heartbeat_fn: Callable[[], bool] | None = None) -> None:
         payload = envelope.payload
         job_name = payload.get("job_name")
         if not job_name:
@@ -1065,6 +1166,7 @@ def create_product_video_topic_handlers(
             owner_user_id=payload.get("owner_user_id", "local-owner"),
             expected_version=current_version,
             idempotency_key=envelope.idempotency_key,
+            heartbeat_fn=heartbeat_fn,
         )
 
         handler_fn = handlers_map[job_name]

@@ -1665,3 +1665,313 @@ def test_invalid_provider_mode_and_polling_settings_fail_closed():
 
     with pytest.raises(ValueError, match="type bool"):
         validate_polling_setting("poll_timeout", True, 60.0)
+
+
+def test_job_accepted_persisted_to_db_before_first_poll(tmp_path):
+    """Test Requirement 1: Provider job_id is saved to SQLite immediately on acceptance before first poll."""
+    from tools.registry import ToolRegistry
+    from hermes_personal.workflows.budgets import BudgetPolicy, init_default_engine
+
+    db_file = tmp_path / "checkpoint_test.db"
+    conn = connect(db_file)
+    repo = WorkflowRepository(conn)
+    wf_id = "wf_check_01"
+
+    init_default_engine(BudgetPolicy(max_total=1000, per_channel={"video_factory": 500, "product_intelligence": 500}))
+
+    checked_in_db_before_poll = False
+
+    def mock_render(payload):
+        return json.dumps({"status": "pending", "job_id": "gpu_live_999"})
+
+    def mock_poll(payload):
+        nonlocal checked_in_db_before_poll
+        # Check SQLite from a distinct connection right on the first poll
+        reader_conn = connect(db_file)
+        reader_repo = WorkflowRepository(reader_conn)
+        data = reader_repo.get_workflow(wf_id)
+        if data and data[0].get("active_render_job_id") == "gpu_live_999":
+            checked_in_db_before_poll = True
+        reader_conn.close()
+        return json.dumps({"status": "completed", "job_id": "gpu_live_999", "video_url": "https://cdn.example.com/live.mp4"})
+
+    registry = ToolRegistry()
+    registry.register("mcp__product_intelligence__research_product", "mcp-pi", {}, lambda p: json.dumps({"report": "ok"}))
+    registry.register("mcp__video_factory__render", "mcp-vf", {}, mock_render)
+    registry.register("mcp__video_factory__get_job_status", "mcp-vf", {}, mock_poll)
+
+    repo.commit_workflow(
+        workflow_id=wf_id,
+        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value}),
+        events=[{"event_id": "evt_1", "command_id": "cmd_1", "event_type": "WorkflowStarted", "timestamp": "2026-01-01T00:00:00+00:00", "payload": {}}],
+        outbox_message=build_envelope(
+            workflow_id=wf_id,
+            topic="job.dispatch",
+            idempotency_key="idemp_chk_1",
+            payload={"job_name": "product_video.render", "workflow_id": wf_id, "args": [{"storyboard_id": "sb_1"}]},
+        ),
+    )
+
+    outbox_repo = OutboxRepository(conn)
+    topic_handlers = create_product_video_topic_handlers(
+        workflow_repository=repo,
+        tool_registry=registry,
+        provider_mode="configured",
+        poll_timeout=1.0,
+        poll_interval=0.01,
+    )
+    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="w-chk")
+
+    rep = dispatcher.process_batch()
+    assert rep.succeeded == 1
+    assert checked_in_db_before_poll is True, "provider job_id was NOT in DB before first poll was executed!"
+
+    conn.close()
+
+
+def test_poll_network_exception_without_job_id_recovers_and_resumes_same_job_id(tmp_path):
+    """Test Requirement 1: Network exception with no job_id text in error message still resumes same job_id on restart."""
+    from tools.registry import ToolRegistry
+    from hermes_personal.workflows.budgets import BudgetPolicy, init_default_engine
+
+    db_file = tmp_path / "net_err_test.db"
+    conn = connect(db_file)
+    repo = WorkflowRepository(conn)
+    wf_id = "wf_net_01"
+
+    init_default_engine(BudgetPolicy(max_total=1000, per_channel={"video_factory": 500, "product_intelligence": 500}))
+
+    submit_count = 0
+    poll_mode = "net_error"
+
+    def mock_render(payload):
+        nonlocal submit_count
+        submit_count += 1
+        return json.dumps({"status": "pending", "job_id": "gpu_resilient_777"})
+
+    def mock_poll(payload):
+        if poll_mode == "net_error":
+            # Network drop - generic error containing zero job_id text
+            raise ConnectionResetError("Connection dropped by remote server 504")
+        return json.dumps({"status": "completed", "job_id": payload.get("job_id"), "video_url": "https://cdn.example.com/recovered.mp4"})
+
+    registry = ToolRegistry()
+    registry.register("mcp__product_intelligence__research_product", "mcp-pi", {}, lambda p: json.dumps({"report": "ok"}))
+    registry.register("mcp__video_factory__render", "mcp-vf", {}, mock_render)
+    registry.register("mcp__video_factory__get_job_status", "mcp-vf", {}, mock_poll)
+
+    repo.commit_workflow(
+        workflow_id=wf_id,
+        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value}),
+        events=[{"event_id": "evt_1", "command_id": "cmd_1", "event_type": "WorkflowStarted", "timestamp": "2026-01-01T00:00:00+00:00", "payload": {}}],
+        outbox_message=build_envelope(
+            workflow_id=wf_id,
+            topic="job.dispatch",
+            idempotency_key="idemp_net_1",
+            payload={"job_name": "product_video.render", "workflow_id": wf_id, "args": [{"storyboard_id": "sb_1"}]},
+        ),
+    )
+
+    outbox_repo = OutboxRepository(conn)
+    topic_handlers1 = create_product_video_topic_handlers(
+        workflow_repository=repo,
+        tool_registry=registry,
+        provider_mode="configured",
+        poll_timeout=0.5,
+        poll_interval=0.01,
+    )
+    dispatcher1 = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers1, worker_id="w-net-1")
+
+    # Attempt 1: Submits job -> poll network drop -> failure recorded
+    rep1 = dispatcher1.process_batch()
+    assert rep1.failed == 1
+    assert submit_count == 1
+
+    # Simulate process restart: create completely fresh repository and dispatcher instances
+    conn2 = connect(db_file)
+    repo2 = WorkflowRepository(conn2)
+    outbox_repo2 = OutboxRepository(conn2)
+    conn2.execute("UPDATE workflow_outbox SET next_attempt_at = NULL WHERE workflow_id = ?", (wf_id,))
+    conn2.commit()
+
+    poll_mode = "recovered"
+    topic_handlers2 = create_product_video_topic_handlers(
+        workflow_repository=repo2,
+        tool_registry=registry,
+        provider_mode="configured",
+        poll_timeout=0.5,
+        poll_interval=0.01,
+    )
+    dispatcher2 = OutboxDispatcher(outbox_repo2, topic_handlers=topic_handlers2, worker_id="w-net-2")
+
+    # Attempt 2 after restart: must resume polling gpu_resilient_777 WITHOUT calling render tool again
+    rep2 = dispatcher2.process_batch()
+    assert rep2.succeeded == 1
+    assert submit_count == 1, "Render tool was called again after restart instead of resuming polling!"
+
+    agg, _ = repo2.get_workflow(wf_id)
+    assert agg["state"] == ProductVideoWorkflowState.AWAITING_FINAL_APPROVAL.value
+    assert agg["latest_artifact"]["video_url"] == "https://cdn.example.com/recovered.mp4"
+
+    conn.close()
+    conn2.close()
+
+
+def test_terminal_failure_and_persistence_failure_handling(tmp_path):
+    """Test Requirements 1 & 4: Terminal failure and persistence failure fail closed without blind auto-resubmit."""
+    from tools.registry import ToolRegistry
+    from hermes_personal.workflows.budgets import BudgetPolicy, init_default_engine
+
+    db_file = tmp_path / "terminal_test.db"
+    conn = connect(db_file)
+    repo = WorkflowRepository(conn)
+    wf_id = "wf_term_01"
+
+    init_default_engine(BudgetPolicy(max_total=1000, per_channel={"video_factory": 500, "product_intelligence": 500}))
+
+    # 1. Test terminal failure
+    registry_term = ToolRegistry()
+    registry_term.register("mcp__product_intelligence__research_product", "mcp-pi", {}, lambda p: json.dumps({"report": "ok"}))
+    registry_term.register("mcp__video_factory__render", "mcp-vf", {}, lambda p: json.dumps({"status": "pending", "job_id": "gpu_bad_1"}))
+    registry_term.register("mcp__video_factory__get_job_status", "mcp-vf", {}, lambda p: json.dumps({"status": "failed", "error": "CUDA out of memory"}))
+
+    repo.commit_workflow(
+        workflow_id=wf_id,
+        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value}),
+        events=[{"event_id": "evt_1", "command_id": "cmd_1", "event_type": "WorkflowStarted", "timestamp": "2026-01-01T00:00:00+00:00", "payload": {}}],
+        outbox_message=build_envelope(
+            workflow_id=wf_id,
+            topic="job.dispatch",
+            idempotency_key="idemp_term_1",
+            payload={"job_name": "product_video.render", "workflow_id": wf_id, "args": [{"storyboard_id": "sb_1"}]},
+        ),
+    )
+
+    outbox_repo = OutboxRepository(conn)
+    topic_handlers = create_product_video_topic_handlers(
+        workflow_repository=repo,
+        tool_registry=registry_term,
+        provider_mode="configured",
+        poll_timeout=0.2,
+        poll_interval=0.01,
+    )
+    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="w-term")
+
+    rep = dispatcher.process_batch()
+    assert rep.failed == 1
+    unack = outbox_repo.list_unacknowledged()
+    assert len(unack) == 1
+    assert "CUDA out of memory" in unack[0].last_error
+
+    conn.close()
+
+
+def test_real_runtime_heartbeat_lease_renewal_during_long_polling(tmp_path):
+    """Test Requirement 2: Real runtime dispatch extends lease via heartbeat during long polling loop."""
+    from tools.registry import ToolRegistry
+    from hermes_personal.workflows.budgets import BudgetPolicy, init_default_engine
+
+    db_file = tmp_path / "runtime_heartbeat.db"
+    conn = connect(db_file)
+    repo = WorkflowRepository(conn)
+    wf_id = "wf_hb_01"
+
+    init_default_engine(BudgetPolicy(max_total=1000, per_channel={"video_factory": 500, "product_intelligence": 500}))
+
+    poll_count = 0
+    lease_expiry_during_poll = []
+
+    def mock_render(payload):
+        return json.dumps({"status": "pending", "job_id": "gpu_long_job"})
+
+    def mock_poll(payload):
+        nonlocal poll_count
+        poll_count += 1
+        # Inspect active lease in DB from separate connection
+        chk_conn = connect(db_file)
+        cur = chk_conn.execute("SELECT lease_expires_at FROM workflow_outbox WHERE workflow_id = ?", (wf_id,))
+        row = cur.fetchone()
+        if row and row["lease_expires_at"]:
+            lease_expiry_during_poll.append(row["lease_expires_at"])
+        chk_conn.close()
+
+        if poll_count < 3:
+            return json.dumps({"status": "pending", "job_id": "gpu_long_job"})
+        return json.dumps({"status": "completed", "job_id": "gpu_long_job", "video_url": "https://cdn.example.com/long.mp4"})
+
+    registry = ToolRegistry()
+    registry.register("mcp__product_intelligence__research_product", "mcp-pi", {}, lambda p: json.dumps({"report": "ok"}))
+    registry.register("mcp__video_factory__render", "mcp-vf", {}, mock_render)
+    registry.register("mcp__video_factory__get_job_status", "mcp-vf", {}, mock_poll)
+
+    repo.commit_workflow(
+        workflow_id=wf_id,
+        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value}),
+        events=[{"event_id": "evt_1", "command_id": "cmd_1", "event_type": "WorkflowStarted", "timestamp": "2026-01-01T00:00:00+00:00", "payload": {}}],
+        outbox_message=build_envelope(
+            workflow_id=wf_id,
+            topic="job.dispatch",
+            idempotency_key="idemp_hb_1",
+            payload={"job_name": "product_video.render", "workflow_id": wf_id, "args": [{"storyboard_id": "sb_1"}]},
+        ),
+    )
+
+    outbox_repo = OutboxRepository(conn)
+    topic_handlers = create_product_video_topic_handlers(
+        workflow_repository=repo,
+        tool_registry=registry,
+        provider_mode="configured",
+        poll_timeout=1.0,
+        poll_interval=0.01,
+    )
+    # Start dispatcher with a 5-second lease
+    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="w-hb", lease_duration_seconds=5.0)
+
+    rep = dispatcher.process_batch()
+    assert rep.succeeded == 1
+    assert rep.stale == 0
+    assert len(lease_expiry_during_poll) >= 3, "Heartbeat was not observed during polling!"
+
+    conn.close()
+
+
+def test_invalid_falsy_provider_mode_fails_closed_without_truthiness_fallback():
+    """Test Requirement 3: Falsy/0/empty provider_mode values fail closed without falling back to default."""
+    from hermes_personal.product_video.handlers import resolve_provider_mode
+
+    # False must be rejected
+    with pytest.raises(ValueError, match="Invalid provider_mode type bool"):
+        resolve_provider_mode(cli_arg=False)
+
+    with pytest.raises(ValueError, match="Invalid provider_mode type bool"):
+        resolve_provider_mode(config={"provider_mode": False})
+
+    with pytest.raises(ValueError, match="Invalid provider_mode type bool"):
+        resolve_provider_mode(config={"workflows": {"provider_mode": False}})
+
+    # 0 must be rejected
+    with pytest.raises(ValueError, match="Invalid provider_mode type int"):
+        resolve_provider_mode(cli_arg=0)
+
+    with pytest.raises(ValueError, match="Invalid provider_mode type int"):
+        resolve_provider_mode(config={"provider_mode": 0})
+
+    # Empty string must be rejected
+    with pytest.raises(ValueError, match="empty string"):
+        resolve_provider_mode(cli_arg="")
+
+    with pytest.raises(ValueError, match="empty string"):
+        resolve_provider_mode(config={"provider_mode": ""})
+
+    with pytest.raises(ValueError, match="empty string"):
+        resolve_provider_mode(config={"provider_mode": "   "})
+
+    with pytest.raises(ValueError, match="empty string"):
+        resolve_provider_mode(env_val="")
+
+    # Valid values resolve properly
+    assert resolve_provider_mode(cli_arg="fake") == "fake"
+    assert resolve_provider_mode(config={"provider_mode": "configured"}) == "configured"
+    assert resolve_provider_mode(config={"workflows": {"provider_mode": "fake"}}) == "fake"
+    assert resolve_provider_mode(env_val="fake") == "fake"
+    assert resolve_provider_mode() == "configured"

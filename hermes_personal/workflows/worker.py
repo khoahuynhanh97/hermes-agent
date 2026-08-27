@@ -32,7 +32,12 @@ def run_worker(
     if stop_event is None:
         stop_event = threading.Event()
 
-    from hermes_personal.product_video.handlers import validate_provider_mode, validate_polling_setting
+    from hermes_personal.product_video.handlers import (
+        resolve_polling_setting,
+        resolve_provider_mode,
+        validate_polling_setting,
+        validate_provider_mode,
+    )
 
     _provider_mode = validate_provider_mode(provider_mode or os.environ.get("HERMES_PROVIDER_MODE", "configured"))
     _render_poll_timeout = validate_polling_setting("render_poll_timeout", render_poll_timeout, 60.0)
@@ -75,7 +80,8 @@ def run_worker(
         while not stop_event.is_set():
             try:
                 dispatcher.reclaim_expired()
-                dispatcher.process_batch(batch_size=10)
+                # Process single-worker batches one by one to avoid lease expiration during long operations
+                dispatcher.process_batch(batch_size=1)
             except Exception as exc:  # noqa: BLE001
                 logger.error("Error in durable worker polling loop: %s", exc, exc_info=True)
             stop_event.wait(poll_interval)
@@ -117,22 +123,27 @@ def main(argv: list[str] | None = None) -> int:
         logger.debug("Failed to load hermes config: %s", exc)
         config = {}
 
-    from hermes_personal.product_video.handlers import validate_provider_mode, validate_polling_setting
-
-    raw_provider_mode = (
-        args.provider_mode
-        or config.get("provider_mode")
-        or config.get("workflows", {}).get("provider_mode")
-        or os.environ.get("HERMES_PROVIDER_MODE", "configured")
+    from hermes_personal.product_video.handlers import (
+        resolve_polling_setting,
+        resolve_provider_mode,
     )
-    resolved_provider_mode = validate_provider_mode(raw_provider_mode)
 
-    vf_config = config.get("video_factory", {}) or config.get("workflows", {})
-    render_poll_timeout = validate_polling_setting(
-        "polling_timeout_seconds", vf_config.get("polling_timeout_seconds"), 60.0
+    resolved_provider_mode = resolve_provider_mode(
+        cli_arg=args.provider_mode,
+        config=config,
+        env_val=os.environ.get("HERMES_PROVIDER_MODE"),
     )
-    render_poll_interval = validate_polling_setting(
-        "polling_interval_seconds", vf_config.get("polling_interval_seconds"), 0.5
+
+    vf_config = config.get("video_factory", {}) if isinstance(config.get("video_factory"), dict) else (config.get("workflows", {}) if isinstance(config.get("workflows"), dict) else {})
+    render_poll_timeout = resolve_polling_setting(
+        "polling_timeout_seconds",
+        cfg_val=vf_config.get("polling_timeout_seconds"),
+        default=60.0,
+    )
+    render_poll_interval = resolve_polling_setting(
+        "polling_interval_seconds",
+        cfg_val=vf_config.get("polling_interval_seconds"),
+        default=0.5,
     )
 
     # Initialize MCP tool discovery if running in configured mode

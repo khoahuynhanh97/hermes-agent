@@ -134,7 +134,13 @@ class OutboxDispatcher:
                 raise RuntimeError(
                     f"delivery_unconfigured: no handler registered for topic {envelope.topic!r}"
                 )
-            handler(envelope)
+            hb = lambda ext=60.0: self.repository.extend_lease(
+                claim.outbox_id, claim.lease_token, self.worker_id, extension_seconds=ext
+            )
+            try:
+                handler(envelope, heartbeat_fn=hb)
+            except TypeError:
+                handler(envelope)
         else:
             # Legacy raw delivery mode (backward compat for tests).
             if self.delivery_fn is None:
