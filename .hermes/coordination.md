@@ -120,40 +120,48 @@ remaining happy-path blocker. Append History, set both owners to PLANNER, then e
 
 ## Last Worker Report
 
-Iteration: 93 (REWORK on 9c70186687)
+Iteration: 94 (REWORK on 433f151916)
 Phase: Phase 7 Continuation - Personal Happy Path and Bounded Hardening
 
 Implemented:
-- **Finding 1 (Completion Contracts & No ID-only Assumption)**:
-  - Code: `hermes_personal/product_video/handlers.py` (`render_video`, `export_video`).
-  - Logic: In `render_video` and `export_video`, `status` in `("pending", "processing", "in_progress", "queued")` polls registered status tools (`get_job_status`/`get_export_status`) and fails closed on error/timeout. Output reference (`video_url`/`render_id`, `final_video_url`/`export_id`) must be present from completed status; bare `job_id` or `id` with pending/failed status is rejected.
-  - Tests: `test_failed_render_with_id_fails_closed`, `test_configured_mode_export_missing_output_fails_closed`, `test_configured_mode_render_pending_without_polling_tool_fails_closed`.
-- **Finding 2 (Recursive Error Detection After Unwrap)**:
-  - Code: `hermes_personal/product_video/handlers.py` (`_check_for_errors`, `_decode_mcp_output`, `create_creative_brief`).
-  - Logic: Recursive validation for `isError`, `is_error`, `"error"`, and `"status" in ("failed", "error", "cancelled")` on outer envelopes and unwrapped payloads (`result`, `structuredContent`, text blocks). `create_creative_brief` checks for non-empty brief content (`script`/`angle`/`scenes`/`brief_config`/`brief_id`), rejecting empty echo payloads.
-  - Tests: `test_wrapped_error_in_result_string_fails_closed`, `test_wrapped_error_in_structured_content_fails_closed`, `test_creative_brief_empty_content_fails_closed`.
-- **Finding 3 (Config-Driven Provider Mode and Polling Settings)**:
-  - Code: `hermes_personal/workflows/worker.py` (`main`, `run_worker`), `hermes_personal/product_video/handlers.py` (`ProductVideoJobHandlers`, `create_product_video_topic_handlers`).
-  - Logic: `provider_mode` resolves CLI override first, then falls back to `config.yaml` (`provider_mode` / `workflows.provider_mode`), then `.env` (`HERMES_PROVIDER_MODE`). Polling timeout/interval are read from `config.yaml` (`video_factory.polling_timeout_seconds`, `polling_interval_seconds`) and passed to adapters.
-  - Tests: `test_worker_bootstrap_with_config_yaml_and_env` with temp `HERMES_HOME`.
-- **Finding 4 (Full-Flow End-to-End Test Across 14 States & 5 HITL Approvals)**:
-  - Code: `tests/hermes_personal/workflows/test_product_video_outbox.py`.
-  - Logic: Extended `test_configured_mode_with_real_mcp_response_shapes_and_polling` across all 14 states and 5 HITL gates until `COMPLETED`, asserting every wire tool was called with valid correlation/job IDs, async render polling executed, and final output was saved.
+- **Finding 1 (Do Not Resubmit Accepted Provider Jobs & Resumption Strategy)**:
+  - Code: `hermes_personal/product_video/handlers.py` (`render_video`, `export_video`, `render_job`, `export_job`, `handle_job_dispatch`).
+  - Logic:
+    - When an async job is accepted by the provider and assigned a `job_id`, `active_render_job_id` / `active_export_job_id` is persisted on the workflow aggregate if polling fails or times out.
+    - Subsequent worker attempts automatically resume polling the accepted `job_id` without calling the submission tool again (`submit_count` remains 1; no paid job duplicates).
+    - If polling permanently fails or no polling tool is registered, the job halts with actionable operator error preserving `active_job_id` (operator intervention or retry resume).
+    - Forwarded `idempotency_key` in request payloads to provider wire tools.
+  - Tests: `test_job_polling_timeout_does_not_resubmit_and_resumes_same_job_id`.
+- **Finding 2 (Lease Scaling & Heartbeat for Long Running Jobs)**:
+  - Code: `hermes_personal/workflows/outbox_repository.py` (`extend_lease`), `hermes_personal/workflows/worker.py` (`run_worker`).
+  - Logic: Added `extend_lease(...)` to `OutboxRepository` for atomic heartbeat lease extensions. In `run_worker`, scaled `lease_duration_seconds = max(30.0, render_poll_timeout + 60.0)` to ensure long polling executions are fully covered by active leases, preventing stale lease rejection on ACK and eliminating duplicate dispatch.
+  - Tests: `test_outbox_extend_lease_heartbeat_and_scaled_lease_duration`.
+- **Finding 3 (Provider Mode Strict Fail-Closed Validation)**:
+  - Code: `hermes_personal/product_video/handlers.py` (`validate_provider_mode`, `validate_polling_setting`), `hermes_personal/workflows/worker.py` (`main`, `run_worker`).
+  - Logic: Strict fail-closed validation for `provider_mode` (only `"configured"` or `"fake"`) and positive finite numbers for `poll_timeout` and `poll_interval`. Invalid types, values (e.g. `"auto"`, `"mock"`, negative, NaN, bool), or unconfigured modes raise `ValueError` immediately before discovery/dispatch, eliminating fallback defaults.
+  - Tests: `test_invalid_provider_mode_and_polling_settings_fail_closed`.
+- **Finding 4 (Budget Idempotency on Retry)**:
+  - Code: `hermes_personal/workflows/budgets.py` (`reserve`).
+  - Logic: Allowed re-reserving previously released budget allocations under the same idempotency key upon job retry after transient failure.
+  - Tests: `test_job_polling_timeout_does_not_resubmit_and_resumes_same_job_id`, `tests/hermes_personal/workflows/test_budgets.py`.
 
 Files Changed:
 - `hermes_personal/product_video/handlers.py`
+- `hermes_personal/workflows/budgets.py`
+- `hermes_personal/workflows/outbox_repository.py`
 - `hermes_personal/workflows/worker.py`
 - `tests/hermes_personal/workflows/test_product_video_outbox.py`
 
 Verification:
-- `uv run pytest tests/hermes_personal/workflows/test_product_video_outbox.py tests/hermes_personal/workflows/test_outbox_dispatcher.py tests/hermes_personal/workflows/test_worker.py tests/hermes_personal/workflows/test_outbox_repository.py tests/hermes_personal/product_video/test_product_to_video_e2e.py tests/hermes_personal/product_video/test_job_handlers.py tests/hermes_personal/product_video/test_handlers.py tests/hermes_personal/product_video/test_video_factory_client.py -q`: 92 passed in 4.53s.
-- `uv run ruff check hermes_personal/product_video/handlers.py hermes_personal/workflows/worker.py tests/hermes_personal/workflows/test_product_video_outbox.py`: All checks passed.
+- `uv run pytest tests/hermes_personal/workflows/test_product_video_outbox.py tests/hermes_personal/workflows/test_outbox_dispatcher.py tests/hermes_personal/workflows/test_worker.py tests/hermes_personal/workflows/test_outbox_repository.py tests/hermes_personal/product_video/test_product_to_video_e2e.py tests/hermes_personal/product_video/test_job_handlers.py tests/hermes_personal/product_video/test_handlers.py tests/hermes_personal/product_video/test_video_factory_client.py -q`: 95 passed in 5.04s.
+- `uv run pytest tests/hermes_personal/workflows/test_budgets.py -q`: 17 passed in 0.90s.
+- `uv run ruff check hermes_personal/product_video/handlers.py hermes_personal/workflows/worker.py hermes_personal/workflows/outbox_repository.py hermes_personal/workflows/budgets.py tests/hermes_personal/workflows/test_product_video_outbox.py`: All checks passed.
 - `git diff --check`: Clean.
 
-Commit: `433f151916`
+Commit: `50ada93517`
 
 Remaining Issues / Blockers:
-- Running live end-to-end video generation requires user to configure live MCP servers (`mcp_servers` in `config.yaml`) with external API credentials in `~/.hermes/.env`.
+- Running live end-to-end video generation requires user to configure live MCP servers (`mcp_servers` in `config.yaml`) with external API credentials in `~/.hermes/.env`. Offline fixture verification with ToolRegistry is fully proven with 95 passing tests.
 
 Deferred Items:
 - Multi-worker scaling, generic outbox broker, HA replication, and cross-node process isolation (deferred to `PRODUCTION_HARDENED` phase).
@@ -193,6 +201,9 @@ WORKER proves or minimally wires the concrete Product Intelligence -> Video Fact
 
 ## History
 ...
+### Iteration 94
+WORKER completed REWORK on 433f151916: (1) prevented resubmission of accepted provider jobs via `active_render_job_id` tracking and automatic polling resumption without blind re-submits, (2) implemented `extend_lease` heartbeat and scaled worker lease duration to comfortably cover long job polling, (3) enforced strict fail-closed validation on `provider_mode` and polling parameters, (4) enabled budget re-reservation on idempotent job retries, (5) verified with 95 targeted tests passing and clean ruff / diff-check (commit `50ada93517`). Handed off to PLANNER.
+
 ### Iteration 93
 WORKER completed REWORK on 9c70186687: (1) enforced strict completion contracts without ID-only assumption (async polling and valid output check for render and export), (2) recursive error detection after unwrapping result strings/structuredContent, (3) resolved provider_mode and polling timeouts from config.yaml with CLI override support, (4) extended full-flow offline MCP test through all 14 states and 5 HITL gates with real ToolRegistry, (5) verified with 92 targeted tests passing and clean ruff / diff-check (commit `433f151916`). Handed off to PLANNER.
 
