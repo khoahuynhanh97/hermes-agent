@@ -270,7 +270,9 @@ def test_production_entrypoint_and_create_product_video_topic_handlers(tmp_path)
     conn2 = connect(db_file)
     repo2 = WorkflowRepository(conn2)
     engine2 = WorkflowEngine(repo2)
-    topic_handlers = create_product_video_topic_handlers(workflow_engine=engine2, workflow_repository=repo2)
+    topic_handlers = create_product_video_topic_handlers(
+        workflow_engine=engine2, workflow_repository=repo2, provider_mode="fake"
+    )
 
     outbox_repo = OutboxRepository(conn2)
     dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="worker-prod-1")
@@ -309,7 +311,7 @@ def test_runtime_durable_worker_processes_happy_path(tmp_path):
     stop_evt = threading.Event()
     worker_thread = threading.Thread(
         target=run_worker,
-        kwargs={"db_path": db_file, "poll_interval": 0.05, "stop_event": stop_evt},
+        kwargs={"db_path": db_file, "poll_interval": 0.05, "stop_event": stop_evt, "provider_mode": "fake"},
         daemon=True,
     )
     worker_thread.start()
@@ -328,3 +330,110 @@ def test_runtime_durable_worker_processes_happy_path(tmp_path):
     agg, _ = repo_verify.get_workflow(wf_id)
     assert agg.get("latest_artifact", {}).get("owner") == "product_intelligence"
     verify_conn.close()
+
+
+def test_user_entrypoint_operator_command_starts_and_advances_workflow(tmp_path):
+    """Test user entry point POST /api/operator/command starts workflow, advances to HITL gate,
+    and operator approval advances workflow to next stage."""
+    from hermes_personal.contracts.operator import OperatorCommand, PrincipalContext
+    from hermes_personal.application.operator_handler import create_operator_command_handler
+    from hermes_personal.application.events_api import EventsAPI
+
+    db_file = tmp_path / "operator_entry.db"
+    conn = connect(db_file)
+    handler = create_operator_command_handler(conn, provider_mode="fake")
+    api = EventsAPI(command_handler=handler, auth_validator=lambda token, owner: True)
+
+    wf_id = "wf_entry_01"
+    principal = PrincipalContext(actor_id="alice", owner_user_id="alice", channel="web", session_id="s1")
+
+    # 1. User Entry Point: start_workflow via operator command
+    cmd_start = OperatorCommand(
+        principal=principal,
+        command_type="start_workflow",
+        target_id=wf_id,
+        expected_version=0,
+        payload={"product_name": "ANC Headphones", "keywords": ["noise_canceling", "bass"]},
+    )
+    status_code, resp = api.handle_operator_command(
+        auth_token="valid_token",
+        owner_id="alice",
+        command_type="start_workflow",
+        target_id=wf_id,
+        expected_version=0,
+        payload={"product_name": "ANC Headphones", "keywords": ["noise_canceling", "bass"]},
+    )
+    assert status_code == 200
+    assert resp["status"] == "ok"
+    assert resp["result"]["status"] == "started"
+
+    # 2. Worker processes outbox message for product_video.research in explicit fake mode
+    repo = WorkflowRepository(conn)
+    topic_handlers = create_product_video_topic_handlers(workflow_repository=repo, provider_mode="fake")
+    outbox_repo = OutboxRepository(conn)
+    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="worker-op-1")
+
+    report = dispatcher.process_batch()
+    assert report.claimed == 1
+    assert report.succeeded == 1
+    assert outbox_repo.list_unacknowledged() == []
+
+    # 3. Assert workflow reached HITL gate AwaitingProductLock & approval request created
+    agg, version = repo.get_workflow(wf_id)
+    assert agg["state"] == ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK.value
+    assert "pending_approval_id" in agg
+
+    appr_svc = ApprovalService(conn)
+    req = appr_svc.get_request(agg["pending_approval_id"])
+    assert req.status.value == "pending"
+
+    # 4. User Entry Point: approve operator command to advance workflow
+    status_code_appr, resp_appr = api.handle_operator_command(
+        auth_token="valid_token",
+        owner_id="alice",
+        command_type="approve",
+        target_id=req.request_id,
+        expected_version=version,
+    )
+    assert status_code_appr == 200
+    assert resp_appr["result"]["status"] == "approved"
+    assert resp_appr["result"]["new_state"] == ProductVideoWorkflowState.BUILDING_RESOURCE_PACK.value
+    assert resp_appr["result"]["enqueued_job"] == "product_video.lock"
+
+    # 5. Process next stage outbox message
+    report2 = dispatcher.process_batch()
+    assert report2.claimed == 1
+    assert report2.succeeded == 1
+
+    agg2, _ = repo.get_workflow(wf_id)
+    assert agg2["state"] == ProductVideoWorkflowState.CREATING_BRIEF.value
+    conn.close()
+
+
+def test_unconfigured_provider_mode_configured_fails_without_ack(tmp_path):
+    """Test that default provider_mode='configured' fails closed and does NOT ACK outbox work."""
+    db_file = tmp_path / "missing_config.db"
+    conn = connect(db_file)
+    repo = WorkflowRepository(conn)
+    wf_id = "wf_unconfig_01"
+
+    start_product_video_workflow(
+        workflow_repository=repo,
+        workflow_id=wf_id,
+        product_name="Product X",
+        keywords=["k1"],
+    )
+
+    # Handlers initialized with default provider_mode='configured' (missing live API clients)
+    topic_handlers = create_product_video_topic_handlers(workflow_repository=repo, provider_mode="configured")
+    outbox_repo = OutboxRepository(conn)
+    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="worker-cfg-1")
+
+    report = dispatcher.process_batch()
+    # Expect failure because live provider is unconfigured in 'configured' mode
+    assert report.claimed == 1
+    assert report.failed == 1
+    assert report.succeeded == 0
+    # Outbox message MUST NOT be ACKed!
+    assert len(outbox_repo.list_unacknowledged()) == 1
+    conn.close()

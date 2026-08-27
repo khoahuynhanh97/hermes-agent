@@ -23,6 +23,7 @@ def run_worker(
     topic_handlers: Optional[Dict[str, Callable[[OutboxEnvelope], None]]] = None,
     delivery_fn: Optional[Callable[[str, str], None]] = None,
     worker_id: Optional[str] = None,
+    provider_mode: Optional[str] = None,
 ) -> None:
     """Run the durable outbox worker loop.
 
@@ -48,6 +49,8 @@ def run_worker(
     connection = connect(db_path)
     repo = OutboxRepository(connection)
 
+    _provider_mode = provider_mode or os.environ.get("HERMES_PROVIDER_MODE", "configured")
+
     if topic_handlers is None and delivery_fn is None:
         from hermes_personal.product_video.handlers import create_product_video_topic_handlers
         from hermes_personal.workflows.engine import WorkflowEngine
@@ -58,6 +61,7 @@ def run_worker(
         topic_handlers = create_product_video_topic_handlers(
             workflow_engine=wf_engine,
             workflow_repository=wf_repo,
+            provider_mode=_provider_mode,
         )
 
     _worker_id = worker_id or f"durable-worker-{os.getpid()}"

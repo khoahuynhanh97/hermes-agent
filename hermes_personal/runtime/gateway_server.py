@@ -18,6 +18,7 @@ from hermes_personal.application import (
     HealthAPI,
     StaticBearerAuthenticator,
     create_application,
+    create_operator_command_handler,
 )
 from hermes_personal.capabilities import (
     CapabilityCatalogService,
@@ -224,9 +225,10 @@ def create_gateway_application(
     validate_token = lambda token, owner: (
         owner == owner_user_id and hmac.compare_digest(token, api_key)
     )
+    cmd_handler = create_operator_command_handler(connection, provider_mode=provider_mode)
     app = create_application(
         health_api=_health_api(),
-        events_api=EventsAPI(events, auth_validator=validate_token),
+        events_api=EventsAPI(events, auth_validator=validate_token, command_handler=cmd_handler),
         turn_service=service,
         turn_normalizers={
             "web": ChannelTurnNormalizer("web", identities, sessions),

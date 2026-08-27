@@ -9,7 +9,7 @@ from uuid import uuid4
 from .principal import PrincipalContext
 
 OperatorCommandType = Literal[
-    "approve", "reject", "retry", "cancel", "upload", "form_update"
+    "approve", "reject", "retry", "cancel", "upload", "form_update", "start_workflow"
 ]
 
 

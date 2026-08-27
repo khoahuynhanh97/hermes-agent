@@ -10,6 +10,7 @@ from typing import Any, Callable
 
 from hermes_personal.integrations.product_intelligence.client import ProductIntelligenceClient
 from hermes_personal.integrations.video_factory.client import VideoFactoryClient
+from hermes_personal.workflows.approvals import ApprovalService
 from hermes_personal.workflows.budgets import reserve_budget, commit_budget, release_budget
 from hermes_personal.workflows.engine import WorkflowEngine
 from hermes_personal.workflows.envelope import (
@@ -94,7 +95,12 @@ class ProductVideoJobHandlers:
         workflow_engine: WorkflowEngine | None = None,
         workflow_repository: WorkflowRepository | None = None,
         dispatcher: JobDispatcher | None = None,
+        provider_mode: str = "fake",
     ) -> None:
+        self.provider_mode = provider_mode
+        self._missing_live_provider = (
+            provider_mode == "configured" and (pi_client is None or video_client is None)
+        )
         self.pi_client = pi_client or ProductIntelligenceClient()
         self.video_client = video_client or VideoFactoryClient()
         self.workflow_engine = workflow_engine
@@ -119,6 +125,13 @@ class ProductVideoJobHandlers:
         legal_states: set[str | ProductVideoWorkflowState],
         inputs: dict[str, Any] | None = None,
     ) -> JobFailed | None:
+        if getattr(self, "_missing_live_provider", False):
+            raise RuntimeError(
+                "MISSING_PROVIDER_CONFIG: ProductIntelligence/VideoFactory live API provider adapters "
+                "are unconfigured for provider_mode='configured'. Set provider_mode='fake' for explicit "
+                "offline/test verification."
+            )
+
         res = self._get_workflow_state_and_version(ctx)
         if res is None:
             return JobFailed(
@@ -445,6 +458,7 @@ def register_product_video_job_handlers(
     workflow_engine: WorkflowEngine | None = None,
     pi_client: ProductIntelligenceClient | None = None,
     video_client: VideoFactoryClient | None = None,
+    provider_mode: str = "fake",
 ) -> ProductVideoJobHandlers:
     """Register all product-to-video pipeline job handlers with the Gate 4 dispatcher/registry."""
     if handlers_service is not None:
@@ -457,6 +471,7 @@ def register_product_video_job_handlers(
             video_client=video_client,
             workflow_engine=workflow_engine,
             dispatcher=dispatcher if isinstance(dispatcher, JobDispatcher) else None,
+            provider_mode=provider_mode,
         )
 
     if hasattr(dispatcher, "register"):
@@ -473,6 +488,7 @@ def create_product_video_topic_handlers(
     handlers_service: ProductVideoJobHandlers | None = None,
     pi_client: ProductIntelligenceClient | None = None,
     video_client: VideoFactoryClient | None = None,
+    provider_mode: str = "configured",
 ) -> dict[str, Callable[[OutboxEnvelope], None]]:
     """Create production topic handlers for durable outbox delivery.
 
@@ -484,6 +500,7 @@ def create_product_video_topic_handlers(
             video_client=video_client,
             workflow_engine=workflow_engine,
             workflow_repository=workflow_repository,
+            provider_mode=provider_mode,
         )
     handlers_map = handlers_service.get_handlers_map()
 
@@ -526,27 +543,112 @@ def create_product_video_topic_handlers(
 
         if isinstance(result, JobSucceeded):
             repo = workflow_repository or (workflow_engine.repo if workflow_engine else None)
-            if repo and result.artifact_ref:
+            if repo:
                 wf_data = repo.get_workflow(target_wf)
                 if wf_data:
                     agg, version = wf_data
-                    agg["latest_artifact"] = result.artifact_ref
-                    if result.next_command and "command" in result.next_command:
-                        agg["last_completed_job"] = job_name
-                    repo.commit_workflow(
-                        workflow_id=target_wf,
-                        aggregate_json=json.dumps(agg),
-                        events=[
-                            {
-                                "event_id": f"evt_{envelope.message_id}",
-                                "command_id": f"cmd_{envelope.message_id}",
-                                "event_type": "JobSucceeded",
-                                "timestamp": datetime.now(timezone.utc).isoformat(),
-                                "payload": {"job_name": job_name, "artifact_ref": result.artifact_ref},
-                            }
-                        ],
-                        expected_version=version,
-                    )
+
+                    JOB_STAGE_MAP = {
+                        "product_video.research": (
+                            ProductVideoWorkflowState.RESEARCHING,
+                            ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK,
+                            True,
+                            "AwaitingProductLock",
+                        ),
+                        "product_video.lock": (
+                            ProductVideoWorkflowState.BUILDING_RESOURCE_PACK,
+                            ProductVideoWorkflowState.CREATING_BRIEF,
+                            False,
+                            None,
+                        ),
+                        "product_video.resource_pack": (
+                            ProductVideoWorkflowState.BUILDING_RESOURCE_PACK,
+                            ProductVideoWorkflowState.CREATING_BRIEF,
+                            False,
+                            None,
+                        ),
+                        "product_video.creative_brief": (
+                            ProductVideoWorkflowState.CREATING_BRIEF,
+                            ProductVideoWorkflowState.AWAITING_BRIEF_APPROVAL,
+                            True,
+                            "AwaitingBriefApproval",
+                        ),
+                        "product_video.scene_plan": (
+                            ProductVideoWorkflowState.CREATING_SCENE_PLAN,
+                            ProductVideoWorkflowState.AWAITING_SCENE_APPROVAL,
+                            True,
+                            "AwaitingSceneApproval",
+                        ),
+                        "product_video.storyboard": (
+                            ProductVideoWorkflowState.CREATING_STORYBOARD,
+                            ProductVideoWorkflowState.AWAITING_STORYBOARD_APPROVAL,
+                            True,
+                            "AwaitingStoryboardApproval",
+                        ),
+                        "product_video.render": (
+                            ProductVideoWorkflowState.RENDERING,
+                            ProductVideoWorkflowState.AWAITING_FINAL_APPROVAL,
+                            True,
+                            "AwaitingFinalApproval",
+                        ),
+                        "product_video.export": (
+                            ProductVideoWorkflowState.EXPORTING,
+                            ProductVideoWorkflowState.COMPLETED,
+                            False,
+                            None,
+                        ),
+                    }
+
+                    if job_name in JOB_STAGE_MAP:
+                        from hermes_personal.product_video.workflow import transition
+                        curr_enum, next_enum, is_hitl, gate_name = JOB_STAGE_MAP[job_name]
+                        next_validated = transition(curr_enum, next_enum)
+                        next_agg = dict(agg)
+                        next_agg["state"] = next_validated.value
+                        if result.artifact_ref:
+                            next_agg["latest_artifact"] = result.artifact_ref
+
+                        outbox_next = None
+                        if is_hitl:
+                            approval_svc = ApprovalService(repo.conn)
+                            req_id = approval_svc.submit_request({
+                                "workflow_id": target_wf,
+                                "gate": gate_name,
+                                "workflow_version": version + 1,
+                                "artifact_ref": result.artifact_ref,
+                            })
+                            next_agg["pending_approval_gate"] = gate_name
+                            next_agg["pending_approval_id"] = req_id
+                        else:
+                            next_job_name = "product_video.creative_brief" if job_name in ("product_video.lock", "product_video.resource_pack") else None
+                            if next_job_name:
+                                outbox_next = build_envelope(
+                                    workflow_id=target_wf,
+                                    topic="job.dispatch",
+                                    idempotency_key=f"idemp_{next_job_name}_{target_wf}_v{version + 1}",
+                                    payload={
+                                        "job_name": next_job_name,
+                                        "workflow_id": target_wf,
+                                        "args": [result.artifact_ref],
+                                        "owner_user_id": payload.get("owner_user_id", "local-owner"),
+                                    },
+                                )
+
+                        repo.commit_workflow(
+                            workflow_id=target_wf,
+                            aggregate_json=json.dumps(next_agg),
+                            events=[
+                                {
+                                    "event_id": f"evt_{envelope.message_id}",
+                                    "command_id": f"cmd_{envelope.message_id}",
+                                    "event_type": "JobSucceeded",
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                                    "payload": {"job_name": job_name, "artifact_ref": result.artifact_ref},
+                                }
+                            ],
+                            outbox_message=outbox_next,
+                            expected_version=version,
+                        )
 
     return {"job.dispatch": handle_job_dispatch}
 
