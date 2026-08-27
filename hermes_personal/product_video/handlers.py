@@ -645,27 +645,58 @@ class ProductVideoJobHandlers:
             return None
         available = _get_tool_names_from_registry(effective_registry)
         wire_map: dict[str, str] = {}
-        for candidate in ("mcp__video_factory__create_brief", "video_factory_create_brief"):
+        for candidate in (
+            "mcp__video_factory__create_brief",
+            "mcp__hermes_video_factory__create_brief",
+            "video_factory_create_brief",
+            "hermes_video_factory_create_brief",
+        ):
             if candidate in available:
                 wire_map["brief"] = candidate
                 break
-        for candidate in ("mcp__video_factory__create_scene_plan", "video_factory_create_scene_plan"):
+        for candidate in (
+            "mcp__video_factory__create_scene_plan",
+            "mcp__hermes_video_factory__create_scene_plan",
+            "video_factory_create_scene_plan",
+            "hermes_video_factory_create_scene_plan",
+        ):
             if candidate in available:
                 wire_map["scene_plan"] = candidate
                 break
-        for candidate in ("mcp__video_factory__create_storyboard", "video_factory_create_storyboard"):
+        for candidate in (
+            "mcp__video_factory__create_storyboard",
+            "mcp__hermes_video_factory__create_storyboard",
+            "video_factory_create_storyboard",
+            "hermes_video_factory_create_storyboard",
+        ):
             if candidate in available:
                 wire_map["storyboard"] = candidate
                 break
-        for candidate in ("mcp__video_factory__render", "video_factory_render", "video_generate"):
+        for candidate in (
+            "mcp__video_factory__render",
+            "mcp__hermes_video_factory__render",
+            "video_factory_render",
+            "hermes_video_factory_render",
+            "video_generate",
+        ):
             if candidate in available:
                 wire_map["render"] = candidate
                 break
-        for candidate in ("mcp__video_factory__export", "video_factory_export"):
+        for candidate in (
+            "mcp__video_factory__export",
+            "mcp__hermes_video_factory__export",
+            "video_factory_export",
+            "hermes_video_factory_export",
+        ):
             if candidate in available:
                 wire_map["export"] = candidate
                 break
-        for candidate in ("mcp__video_factory__get_job_status", "video_factory_get_job_status"):
+        for candidate in (
+            "mcp__video_factory__get_job_status",
+            "mcp__hermes_video_factory__get_job_status",
+            "video_factory_get_job_status",
+            "hermes_video_factory_get_job_status",
+        ):
             if candidate in available:
                 wire_map["get_job_status"] = candidate
                 break

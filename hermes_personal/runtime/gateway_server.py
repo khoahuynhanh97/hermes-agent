@@ -163,16 +163,83 @@ def _ensure_identity(
             )
 
 
-def _health_api() -> HealthAPI:
-    report = StartupCoordinator().prepare()
+def _health_api(
+    connection: sqlite3.Connection | None = None,
+    outbox_repository: OutboxRepository | None = None,
+    catalog_service: CapabilityCatalogService | None = None,
+    snapshots: CapabilitySnapshotRepository | None = None,
+) -> HealthAPI:
+    def _run_migrations() -> None:
+        if connection is not None:
+            from hermes_personal.storage.sqlite import _migrate_schema
+
+            _migrate_schema(connection)
+
+    def _reclaim_leases() -> int:
+        if outbox_repository is not None:
+            return outbox_repository.reclaim_expired()
+        return 0
+
+    def _recover_workflows() -> tuple[int, int]:
+        if connection is not None:
+            from hermes_personal.workflows.recovery import WorkflowRecoveryService
+
+            rec = WorkflowRecoveryService(connection)
+            wfs = rec.recover_pending_workflows()
+            return len(wfs), 0
+        return 0, 0
+
+    def _probe_db() -> bool:
+        if connection is not None:
+            try:
+                cur = connection.cursor()
+                cur.execute("SELECT 1")
+                return True
+            except Exception:
+                return False
+        return True
+
+    def _activate_snapshot() -> None:
+        if catalog_service is not None and snapshots is not None:
+            if snapshots.get_active() is None:
+                try:
+                    from hermes_personal.capabilities.bindings import ImplementationBinding
+                    from hermes_personal.capabilities.manifest import INITIAL_CAPABILITIES
+
+                    bindings = tuple(
+                        ImplementationBinding(
+                            capability_id=spec.capability_id,
+                            wire_name=spec.capability_id.replace(".", "_"),
+                            source="builtin",
+                            provider=spec.owner,
+                            implementation_version="1.0.0",
+                            input_schema_version=spec.input_schema_version,
+                            output_schema_version=spec.output_schema_version,
+                            schema_digest=f"sha256:{spec.capability_id}",
+                            health="healthy",
+                        )
+                        for spec in INITIAL_CAPABILITIES.values()
+                    )
+                    snapshots.save_and_activate(bindings)
+                except Exception:
+                    pass
+
+    coordinator = StartupCoordinator(
+        migration_runner=_run_migrations,
+        lease_recovery=_reclaim_leases,
+        workflow_recovery=_recover_workflows,
+        snapshot_activator=_activate_snapshot,
+        dependency_prober=_probe_db,
+    )
+    report = coordinator.prepare()
     health_report = HealthReport.from_components(
         (ComponentHealth(name="gateway", required=True, status="healthy"),)
     )
     probe = create_readiness_probe(
         report,
         get_health_report=lambda: health_report,
-        check_capability_snapshot=lambda: True,
-        check_dependency_probes=lambda: True,
+        check_capability_snapshot=lambda: (snapshots.get_active() is not None if snapshots is not None else True),
+        check_dependency_probes=_probe_db,
     )
     return HealthAPI(probe)
 
@@ -227,7 +294,12 @@ def create_gateway_application(
     )
     cmd_handler = create_operator_command_handler(connection, provider_mode=provider_mode)
     app = create_application(
-        health_api=_health_api(),
+        health_api=_health_api(
+            connection=connection,
+            outbox_repository=outbox_repository,
+            catalog_service=catalog_service,
+            snapshots=snapshots,
+        ),
         events_api=EventsAPI(events, auth_validator=validate_token, command_handler=cmd_handler),
         turn_service=service,
         turn_normalizers={
