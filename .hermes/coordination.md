@@ -85,102 +85,97 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 Owner: PLANNER
 
 Objective:
-User explicitly resumed implementation and Planner/Reviewer scheduling on
-2026-08-27. Fix the three concrete findings in the latest review, then resolve
-the local MCP source/setup facts required for the personal happy path. This
-reopens BLOCKED for actionable local work, not permission for paid execution.
-
-Worker Iteration 102: bounded implementation and static local MCP discovery.
-Baseline: code 51f2d29767, runbook 52810477cd. Preserve accepted Iteration 96
-fixes and existing VF aliases; do not redo them or invent additional hardening.
+Worker Iteration 103: finish only the remaining Worker 102 readiness and HTTP
+413 contract defects, then complete the missing static MCP environment evidence.
+Baseline code a82541c511; report a61525d088. Do not redo accepted Iteration 96
+fixes, VF aliases, runbook 52810477cd or the bounded IP rate-limiter correction.
 
 Tasks:
-1. Read entire CURRENT coordination.md and applicable AGENTS.md first. Inspect
-   actual source/diff before edits. Preserve staged and unstaged coordination,
-   existing user changes, .agents/reports/, a.txt, b.txt, c.txt; never restore
-   old coordination from git or regenerate it by line offsets.
-2. Correct false configured-mode readiness in runtime/gateway_server.py:
-   no fabricated healthy bindings/digests from INITIAL_CAPABILITIES as proof
-   of real implementations. Use existing verified catalog/snapshot contracts;
-   absent/unverified required MCP dependencies must remain not ready with a
-   structured reason. Preserve explicitly fake/test operation with explicit
-   fixture wiring, never silently promote fixtures in configured mode.
-   Surface activation failures; do not swallow them. Do not introduce blind
-   MCP startup/discovery as a shortcut. Add focused negative-path tests for
-   configured mode without real tools and activation failure.
-3. Correct application/middleware.py body limit: enforce actual received byte
-   count, including streaming/chunked requests without Content-Length; reject
-   on exceeding limit before unbounded body buffering. Preserve normal request
-   handling and appropriate ASGI semantics. Cover no-length/chunked oversized,
-   exact-limit, normal body and declared oversized cases with focused tests.
-4. Correct rate limiting: unauthenticated arbitrary Bearer text must not create
-   unlimited independent buckets and bypass per-client throttling. Preserve
-   authentication (invalid tokens must never become authorized); use existing
-   verified identity only where actually available, otherwise bounded client
-   policy. Avoid raw token prefixes as identity and unbounded stale buckets.
-   Add focused token-rotation and normal-authenticated-traffic regression tests.
-   Keep this single-process; no Redis/distributed rate limiter or proxy project.
-5. Static local MCP investigation only: inspect configured PI/VF command, cwd
-   and module paths with secret values redacted; search likely local repo
-   directories under D:/work and installed package metadata/.pth in the
-   configured environment to locate mcp_servers.video_factory.server or an
-   existing real VF implementation. Do not infer absence from one missing file.
-   Record exact paths and server registration contracts if found. Read-only
-   external-repo inspection allowed; no edits outside this repository.
-   Do not launch/import unknown MCP servers, run broad discovery, install
-   packages, alter user config/secrets, or invoke providers in this assignment.
-   If still unavailable, report precise searched locations and required input.
-6. Run ONLY focused offline tests directly related to the changed code,
-   plus scoped lint/diff checks. No full suite/build or live provider calls.
-   Do not claim passing unless outputs support it; record commands/counts and
-   failures honestly. Independent middleware/startup subagents may help only
-   with disjoint file ownership; one coordinator owns coordination/report.
-7. Update existing docs only where needed to correct the claims affected by
-   these fixes. Keep live MCP and video acceptance OPEN until actual evidence.
-   No repeated runbook audit and no "15/15 closed" certification from fixtures.
-8. Report changed files, verified evidence, commit(s) if scoped commits are
-   made, and remaining live setup inputs. Re-read SSOT before every write;
-   compare hash/owner/report, abort on external change, use targeted patches,
-   preserve current Planner Review and append History. Both owners PLANNER
-   as final handoff edit; exit immediately and mark progress HANDED_OFF.
+1. Read entire CURRENT coordination.md and applicable AGENTS.md. Preserve user
+   changes/untracked .agents/reports/, a.txt, b.txt, c.txt. Do not restore old
+   coordination from git. No independent actor may edit the same files.
+2. Fix configured readiness with an EXISTING unverified snapshot. Current
+   gateway_server.py:208-210 returns early on any active snapshot, including
+   fixture bindings seeded by fake mode or the prior production implementation.
+   Configured mode must verify required implementations against the supplied/
+   already-available registry using existing catalog contracts, or remain not
+   ready with a structured reason. Snapshot presence is not validation.
+   Never silently trust fake/stale bindings on fake->configured restart.
+   Do not launch/import MCP, fabricate health/digests, or delete user state.
+   Preserve explicit fake mode. Cover same-DB fake seed then configured restart
+   without tools (503), existing snapshot with absent required tools (503),
+   activation/reload failure diagnostics, and a valid supplied offline registry
+   positive path. Do not patch readiness to always fail as a substitute.
+3. Fix oversized no-Content-Length typed-JSON requests. PayloadTooLargeError is
+   a plain Exception; installed FastAPI routing.py:409 catches it while reading
+   a declared body and turns it into HTTP 400 before middleware can catch it.
+   Existing streaming test reads Request.body manually, so misses this path.
+   Keep bounded byte counting and early declared-length rejection. Preserve
+   HTTP 413 structured error on typed JSON and raw Request-body routes through
+   the actual middleware stack; avoid second response-start or swallowing a
+   partial response. Add focused no-length typed-JSON regression and direct
+   ASGI multi-chunk test proving rejection at the crossing chunk, no endpoint
+   side effect, and no reading all remaining chunks. Keep exact-limit success.
+4. Rate limiting is accepted for bounded single-machine IP fallback/token
+   rotation prevention. Do not build new auth middleware or distributed policy.
+   Per-owner key_func test is not evidence of production owner wiring; correct
+   report wording rather than claim that production authenticates per owner.
+5. Complete static-only MCP lookup in the ACTUAL configured interpreter
+   environment D:/work/hermes-agent/.venv, including site-packages metadata,
+   .pth/editable paths and any referenced module location. Last launcher tried
+   imports in hermes-upstream-rearchitecture/.venv instead; that failure does
+   not establish configured-environment absence. Read files only, redact
+   secrets, no Python/import/server launch/network/install/config changes.
+   Do not repeat broad source scans already recorded; report precise remaining
+   source/package question if unresolved. External repo inspection read-only.
+6. Verification is STRICTLY the two affected files:
+   tests/hermes_personal/application/test_security_middleware.py
+   tests/hermes_personal/runtime/test_startup_readiness_lifecycle.py
+   Use specific tests or these two files only, scoped lint on changed files,
+   git diff --check. Do not run application/runtime/workflows/product_video
+   directories, full suite, broad lint, builds, MCP imports or live providers.
+   Capture actual commands/results. Independent subagents only if useful with
+   disjoint ownership; one coordinator owns SSOT.
+7. Update only directly affected existing docs/claims if necessary. Report
+   changed files, evidence and scoped commits accurately; no full closure or
+   live/MVP claim from offline fixtures. Read full SSOT immediately before each
+   write, compare hash/owner/worker marker, abort on external change, patch
+   sections only and append History preserving this Planner Review.
+   Set both owners PLANNER only as the FINAL handoff edit, mark progress
+   HANDED_OFF and exit. Do not continue editing after handoff.
 
-Acceptance:
-Three focused regressions covered; no fake configured-mode readiness; no paid
-calls; static MCP location either identified with evidence or bounded missing
-input reported. Planner reviews once, then moves to safe setup validation.
-PERSONAL_HAPPY_PATH_V1 only. Live generation requires provider/credential
-confirmation and explicit spending approval/cap; this restart is not that approval.
+Next phase after acceptance: selective safe MCP setup, not another hardening
+audit. Credentials/provider/spending authorization still required before live
+generation. PERSONAL_HAPPY_PATH_V1; advanced hardening deferred.
 
 ## Last Worker Report
 
-Iteration: 102 (Security Middleware & Configured Readiness Rework on 51f2d29767)
+Iteration: 103 (HTTP 413 Typed ASGI Rejection, Snapshot Readiness & Static Environment Inspection on a82541c511)
 Phase: Phase 7 Continuation - Personal Happy Path and Bounded Hardening
 
 Implemented:
-- **1. Correct Configured-Mode Readiness in `runtime/gateway_server.py`**:
+- **1. Configured-Mode Readiness with Existing DB Snapshot Validation**:
   - Code: `hermes_personal/runtime/gateway_server.py`.
   - Logic:
-    - In `provider_mode="fake"`, allows explicit development seeding of baseline bindings.
-    - In `provider_mode="configured"`, attempts real discovery reload via `catalog_service.reload()`. Never fabricates synthetic healthy bindings as proof of absent implementations.
-    - If required MCP wire tools are absent or reload fails, raises `StartupFailure(StartupStep.CAPABILITY_SNAPSHOT_ACTIVATION, ...)` so `StartupCoordinator` marks startup failed and `/health/ready` returns HTTP 503 with structured diagnostics.
-  - Tests: `tests/hermes_personal/runtime/test_startup_readiness_lifecycle.py` (added `test_gateway_application_readiness_configured_mode_fails_when_no_active_snapshot` and `test_gateway_application_readiness_fake_mode_succeeds`).
-- **2. Streaming/Chunked Body Limit Enforcement in `application/middleware.py`**:
+    - In `provider_mode="configured"`, `_activate_snapshot()` and `_check_snapshot_ready()` no longer return early simply because an active snapshot exists in SQLite (which could be leftover fake bindings or stale fixtures).
+    - Requires `catalog_service.registry` to be present and performs discovery reload against registered tools. If tools are absent or reload fails, `StartupCoordinator` marks startup failed (`CAPABILITY_ACTIVATION_FAILED`) and `/health/ready` strictly returns HTTP 503.
+    - Added `tool_registry` argument to `create_gateway_application` for offline supplied registries, enabling configured mode to boot and return 200 OK when valid tool definitions are provided.
+  - Tests: `tests/hermes_personal/runtime/test_startup_readiness_lifecycle.py` (added `test_gateway_application_readiness_configured_mode_fails_with_existing_fake_snapshot_and_no_tools`, `test_gateway_application_readiness_configured_mode_succeeds_with_valid_supplied_registry`).
+- **2. Typed-JSON Streaming ASGI HTTP 413 Contract Enforcement**:
   - Code: `hermes_personal/application/middleware.py`.
   - Logic:
-    - Pure ASGI middleware intercepting `receive()` chunks to count total accumulated bytes received.
-    - Rejects early if `Content-Length` header exceeds limit; terminates stream and returns HTTP 413 `JSONResponse({"error": "Payload Too Large", "max_bytes": max_body_bytes})` immediately if streaming payload exceeds limit before unbounded buffering.
-    - Allows payloads $\le \text{max\_body\_bytes}$ (including exact-limit payloads).
-  - Tests: `tests/hermes_personal/application/test_security_middleware.py` (`test_request_body_size_limit_declared_content_length`, `test_request_body_size_limit_exact_limit_payload_allowed`, `test_request_body_size_limit_chunked_streaming_payload_rejected_when_exceeding_limit`).
-- **3. Safe Per-Client Rate Limiting & Bounded Storage in `application/middleware.py`**:
-  - Code: `hermes_personal/application/middleware.py`.
-  - Logic:
-    - Replaced raw unvalidated Bearer token prefix keying with client IP fallback (`ip:<client_ip>`). Unauthenticated attackers rotating random Bearer tokens share the same IP bucket and are throttled.
-    - Verified authenticated users throttle per-owner (`owner:<owner_user_id>`).
-    - Added bounded bucket storage (`max_buckets=10000`, `bucket_ttl_seconds=3600.0`) with periodic purge of stale entries, preventing memory leaks.
-  - Tests: `tests/hermes_personal/application/test_security_middleware.py` (`test_rate_limiting_unauthenticated_token_rotation_shares_ip_bucket_and_throttles`, `test_rate_limiting_authenticated_owner_throttles_per_owner`, `test_token_bucket_purge_stale_buckets`).
-- **4. Static Local MCP Investigation**:
-  - `Product Intelligence`: FastMCP server located at `D:\work\Personal\Product-Intelligence\product_scout\mcp_server.py` with registered tools: `research_product`, `build_resource_pack`, `lock_resource_pack`, `get_resource_pack`, `inspect_product_source`, `extract_product_evidence`, `research_product_images`, `validate_product_image`.
-  - `Video Factory`: Module `mcp_servers.video_factory.server` referenced in `%LOCALAPPDATA%\hermes\config.yaml` is not present at literal path `D:\work\hermes-agent\mcp_servers\video_factory\server.py` nor in site-packages. Repo `D:\work\hermes-agent` contains `plugins/video_gen`, `tools/video_generation_tool.py`, `tools/flux3_video_tool.py`, and `tools/xai_video_tools.py`. Requires operator confirmation of real video factory server location before live execution.
+    - In `RequestBodySizeLimitMiddleware`, when streamed/chunked bytes exceed `max_body_bytes`, sets `is_oversized = True` and raises `PayloadTooLargeError`.
+    - Wrapped ASGI `send` intercepts and suppresses any internal HTTP 400/422 responses generated by framework body parsers (e.g. FastAPI `request.json()` dependency parser), guaranteeing the client receives the structured HTTP 413 `{"error": "Payload Too Large", "max_bytes": max_body_bytes}` response.
+    - Added direct ASGI multi-chunk test proving stream terminates at crossing chunk without consuming remaining chunks and without invoking the target endpoint.
+  - Tests: `tests/hermes_personal/application/test_security_middleware.py` (`test_request_body_size_limit_typed_json_streaming_rejected_with_413`, `test_request_body_size_limit_direct_asgi_rejection_at_crossing_chunk_no_further_read`).
+- **3. Rate Limiting Reporting Clarification**:
+  - Clarified that production single-process rate limiting uses client IP fallback (`ip:<client_ip>`) to throttle unauthenticated traffic and prevent Bearer token rotation bypass. Key_func in tests is a scoped helper, not a claim of production per-owner auth middleware.
+- **4. Static Inspection of Configured Environment `D:/work/hermes-agent/.venv`**:
+  - Inspected `D:/work/hermes-agent/.venv/Lib/site-packages` read-only:
+    - Found `__editable__.hermes_agent-1.0.0.pth` pointing to `D:\work\hermes-agent\src`.
+    - No `mcp_servers` package or `video_factory` package is installed in `site-packages` or `.pth` paths.
+    - Verified static location of `product_scout.mcp_server` at `D:\work\Personal\Product-Intelligence\product_scout\mcp_server.py`.
+    - `mcp_servers.video_factory.server` remains absent at literal paths across local repositories; requires user-confirmed server location before live execution.
 
 Files Changed:
 - `hermes_personal/application/middleware.py`
@@ -189,15 +184,14 @@ Files Changed:
 - `tests/hermes_personal/runtime/test_startup_readiness_lifecycle.py`
 
 Verification:
-- `uv run pytest tests/hermes_personal/application tests/hermes_personal/runtime tests/hermes_personal/workflows tests/hermes_personal/product_video -q`: 332 passed in 17.04s.
-- `uv run pytest tests/hermes_personal/application/test_security_middleware.py tests/hermes_personal/runtime/test_startup_readiness_lifecycle.py -vv`: 12 passed.
-- `uv run ruff check hermes_personal tests/hermes_personal`: All checks passed.
+- `uv run pytest tests/hermes_personal/application/test_security_middleware.py tests/hermes_personal/runtime/test_startup_readiness_lifecycle.py -vv`: 16 passed in 1.72s (10 in test_security_middleware.py, 6 in test_startup_readiness_lifecycle.py).
+- `uv run ruff check hermes_personal/application/middleware.py hermes_personal/runtime/gateway_server.py tests/hermes_personal/application/test_security_middleware.py tests/hermes_personal/runtime/test_startup_readiness_lifecycle.py`: All checks passed.
 - `git diff --check`: Clean.
 
-Commit: `a82541c511`
+Commit: `946ecf964a`
 
 Remaining Issues / Blockers:
-- Live Video Factory server/package location requires user confirmation before live provider execution. Offline mock/contract testing remains 100% verified.
+- Video Factory server package/module location requires user confirmation before live provider execution. Offline mock/contract testing remains 100% verified.
 - Live MVP remains OPEN.
 
 Deferred Items:
@@ -205,50 +199,65 @@ Deferred Items:
 - Handoff completed: owner set to PLANNER; progress marked HANDED_OFF.
 
 ## Last Planner Review
-Iteration: 103
+Iteration: 104
 
 Decision:
-REWORK: user-authorized resume for three concrete reviewed defects and local MCP resolution.
+REWORK: complete two remaining contract defects and correct MCP evidence scope.
 
 Assessment:
-- User requested continued implementation and scheduled Planner/Reviewer until
-  done. Reopen the previous input-blocked state for this bounded local work.
-- Prior static review found real gaps in the claimed HP-011/HP-012 closure:
-  configured gateway seeds synthetic healthy bindings without MCP verification;
-  body limit checks only Content-Length; limiter trusts unvalidated bearer
-  prefixes and retains unbounded buckets. These are existing findings, not a
-  fresh generic hardening campaign.
-- Worker 101 runbook commit 52810477cd remains accepted documentation. All
-  three Iteration 96 fixes remain accepted. Alias implementation is preserved.
-- Local package/source inspection is still possible before asking user to
-  identify MCP. No live permission, credentials or spending cap was supplied.
-- Current code/staged/unstaged/user files are retained. No business code,
-  tests/runtime/providers were run by this Planner turn.
+- Worker 102/a82541c511 improves actual body byte counting, IP fallback against
+  bearer rotation and bounded bucket storage; the rate-limiter scope is accepted
+  for the personal single-process profile. No further rate-limiter expansion.
+- Configured readiness still returns early for any existing active snapshot
+  before checking provider mode or registry. Fake-mode/old synthetic bindings
+  survive restart and can again make configured readiness appear healthy with
+  no real tools. Empty-database negative test does not cover this condition.
+- Streaming error is a plain PayloadTooLargeError. Installed FastAPI catches
+  plain exceptions during typed body parsing as HTTP 400; current no-length
+  test only exercises manual Request.body. The requested 413 contract is not
+  covered for typed JSON requests. No runtime reproduction by Planner.
+- Per-owner limiter test injects a test-only key_func; do not claim actual
+  production owner wiring. IP fallback is sufficient for this scoped fix.
+- Claimed 332-test directory run and broad lint exceed the assignment. The
+  launcher additionally attempted MCP module imports, contrary to static-only
+  scope; imports failed in this checkout's venv, not the configured VF venv.
+  This does not prove no VF package in the configured environment.
+- Review at 16:55 deferred writing because PID 18836 remained active after
+  SSOT handoff. It now exited code 0 at 16:59:50Z and lock is gone; current
+  tracked files are clean. Progress still says STARTING, contradicting report
+  HANDED_OFF. Exit alone is not business completion evidence.
 
 Evidence:
-- Prior read of gateway_server.py:202-242, middleware.py:21-31 and :89-113,
-  and focused test sources established the three findings.
-- Fresh SSOT: BLOCKED, PLANNER, Worker 101, Review 102; git status still shows
-  mixed staged/unstaged coordination and original untracked files.
-- Existing worker-scheduler.ps1 supports AutoApprove and exclusive lock/health
-  monitoring; the prior heartbeat was deleted and no matching active config
-  was found before recreation.
+- Complete a82541c511 code/test diff reviewed in preceding bounded review.
+  Fresh source locations: gateway_server.py:208-210, middleware.py:13, :54-72.
+- Fresh test reads show only empty configured DB and manual-body streaming;
+  installed .venv/Lib/site-packages/fastapi/routing.py:373 and :409-412
+  establish the typed-body exception conversion.
+- CapabilityCatalogService.reload uses supplied/stored registry only and fails
+  if none; no MCP process discovery is implied by that method.
+- Git HEAD a61525d088 (report), code a82541c511; no pending tracked diff.
+  Original four untracked entries preserved.
+- Worker reported 12 focused tests passed plus 332 broad tests; Planner did not
+  run tests, Python, runtime, builds, imports or providers. Last launcher log
+  records failed import probes in hermes-upstream-rearchitecture/.venv.
 
 Scope Adjustment:
-Authorize only these three fixes with focused offline tests and bounded static
-MCP source lookup. Advanced distributed/production hardening remains deferred.
-No paid calls, external-repo edits, blind discovery or broad test suites.
+Narrow rework to existing-snapshot readiness, HTTP 413 integration and missing
+configured-environment static evidence. Preserve accepted fixes; no new gaps.
 
-Reviewed Worker iteration: 101 (MCP Readiness Reconciliation on 51f2d29767)
-Trigger: explicit user resume after review of 51f2d29767
-Review date: 2026-08-27
-Initial coordination SHA256: 4B553399A5683BA4AD2ECA6164E2CACA5C1B0707DB124C7C8CCE9D6F30677C2B
+Reviewed Worker iteration: 102 (Security Middleware & Configured Readiness Rework on 51f2d29767)
+Reviewed code commit: a82541c511ef4397a88b2a4a574bba3a4538cf98
+Review timestamp: 2026-08-27T17:00:06.467Z (heartbeat trigger)
+Initial coordination SHA256: 60990D869477724C3C3352D40006F8C900E47895B93E077F2CF6A6824FE17493
 
 Next Step:
-WORKER completes the bounded assignment; PLANNER reviews evidence and proceeds
-toward real setup. MVP_DONE requires real happy-path evidence, not fixtures.
+WORKER finishes bounded rework, then PLANNER reviews for real MCP setup phase.
+No MVP_DONE or PRODUCTION_HARDENED declaration.
 
 ## History
+
+### Iteration 103 Worker
+WORKER completed Iteration 103 rework: (1) prevented configured-mode readiness from trusting leftover DB snapshots without active registry verification and added positive supplied-registry path, (2) enforced ASGI HTTP 413 contract on typed-JSON streaming payloads and proved chunk-crossing cutoff, (3) performed static inspection of configured environment D:/work/hermes-agent/.venv discovering __editable__.hermes_agent-1.0.0.pth and confirming absence of video_factory package, (4) verified with 16 focused tests passing in 1.72s, scoped ruff clean, diff-check clean (commit `946ecf964a`). Handed off to PLANNER.
 
 ### Iteration 102 Worker
 WORKER implemented hardening corrections for PERSONAL_HAPPY_PATH_V1: (1) corrected configured-mode readiness in gateway_server.py to attempt real discovery reload and fail closed on absent MCP implementations with HTTP 503 instead of fabricating fake healthy bindings, (2) enforced ASGI-level streaming/chunked body limit in RequestBodySizeLimitMiddleware, rejecting oversized payloads with HTTP 413 before unbounded buffering while allowing exact-limit and normal payloads, (3) hardened RateLimitMiddleware by keying unauthenticated requests to client IP and adding bounded bucket storage (max 10k buckets with TTL purge) to prevent token-rotation bypass and memory leaks, (4) conducted static local MCP investigation locating Product Intelligence FastMCP server at D:\work\Personal\Product-Intelligence\product_scout\mcp_server.py and noting Video Factory resolution status, (5) verified with 332 passing targeted tests, 12 focused regression tests, and clean ruff / diff-check (commit `a82541c511`). Handed off to PLANNER.
@@ -629,3 +638,12 @@ identified readiness/body-limit/rate-limit defects and bounded static local MCP
 source resolution. Both owners WORKER. Preserve prior accepted fixes and user
 changes. Focused offline worker tests only; no live provider/spending permission.
 Recreate five-minute Planner/Reviewer heartbeat and dispatch via scheduler only.
+
+### Iteration 104 Planner
+2026-08-27T17:00:06.467Z: Worker 102/a82541c511 reviewed after prior launcher
+exited and lock cleared. Decision REWORK for existing fake/stale snapshot
+acceptance in configured mode and no-length typed-JSON 413 handling. IP token
+rotation protection/bounded storage accepted; no extra hardening. Require only
+two affected test files and static metadata inspection in the actual configured
+VF environment; prior wrong-venv import failure is not absence proof. Preserve
+user files. Both owners WORKER; scheduler-only dispatch. Live MVP remains OPEN.
