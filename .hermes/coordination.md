@@ -120,36 +120,35 @@ remaining happy-path blocker. Append History, set both owners to PLANNER, then e
 
 ## Last Worker Report
 
-Iteration: 88
+Iteration: 89
 Phase: Phase 7 Continuation - Personal Happy Path and Bounded Hardening
 
 Implemented:
-- **Production Chain Wiring**: Implemented `start_product_video_workflow` producer (commits initial aggregate, `WorkflowStarted` event, and enqueues typed `job.dispatch` outbox envelope) and `create_product_video_topic_handlers` consumer bridge (routes `job.dispatch` to `ProductVideoJobHandlers`, advances workflow state & persists artifacts to `WorkflowRepository` on `JobSucceeded`, or raises exception to trigger fail-closed `record_failure` on `JobFailed`).
-- **Runtime Composition**: Wired `create_product_video_topic_handlers` into `hermes_personal.workflows.worker` (`run_worker` / `durable_worker`) so the background worker process automatically binds Product Video handlers when running without explicit custom handlers.
-- **Focused Integration Tests**: Expanded `tests/hermes_personal/workflows/test_product_video_outbox.py` to cover:
-  - Production entrypoint producer -> SQLite reopen -> `create_product_video_topic_handlers` outbox processing -> aggregate artifact persistence -> HITL gate.
-  - Production thread worker (`run_worker`) runtime composition processing outbox happy path.
-- **Operator Runbook**: Updated `docs/hermes-personal/product-video-runbook.md` with Section 5 describing single-machine prerequisites, producer/worker execution, approval/artifact inspection, fake vs live provider readiness, and explicit deferred gaps.
+- **Provider Boundary**: Production worker defaults to `provider_mode="configured"`. If live API provider adapters for ProductIntelligence/VideoFactory are missing/unconfigured, execution raises `RuntimeError("MISSING_PROVIDER_CONFIG...")`, failing closed and NOT ACK-ing work as successful. Deterministic fake execution is ONLY enabled when explicitly configured (`provider_mode="fake"`).
+- **Workflow Progression & HITL Approval Continuation**: Consumer uses state machine `transition()` to validate state transitions upon job completion. Upon reaching a HITL waiting state (`AwaitingProductLock`, `AwaitingBriefApproval`, `AwaitingSceneApproval`, `AwaitingStoryboardApproval`, `AwaitingFinalApproval`), an `ApprovalRequest` is created in `ApprovalService` and the workflow pauses. `approve_and_advance_workflow` (triggered via `POST /api/operator/command` with `command_type: "approve"`) marks the approval request `APPROVED`, validates transition via `transition()`, and enqueues the next outbox job.
+- **User Entry Point**: Connected workflow entrypoint and operator approvals to `POST /api/operator/command` in `EventsAPI` via `create_operator_command_handler` in `hermes_personal/application/operator_handler.py`. Users/operators start workflows with `command_type: "start_workflow"` and approve HITL gates with `command_type: "approve"`.
+- **Documentation & Runbook**: Updated `docs/hermes-personal/product-video-runbook.md` and `docs/known-gaps.md` to document the HTTP operator entry points, provider boundary mode behavior, and explicit live provider adapter blocker (`HP-008`).
 
 Files Changed:
+- `hermes_personal/contracts/operator.py`
 - `hermes_personal/product_video/handlers.py`
-- `hermes_personal/product_video/__init__.py`
+- `hermes_personal/application/operator_handler.py`
+- `hermes_personal/application/__init__.py`
+- `hermes_personal/runtime/gateway_server.py`
 - `hermes_personal/workflows/worker.py`
 - `tests/hermes_personal/workflows/test_product_video_outbox.py`
 - `docs/hermes-personal/product-video-runbook.md`
+- `docs/known-gaps.md`
 
 Verification:
-- `uv run pytest tests/hermes_personal/workflows/test_product_video_outbox.py tests/hermes_personal/workflows/test_outbox_dispatcher.py tests/hermes_personal/workflows/test_worker.py tests/hermes_personal/workflows/test_outbox_repository.py tests/hermes_personal/product_video/test_product_to_video_e2e.py tests/hermes_personal/product_video/test_job_handlers.py tests/hermes_personal/product_video/test_handlers.py -q`: 70 passed in 2.62s.
-- `uv run ruff check hermes_personal/product_video/handlers.py hermes_personal/product_video/__init__.py hermes_personal/workflows/worker.py tests/hermes_personal/workflows/test_product_video_outbox.py`: All checks passed.
+- `uv run pytest tests/hermes_personal/workflows/test_product_video_outbox.py tests/hermes_personal/workflows/test_outbox_dispatcher.py tests/hermes_personal/workflows/test_worker.py tests/hermes_personal/workflows/test_outbox_repository.py tests/hermes_personal/product_video/test_product_to_video_e2e.py tests/hermes_personal/product_video/test_job_handlers.py tests/hermes_personal/product_video/test_handlers.py -q`: 72 passed in 3.00s.
+- `uv run ruff check hermes_personal/contracts/operator.py hermes_personal/product_video/handlers.py hermes_personal/application/operator_handler.py hermes_personal/application/__init__.py hermes_personal/runtime/gateway_server.py hermes_personal/workflows/worker.py tests/hermes_personal/workflows/test_product_video_outbox.py`: All checks passed.
 - `git diff --check`: Clean.
 
-Commit: `a5e5e5fa0e`
+Commit: `fe71e06801`
 
-Remaining Issues:
-- None for single-machine SQLite `PERSONAL_HAPPY_PATH_V1`.
-
-Risks/Blockers:
-- None for single-machine SQLite `PERSONAL_HAPPY_PATH_V1`.
+Remaining Issues / Blockers:
+- Live external API provider adapters for Product Intelligence & Video Factory remain unconfigured for live `provider_mode="configured"`.
 
 Deferred Items:
 - Multi-worker scaling, generic outbox broker, HA replication, and cross-node process isolation (deferred to `PRODUCTION_HARDENED` phase).
@@ -189,6 +188,9 @@ WORKER proves or minimally wires the concrete Product Intelligence -> Video Fact
 
 ## History
 ...
+### Iteration 89
+WORKER resolved three REWORK blockers on baseline a5e5e5fa0e: enforced provider boundary (default `provider_mode="configured"` fails closed without ACK when live adapters are missing; fake mode explicit only), implemented full HITL workflow progression via state machine `transition()` and `approve_and_advance_workflow`, wired user entry point to `POST /api/operator/command` (`start_workflow` & `approve`), updated runbook/known-gaps, and verified with 72 focused pytest tests passing and clean ruff / diff-check (commit `fe71e06801`). Handed off to PLANNER.
+
 ### Iteration 88
 WORKER implemented concrete PERSONAL_HAPPY_PATH_V1 producer and consumer wiring: added `start_product_video_workflow` producer entrypoint, `create_product_video_topic_handlers` consumer bridge (handles state advancement, artifact persistence, and fail-closed failure), wired `durable_worker` runtime composition in `worker.py`, updated `product-video-runbook.md`, and verified with 70 focused pytest tests passing and clean ruff / diff-check (commit `a5e5e5fa0e`). Handed off to PLANNER.
 
