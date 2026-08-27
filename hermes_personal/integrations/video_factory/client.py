@@ -52,13 +52,17 @@ class VideoFactoryClient:
 
     def create_creative_brief(
         self,
+        product_id: str | None = None,
         brief_config: dict | None = None,
         workflow_id: str | None = None,
         job_id: str | None = None,
         idempotency_key: str | None = None,
         **kwargs: Any,
     ) -> dict:
-        req = CreativeBriefRequest()
+        req = CreativeBriefRequest(
+            product_id=product_id or "",
+            brief_config=brief_config or {},
+        )
         return self._wrap(req, workflow_id=workflow_id, job_id=job_id, idempotency_key=idempotency_key)
 
     def create_scene_plan(

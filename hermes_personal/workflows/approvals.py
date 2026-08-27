@@ -65,15 +65,21 @@ class ApprovalService:
                 """
             )
 
-    def submit_request(self, payload: Dict[str, Any]) -> str:
+    def submit_request(self, payload: Dict[str, Any], cursor: sqlite3.Cursor | None = None) -> str:
         request_id = str(uuid.uuid4())
         now = datetime.utcnow().isoformat() + "Z"
-        with self.conn:
-            cur = self.conn.cursor()
-            cur.execute(
+        if cursor is not None:
+            cursor.execute(
                 "INSERT INTO approval_request (request_id, status, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
                 (request_id, ApprovalStatus.PENDING.value, json.dumps(payload), now, now),
             )
+        else:
+            with self.conn:
+                cur = self.conn.cursor()
+                cur.execute(
+                    "INSERT INTO approval_request (request_id, status, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    (request_id, ApprovalStatus.PENDING.value, json.dumps(payload), now, now),
+                )
         return request_id
 
     def _update_status(self, request_id: str, new_status: ApprovalStatus) -> None:

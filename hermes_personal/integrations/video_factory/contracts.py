@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 
 @dataclass(frozen=True)
@@ -20,6 +20,8 @@ class VideoArtifactRef:
 
 @dataclass(frozen=True)
 class CreativeBriefRequest:
+    product_id: str = ""
+    brief_config: dict = field(default_factory=dict)
     owner: str = "video_factory"
     version: int = 1
 

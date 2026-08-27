@@ -874,3 +874,183 @@ def test_repeated_approval_does_not_duplicate_job(tmp_path):
     assert len(outbox_after_second) == 1
     assert outbox_after_second[0].outbox_id == outbox_after_first[0].outbox_id
     conn.close()
+
+
+def test_approval_request_mismatch_rejected_without_db_mutation(tmp_path):
+    """FIX 1: Test that an approval request that is pending but NOT the current pending request
+    for the workflow aggregate is rejected without mutating DB state, approval status, or outbox.
+    """
+    db_file = tmp_path / "appr_mismatch.db"
+    conn = connect(db_file)
+    cmd_handler = create_operator_command_handler(conn, provider_mode="fake")
+    events_api = EventsAPI(
+        command_handler=cmd_handler,
+        auth_validator=lambda token, owner: token == "valid_token" and owner == "alice",
+    )
+    app = create_application(events_api=events_api)
+    client = TestClient(app)
+
+    repo = WorkflowRepository(conn)
+    topic_handlers = create_product_video_topic_handlers(workflow_repository=repo, provider_mode="fake")
+    outbox_repo = OutboxRepository(conn)
+    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="mismatch-worker")
+
+    wf_id = "wf_mismatch_01"
+    start_product_video_workflow(
+        workflow_repository=repo,
+        workflow_id=wf_id,
+        product_name="Smart Ring",
+        keywords=["health"],
+    )
+    dispatcher.process_batch()
+
+    agg_before, ver_before = repo.get_workflow(wf_id)
+    canonical_req_id = agg_before["pending_approval_id"]
+
+    # Submit an orphan/stale pending approval request directly to ApprovalService
+    appr_svc = ApprovalService(conn)
+    stale_req_id = appr_svc.submit_request({
+        "workflow_id": wf_id,
+        "gate": "AwaitingProductLock",
+        "workflow_version": ver_before,
+    })
+
+    # Attempt to approve the stale_req_id (which is not agg_before["pending_approval_id"])
+    resp = client.post(
+        "/api/operator/command",
+        headers={"Authorization": "Bearer valid_token"},
+        json={
+            "owner_id": "alice",
+            "command_type": "approve",
+            "target_id": stale_req_id,
+            "expected_version": ver_before,
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "command_failed"
+    assert "mismatch" in resp.json()["message"].lower() or "does not match" in resp.json()["message"].lower()
+
+    # Verify DB state, canonical approval request, and outbox remain completely unmutated
+    agg_after, ver_after = repo.get_workflow(wf_id)
+    assert agg_after["pending_approval_id"] == canonical_req_id
+    assert agg_after["state"] == ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK.value
+    assert ver_after == ver_before
+    assert appr_svc.get_request(canonical_req_id).status.value == "pending"
+    assert outbox_repo.list_unacknowledged() == []
+    conn.close()
+
+
+def test_job_completion_hitl_approval_creation_rollback_on_persistence_failure(tmp_path):
+    """FIX 2: Test that if repo.commit_workflow raises an exception during job completion,
+    the HITL approval request creation and aggregate update roll back atomically together,
+    leaving zero approval orphans in a fresh SQLite connection.
+    """
+    db_file = tmp_path / "creation_rollback.db"
+    conn = connect(db_file)
+    repo = WorkflowRepository(conn)
+    wf_id = "wf_create_rollback_01"
+
+    start_product_video_workflow(
+        workflow_repository=repo,
+        workflow_id=wf_id,
+        product_name="Drone Camera",
+        keywords=["4k", "flight"],
+    )
+
+    topic_handlers = create_product_video_topic_handlers(workflow_repository=repo, provider_mode="fake")
+    outbox_repo = OutboxRepository(conn)
+    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="rollback-create-worker")
+
+    # Inject failure during commit_workflow
+    def failing_commit_workflow(*args, **kwargs):
+        raise RuntimeError("Simulated Persistence Failure on Job Completion")
+
+    with patch.object(WorkflowRepository, "commit_workflow", side_effect=failing_commit_workflow):
+        report = dispatcher.process_batch()
+        assert report.failed == 1
+
+    conn.close()
+
+    # Reopen fresh connection to verify zero orphan approval records exist
+    fresh_conn = connect(db_file)
+    fresh_repo = WorkflowRepository(fresh_conn)
+    fresh_appr_svc = ApprovalService(fresh_conn)
+
+    agg, ver = fresh_repo.get_workflow(wf_id)
+    assert agg["state"] == ProductVideoWorkflowState.RESEARCHING.value
+    assert "pending_approval_id" not in agg
+
+    # Query approval_request table directly: MUST be completely empty (0 rows)
+    cur = fresh_conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM approval_request")
+    assert cur.fetchone()[0] == 0
+    fresh_conn.close()
+
+
+def test_provider_boundary_spy_receives_product_identity_and_locked_resource_pack(tmp_path):
+    """FIX 3: Test that VideoFactoryClient receives the exact product identity (product_id)
+    and locked resource pack payload at the provider boundary.
+    """
+    from hermes_personal.application.operator_handler import approve_and_advance_workflow
+    from hermes_personal.workflows.budgets import BudgetPolicy, init_default_engine
+    from hermes_personal.integrations.video_factory.client import VideoFactoryClient
+
+    init_default_engine(BudgetPolicy(max_total=1000, per_channel={"video_factory": 500, "product_intelligence": 500}))
+
+    db_file = tmp_path / "provider_spy.db"
+    conn = connect(db_file)
+    repo = WorkflowRepository(conn)
+    wf_id = "wf_spy_01"
+
+    start_product_video_workflow(
+        workflow_repository=repo,
+        workflow_id=wf_id,
+        product_name="Smart Watch Ultra",
+        keywords=["fitness", "gps"],
+    )
+
+    recorded_calls = []
+
+    class SpyVideoFactoryClient(VideoFactoryClient):
+        def create_creative_brief(self, product_id=None, brief_config=None, **kwargs):
+            recorded_calls.append({
+                "product_id": product_id,
+                "brief_config": brief_config,
+                "kwargs": kwargs,
+            })
+            return super().create_creative_brief(product_id=product_id, brief_config=brief_config, **kwargs)
+
+    spy_client = SpyVideoFactoryClient()
+    topic_handlers = create_product_video_topic_handlers(
+        workflow_repository=repo,
+        video_client=spy_client,
+        provider_mode="fake",
+    )
+    outbox_repo = OutboxRepository(conn)
+    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="spy-worker")
+
+    # Step 1: research -> AwaitingProductLock
+    rep1 = dispatcher.process_batch()
+    assert rep1.succeeded == 1
+
+    # Step 2: approve AwaitingProductLock via approve_and_advance_workflow -> enqueues resource_pack
+    agg, ver = repo.get_workflow(wf_id)
+    approve_and_advance_workflow(conn, agg["pending_approval_id"], expected_version=ver)
+
+    # Advance state: resource_pack -> lock -> creative_brief -> AwaitingBriefApproval
+    rep2 = dispatcher.process_batch()  # resource_pack -> enqueues lock
+    assert rep2.succeeded == 1, f"rep2 failed: {rep2}"
+
+    rep3 = dispatcher.process_batch()  # lock -> enqueues creative_brief
+    assert rep3.succeeded == 1, f"rep3 failed: {rep3}"
+
+    rep4 = dispatcher.process_batch()  # creative_brief -> AwaitingBriefApproval
+    assert rep4.succeeded == 1, f"rep4 failed: {rep4}"
+
+    # Assert VideoFactoryClient received the exact product_id and locked resource pack!
+    assert len(recorded_calls) == 1
+    brief_call = recorded_calls[0]
+    assert brief_call["product_id"].startswith("rp_")
+    assert "resource_pack" in brief_call["brief_config"]
+    assert brief_call["brief_config"]["resource_pack"]["owner"] == "product_intelligence"
+    conn.close()

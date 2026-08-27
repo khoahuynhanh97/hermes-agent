@@ -271,7 +271,8 @@ class ProductVideoJobHandlers:
         try:
             alloc = reserve_budget("video_factory", 5, idempotency_key=cache_key)
             result = self.video_client.create_creative_brief(
-                brief_config,
+                product_id=product_id,
+                brief_config=brief_config,
                 workflow_id=ctx.workflow_id,
                 job_id=ctx.job_id,
                 idempotency_key=ctx.idempotency_key,
@@ -551,12 +552,12 @@ def create_product_video_topic_handlers(
 
                     is_hitl = False
                     gate_name = None
-                    outbox_next = None
 
                     if job_name == "product_video.research":
                         next_validated = transition(ProductVideoWorkflowState.RESEARCHING, ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK)
                         is_hitl = True
                         gate_name = "AwaitingProductLock"
+                        outbox_next = None
                     elif job_name == "product_video.resource_pack":
                         curr_st = agg.get("state")
                         if curr_st != ProductVideoWorkflowState.BUILDING_RESOURCE_PACK.value and curr_st != ProductVideoWorkflowState.BUILDING_RESOURCE_PACK:
@@ -565,7 +566,7 @@ def create_product_video_topic_handlers(
                         outbox_next = build_envelope(
                             workflow_id=target_wf,
                             topic="job.dispatch",
-                            idempotency_key=f"idemp_product_video.lock_{target_wf}_v{version + 1}",
+                            idempotency_key=f"idemp_lock_{target_wf}_v{version + 1}",
                             payload={
                                 "job_name": "product_video.lock",
                                 "workflow_id": target_wf,
@@ -575,18 +576,12 @@ def create_product_video_topic_handlers(
                         )
                     elif job_name == "product_video.lock":
                         next_validated = transition(ProductVideoWorkflowState.BUILDING_RESOURCE_PACK, ProductVideoWorkflowState.CREATING_BRIEF)
-                        artifact = result.artifact_ref
-                        if isinstance(artifact, dict):
-                            pid = artifact.get("product_id") or artifact.get("id") or f"prod_{target_wf}"
-                        elif isinstance(artifact, str) and artifact:
-                            pid = artifact
-                        else:
-                            pid = f"prod_{target_wf}"
-                        product_id = str(pid)
+                        rp_dict = result.artifact_ref.get("resource_pack", result.artifact_ref) if isinstance(result.artifact_ref, dict) else {}
+                        product_id = str(rp_dict.get("product_id") or rp_dict.get("resource_pack_id") or rp_dict.get("id") or f"prod_{target_wf}")
                         outbox_next = build_envelope(
                             workflow_id=target_wf,
                             topic="job.dispatch",
-                            idempotency_key=f"idemp_product_video.creative_brief_{target_wf}_v{version + 1}",
+                            idempotency_key=f"idemp_brief_{target_wf}_v{version + 1}",
                             payload={
                                 "job_name": "product_video.creative_brief",
                                 "workflow_id": target_wf,
@@ -598,20 +593,25 @@ def create_product_video_topic_handlers(
                         next_validated = transition(ProductVideoWorkflowState.CREATING_BRIEF, ProductVideoWorkflowState.AWAITING_BRIEF_APPROVAL)
                         is_hitl = True
                         gate_name = "AwaitingBriefApproval"
+                        outbox_next = None
                     elif job_name == "product_video.scene_plan":
                         next_validated = transition(ProductVideoWorkflowState.CREATING_SCENE_PLAN, ProductVideoWorkflowState.AWAITING_SCENE_APPROVAL)
                         is_hitl = True
                         gate_name = "AwaitingSceneApproval"
+                        outbox_next = None
                     elif job_name == "product_video.storyboard":
                         next_validated = transition(ProductVideoWorkflowState.CREATING_STORYBOARD, ProductVideoWorkflowState.AWAITING_STORYBOARD_APPROVAL)
                         is_hitl = True
                         gate_name = "AwaitingStoryboardApproval"
+                        outbox_next = None
                     elif job_name == "product_video.render":
                         next_validated = transition(ProductVideoWorkflowState.RENDERING, ProductVideoWorkflowState.AWAITING_FINAL_APPROVAL)
                         is_hitl = True
                         gate_name = "AwaitingFinalApproval"
+                        outbox_next = None
                     elif job_name == "product_video.export":
                         next_validated = transition(ProductVideoWorkflowState.EXPORTING, ProductVideoWorkflowState.COMPLETED)
+                        outbox_next = None
                     else:
                         raise ValueError(f"Unknown job_name in handle_job_dispatch: {job_name}")
 
@@ -620,35 +620,40 @@ def create_product_video_topic_handlers(
                     if result.artifact_ref is not None:
                         next_agg["latest_artifact"] = result.artifact_ref
 
-                    if is_hitl and gate_name:
-                        approval_svc = ApprovalService(repo.conn)
-                        req_id = approval_svc.submit_request({
-                            "workflow_id": target_wf,
-                            "gate": gate_name,
-                            "workflow_version": version + 1,
-                            "artifact_ref": result.artifact_ref,
-                        })
-                        next_agg["pending_approval_gate"] = gate_name
-                        next_agg["pending_approval_id"] = req_id
-                    else:
-                        next_agg.pop("pending_approval_gate", None)
-                        next_agg.pop("pending_approval_id", None)
+                    with repo.conn:
+                        cur = repo.conn.cursor()
+                        if is_hitl and gate_name:
+                            approval_svc = ApprovalService(repo.conn)
+                            req_id = approval_svc.submit_request(
+                                {
+                                    "workflow_id": target_wf,
+                                    "gate": gate_name,
+                                    "workflow_version": version + 1,
+                                    "artifact_ref": result.artifact_ref,
+                                },
+                                cursor=cur,
+                            )
+                            next_agg["pending_approval_gate"] = gate_name
+                            next_agg["pending_approval_id"] = req_id
+                        else:
+                            next_agg.pop("pending_approval_gate", None)
+                            next_agg.pop("pending_approval_id", None)
 
-                    repo.commit_workflow(
-                        workflow_id=target_wf,
-                        aggregate_json=json.dumps(next_agg),
-                        events=[
-                            {
-                                "event_id": f"evt_{envelope.message_id}",
-                                "command_id": f"cmd_{envelope.message_id}",
-                                "event_type": "JobSucceeded",
-                                "timestamp": datetime.now(timezone.utc).isoformat(),
-                                "payload": {"job_name": job_name, "artifact_ref": result.artifact_ref},
-                            }
-                        ],
-                        outbox_message=outbox_next,
-                        expected_version=version,
-                    )
+                        repo.commit_workflow(
+                            workflow_id=target_wf,
+                            aggregate_json=json.dumps(next_agg),
+                            events=[
+                                {
+                                    "event_id": f"evt_{envelope.message_id}",
+                                    "command_id": f"cmd_{envelope.message_id}",
+                                    "event_type": "JobSucceeded",
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                                    "payload": {"job_name": job_name, "artifact_ref": result.artifact_ref},
+                                }
+                            ],
+                            outbox_message=outbox_next,
+                            expected_version=version,
+                        )
 
     return {"job.dispatch": handle_job_dispatch}
 
