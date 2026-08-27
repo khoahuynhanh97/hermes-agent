@@ -29,23 +29,28 @@ def approve_and_advance_workflow(
     repo = WorkflowRepository(connection)
 
     # 1. Resolve workflow & approval request
-    if target_id.startswith("wf_"):
-        wf_data = repo.get_workflow(target_id)
-        if wf_data is None:
-            raise KeyError(f"Workflow '{target_id}' not found")
-        agg, current_version = wf_data
-        wf_id = target_id
-        req_id = agg.get("pending_approval_id")
-        if not req_id:
-            raise KeyError("No pending approval for workflow")
-        req = approval_service.get_request(req_id)
-    else:
+    try:
         req = approval_service.get_request(target_id)
-        wf_id = req.payload.get("workflow_id")
+        is_approval_req = True
+    except KeyError:
+        is_approval_req = False
+
+    if is_approval_req:
+        wf_id = req.payload.get("workflow_id") or target_id
         wf_data = repo.get_workflow(wf_id)
         if wf_data is None:
             raise KeyError(f"Workflow '{wf_id}' not found")
         agg, current_version = wf_data
+    else:
+        wf_data = repo.get_workflow(target_id)
+        if wf_data is None:
+            raise KeyError(f"Approval request or workflow '{target_id}' not found")
+        agg, current_version = wf_data
+        wf_id = target_id
+        req_id = agg.get("pending_approval_id")
+        if not req_id:
+            raise KeyError(f"No pending approval for workflow '{wf_id}'")
+        req = approval_service.get_request(req_id)
 
     # 2. Check workflow version if expected_version is provided
     if expected_version is not None and expected_version != current_version:

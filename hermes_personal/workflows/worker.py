@@ -23,24 +23,10 @@ def run_worker(
     topic_handlers: Optional[Dict[str, Callable[[OutboxEnvelope], None]]] = None,
     delivery_fn: Optional[Callable[[str, str], None]] = None,
     worker_id: Optional[str] = None,
+    tool_registry: Any | None = None,
     provider_mode: Optional[str] = None,
 ) -> None:
-    """Run the durable outbox worker loop.
-
-    Preferred usage: pass ``topic_handlers`` for typed envelope routing.
-    The worker claims pending outbox rows, routes each to the appropriate
-    topic handler, and ACKs on success.
-
-    If neither ``topic_handlers`` nor ``delivery_fn`` is provided the worker
-    runs **fail-closed**: every claim raises ``delivery_unconfigured``,
-    triggering ``record_failure``.  Messages remain durable and exhaust
-    ``max_attempts`` before quarantine.  This is the correct behaviour when no
-    concrete consumer has been registered yet (e.g. HP-007 scope before the
-    JobRepository consumer is wired in HP-008).
-
-    ``delivery_fn`` is accepted for backward-compatibility with existing tests
-    that pass a plain ``(workflow_id, message) -> None`` callable.
-    """
+    """Run the durable outbox worker loop."""
     if stop_event is None:
         stop_event = threading.Event()
 
@@ -61,6 +47,7 @@ def run_worker(
         topic_handlers = create_product_video_topic_handlers(
             workflow_engine=wf_engine,
             workflow_repository=wf_repo,
+            tool_registry=tool_registry,
             provider_mode=_provider_mode,
         )
 
@@ -72,7 +59,7 @@ def run_worker(
         topic_handlers=topic_handlers,
     )
 
-    logger.info("Durable worker started (db=%s, worker_id=%s)", db_path, _worker_id)
+    logger.info("Durable worker started (db=%s, worker_id=%s, provider_mode=%s)", db_path, _worker_id, _provider_mode)
     try:
         while not stop_event.is_set():
             try:
@@ -95,6 +82,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--poll-interval", type=float, default=1.0, help="Poll interval in seconds"
     )
+    parser.add_argument(
+        "--provider-mode",
+        choices=["configured", "fake"],
+        default=os.environ.get("HERMES_PROVIDER_MODE", "configured"),
+        help="Provider mode ('configured' for live MCP/provider resolution, 'fake' for offline deterministic test)",
+    )
     args = parser.parse_args(argv)
 
     home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
@@ -110,12 +103,14 @@ def main(argv: list[str] | None = None) -> int:
         signal.signal(signal.SIGINT, _signal_handler)
         signal.signal(signal.SIGTERM, _signal_handler)
     except (ValueError, AttributeError):
-        # Not in main thread or platform doesn't support signals.
         pass
 
-    # No topic_handlers registered for HP-007 – worker runs fail-closed.
-    # The concrete JobRepository consumer will be wired in HP-008.
-    run_worker(db_path=db_path, poll_interval=args.poll_interval, stop_event=stop_event)
+    run_worker(
+        db_path=db_path,
+        poll_interval=args.poll_interval,
+        stop_event=stop_event,
+        provider_mode=args.provider_mode,
+    )
     return 0
 
 

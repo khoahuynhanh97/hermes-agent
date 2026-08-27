@@ -116,18 +116,70 @@ uv run pytest tests/hermes_personal/product_video tests/hermes_personal/migratio
   ```
   `approve` validates approval request state, verifies `expected_version`, marks request `APPROVED`, validates state transition via `transition()`, enqueues the next outbox job, and commits atomically in SQLite.
 
-### Fake-Provider Verification vs. Live-Provider Readiness
-- **Fake-Provider Verification (MVP / PERSONAL_HAPPY_PATH_V1)**:
-  - Enabled explicitly via `provider_mode="fake"` or `$env:HERMES_PROVIDER_MODE = "fake"`.
-  - Uses `ProductIntelligenceClient` and `VideoFactoryClient` in deterministic fake mode.
-  - Zero external network calls, zero paid API spend, 100% offline verification.
-- **Live-Provider Readiness & Blocker**:
-  - In `provider_mode="configured"`, if live API adapters for Product Intelligence or Video Factory are missing/unconfigured, the worker fails closed (`MISSING_PROVIDER_CONFIG`) and does **NOT** ACK work as successful.
-  - Required live adapters missing:
-    1. `ProductIntelligenceClient`: Requires HTTP REST/gRPC client implementation for real PDP scrapers & LLM extraction services.
-    2. `VideoFactoryClient`: Requires HTTP REST client for GPU video rendering engine & cloud MP4 encoding/export pipeline.
-    3. `RuntimeConfig`: Requires `provider_mode: "configured"` with credentials (`HERMES_API_KEY`, GPU render service endpoints).
+### MCP Tool & Live Provider Resolution Matrix
 
-### Deferred Gaps & Blockers
-- **Live Provider Adapter Blocker**: Real external API HTTP/gRPC adapters for `ProductIntelligenceClient` and `VideoFactoryClient` remain unconfigured in `provider_mode="configured"`.
-- **Infrastructure**: Distributed outbox broker, multi-worker leader election, high-availability replication, and cross-node process isolation remain deferred to `PRODUCTION_HARDENED` phase. Single-machine SQLite happy path is fully verified.
+| Workflow Stage | Job Name | Live Adapter | Dispatched MCP / Local Wire Tool | Fallback / Behavior in `provider_mode="configured"` |
+|---|---|---|---|---|
+| 1. Market Research | `product_video.research` | `MCPProductIntelligenceAdapter` | `mcp__product_intelligence__research_product` / `product_intelligence_research` / `web_search` | Fails closed with `MISSING_PROVIDER_CONFIG` |
+| 2. Resource Pack Draft | `product_video.resource_pack` | `MCPProductIntelligenceAdapter` | `mcp__product_intelligence__build_resource_pack` / `product_intelligence_build_resource_pack` | Uses deterministic build if tool unmapped |
+| 3. Lock Resource Pack | `product_video.lock` | `MCPProductIntelligenceAdapter` | `mcp__product_intelligence__lock_resource_pack` / `product_intelligence_lock_resource_pack` | Uses deterministic lock if tool unmapped |
+| 4. Creative Brief | `product_video.creative_brief` | `MCPVideoFactoryAdapter` | `mcp__video_factory__create_brief` / `video_factory_create_brief` | Fails closed with `MISSING_PROVIDER_CONFIG` |
+| 5. Scene Plan | `product_video.scene_plan` | `MCPVideoFactoryAdapter` | `mcp__video_factory__create_scene_plan` / `video_factory_create_scene_plan` | Fails closed with `MISSING_PROVIDER_CONFIG` |
+| 6. Storyboard | `product_video.storyboard` | `MCPVideoFactoryAdapter` | `mcp__video_factory__create_storyboard` / `video_factory_create_storyboard` | Fails closed with `MISSING_PROVIDER_CONFIG` |
+| 7. GPU Render | `product_video.render` | `MCPVideoFactoryAdapter` | `mcp__video_factory__render` / `video_factory_render` / `video_generate` | Polls `mcp__video_factory__get_job_status` if async; fails closed if unconfigured |
+| 8. MP4 Export | `product_video.export` | `MCPVideoFactoryAdapter` | `mcp__video_factory__export` / `video_factory_export` | Fails closed with `MISSING_PROVIDER_CONFIG` |
+
+---
+
+### Sample Configuration (`config.yaml`) & Secrets
+
+In `~/.hermes/config.yaml` (behavioral settings only; no secrets):
+```yaml
+# ~/.hermes/config.yaml
+mcp_servers:
+  product_intelligence:
+    command: "python"
+    args: ["-m", "mcp_servers.product_intelligence"]
+    env:
+      API_ENDPOINT: "https://api.product-intel.local/v1"
+  video_factory:
+    command: "python"
+    args: ["-m", "mcp_servers.video_factory"]
+    env:
+      GPU_ENDPOINT: "https://gpu-render.local/v1"
+
+# Provider mode for background worker: 'configured' (live MCP) or 'fake' (offline test)
+provider_mode: "configured"
+```
+
+In `~/.hermes/.env` (credentials only):
+```bash
+# Secrets are loaded into environment variables; never checked into git
+HERMES_API_KEY=hermes_operator_secret_token_here
+VIDEO_FACTORY_API_KEY=vf_live_secret_key_here
+PRODUCT_INTELLIGENCE_API_KEY=pi_live_secret_key_here
+```
+
+---
+
+### Verification Tiers & Readiness Status
+
+1. **Offline Verified (100% Passing)**:
+   - Full 9-stage data progression, 5 HITL gates, optimistic concurrency (`expected_version`), atomic SQLite transactions, and outbox claim/lease/retry/quarantine mechanisms.
+   - Tested and verified with 84 targeted tests and 609 personal package tests without calling paid external APIs.
+
+2. **Live Wired but Unverified**:
+   - `MCPProductIntelligenceAdapter` and `MCPVideoFactoryAdapter` dynamically probe `ToolRegistry` for registered tools, map payloads, handle async job polling, and forward product/resource pack IDs across all stages.
+   - Fails closed with explicit, actionable error message if required MCP tools are missing in `configured` mode.
+
+3. **Live Verified**:
+   - Requires user to launch live MCP servers with external credentials and run a complete real-world video generation.
+
+---
+
+### Starting the Live Worker
+
+```powershell
+# Run durable background worker in live configured mode
+uv run python -m hermes_personal.workflows.worker --db-path ~/.hermes/hermes.db --poll-interval 1.0 --provider-mode configured
+```

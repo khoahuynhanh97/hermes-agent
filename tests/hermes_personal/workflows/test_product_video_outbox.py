@@ -1044,13 +1044,149 @@ def test_provider_boundary_spy_receives_product_identity_and_locked_resource_pac
     rep3 = dispatcher.process_batch()  # lock -> enqueues creative_brief
     assert rep3.succeeded == 1, f"rep3 failed: {rep3}"
 
+    agg_locked, _ = repo.get_workflow(wf_id)
+    locked_pack = agg_locked.get("latest_artifact")
+    assert locked_pack is not None
+
     rep4 = dispatcher.process_batch()  # creative_brief -> AwaitingBriefApproval
     assert rep4.succeeded == 1, f"rep4 failed: {rep4}"
 
     # Assert VideoFactoryClient received the exact product_id and locked resource pack!
     assert len(recorded_calls) == 1
     brief_call = recorded_calls[0]
-    assert brief_call["product_id"].startswith("rp_")
-    assert "resource_pack" in brief_call["brief_config"]
-    assert brief_call["brief_config"]["resource_pack"]["owner"] == "product_intelligence"
+    assert brief_call["product_id"] == locked_pack.get("resource_pack_id")
+    assert brief_call["brief_config"]["resource_pack"] == locked_pack
+    conn.close()
+
+
+def test_approve_and_advance_workflow_resolves_workflow_id_without_wf_prefix(tmp_path):
+    """Test that approve_and_advance_workflow resolves workflow ID without 'wf_' prefix."""
+    from hermes_personal.application.operator_handler import approve_and_advance_workflow
+
+    db_file = tmp_path / "prefix_test.db"
+    conn = connect(db_file)
+    repo = WorkflowRepository(conn)
+    wf_id = "custom_video_pipeline_42"
+
+    start_product_video_workflow(
+        workflow_repository=repo,
+        workflow_id=wf_id,
+        product_name="Action Camera",
+        keywords=["4k", "waterproof"],
+    )
+
+    topic_handlers = create_product_video_topic_handlers(workflow_repository=repo, provider_mode="fake")
+    outbox_repo = OutboxRepository(conn)
+    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="prefix-worker")
+
+    rep1 = dispatcher.process_batch()
+    assert rep1.succeeded == 1
+
+    agg, ver = repo.get_workflow(wf_id)
+    assert agg["state"] == ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK.value
+    assert "pending_approval_id" in agg
+
+    # Pass the workflow_id directly (which has NO wf_ prefix) instead of approval request id
+    res = approve_and_advance_workflow(conn, wf_id, expected_version=ver)
+    assert res["status"] == "approved"
+    assert res["workflow_id"] == wf_id
+    assert res["new_state"] == ProductVideoWorkflowState.BUILDING_RESOURCE_PACK.value
+
+    # Non-existent target_id raises KeyError
+    with pytest.raises(KeyError, match="not found"):
+        approve_and_advance_workflow(conn, "completely_unknown_id")
+
+    # Workflow without pending approval raises KeyError
+    with pytest.raises(KeyError, match="No pending approval"):
+        approve_and_advance_workflow(conn, wf_id)
+
+    conn.close()
+
+
+def test_configured_mode_with_registered_mcp_wire_tools(tmp_path):
+    """Test that provider_mode='configured' resolves and executes registered MCP wire tools."""
+    from hermes_personal.workflows.budgets import BudgetPolicy, init_default_engine
+
+    init_default_engine(BudgetPolicy(max_total=1000, per_channel={"video_factory": 500, "product_intelligence": 500}))
+
+    db_file = tmp_path / "configured_mcp.db"
+    conn = connect(db_file)
+    repo = WorkflowRepository(conn)
+    wf_id = "wf_mcp_01"
+
+    called_mcp_tools = []
+    fake_tool_registry = {
+        "mcp__product_intelligence__research_product": lambda p: called_mcp_tools.append(("research", p)) or {
+            "product_name": p["product_name"],
+            "keywords": p["keywords"],
+            "report": json.dumps({"product_name": p["product_name"], "keywords": p["keywords"], "pdp_url": "https://example.com"}),
+            "external_id": "ext_pi_123",
+        },
+        "mcp__video_factory__create_brief": lambda p: called_mcp_tools.append(("brief", p)) or {
+            "product_id": p["product_id"],
+            "brief_id": f"brief_{p['product_id']}",
+            "external_id": "ext_vf_brief_456",
+        },
+    }
+
+    start_product_video_workflow(
+        workflow_repository=repo,
+        workflow_id=wf_id,
+        product_name="Drone Pro 4K",
+        keywords=["gimbal", "4k"],
+    )
+
+    topic_handlers = create_product_video_topic_handlers(
+        workflow_repository=repo,
+        tool_registry=fake_tool_registry,
+        provider_mode="configured",
+    )
+    outbox_repo = OutboxRepository(conn)
+    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="mcp-worker")
+
+    # Step 1: research -> AwaitingProductLock
+    rep1 = dispatcher.process_batch()
+    assert rep1.succeeded == 1
+    assert any(c[0] == "research" for c in called_mcp_tools)
+
+    agg, ver = repo.get_workflow(wf_id)
+    assert agg["state"] == ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK.value
+    assert agg["latest_artifact"]["external_provider_id"] == "ext_pi_123"
+
+    conn.close()
+
+
+def test_configured_mode_missing_tools_fails_closed_with_actionable_error(tmp_path):
+    """Test that provider_mode='configured' with unconfigured tools fails closed with actionable error and records failure."""
+    db_file = tmp_path / "missing_config.db"
+    conn = connect(db_file)
+    repo = WorkflowRepository(conn)
+    wf_id = "wf_unconfigured_01"
+
+    start_product_video_workflow(
+        workflow_repository=repo,
+        workflow_id=wf_id,
+        product_name="Smart Ring",
+        keywords=["health", "sleep"],
+    )
+
+    empty_tool_registry = {}
+    topic_handlers = create_product_video_topic_handlers(
+        workflow_repository=repo,
+        tool_registry=empty_tool_registry,
+        provider_mode="configured",
+    )
+    outbox_repo = OutboxRepository(conn)
+    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="fail-closed-worker")
+
+    rep = dispatcher.process_batch()
+    assert rep.claimed == 1
+    assert rep.failed == 1
+    assert rep.succeeded == 0
+
+    unack = outbox_repo.list_unacknowledged()
+    assert len(unack) == 1
+    assert "MISSING_PROVIDER_CONFIG" in unack[0].last_error
+    assert "mcp__product_intelligence__*" in unack[0].last_error
+
     conn.close()

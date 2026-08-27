@@ -85,6 +85,189 @@ def verify_job_digests(job_name: str, inputs: dict[str, Any], expected_digests: 
     return True
 
 
+def _get_global_tool_registry() -> Any | None:
+    try:
+        from tools.registry import registry
+        return registry
+    except ImportError:
+        return None
+
+
+def _get_tool_names_from_registry(registry: Any) -> set[str]:
+    if hasattr(registry, "get_all_tool_names"):
+        return set(registry.get_all_tool_names())
+    if hasattr(registry, "get_all_entries"):
+        return {entry.name for entry in registry.get_all_entries()}
+    if isinstance(registry, dict):
+        return set(registry.keys())
+    return set()
+
+
+def _dispatch_tool(registry: Any, tool_name: str, payload: dict[str, Any]) -> Any:
+    if hasattr(registry, "dispatch"):
+        raw = registry.dispatch(tool_name, payload)
+    elif isinstance(registry, dict) and callable(registry.get(tool_name)):
+        raw = registry[tool_name](payload)
+    else:
+        raise RuntimeError(f"Tool '{tool_name}' cannot be dispatched on registry {registry!r}")
+
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict) and "error" in parsed and parsed.get("error"):
+                raise RuntimeError(f"Tool '{tool_name}' returned error: {parsed['error']}")
+            return parsed
+        except json.JSONDecodeError:
+            return {"output": raw}
+    if isinstance(raw, dict) and "error" in raw and raw.get("error"):
+        raise RuntimeError(f"Tool '{tool_name}' returned error: {raw['error']}")
+    return raw
+
+
+class MCPProductIntelligenceAdapter:
+    """Live provider adapter bridging ProductVideoJobHandlers to real/MCP ProductIntelligence tools."""
+
+    def __init__(self, registry: Any, wire_tools: dict[str, str]) -> None:
+        self.registry = registry
+        self.wire_tools = wire_tools
+
+    def research(self, product_name: str, keywords: list[str], pdp_url: str | None = None, **kwargs: Any) -> dict[str, Any]:
+        tool_name = self.wire_tools.get("research", "mcp__product_intelligence__research_product")
+        payload = {"product_name": product_name, "keywords": keywords}
+        if pdp_url:
+            payload["pdp_url"] = pdp_url
+        raw = _dispatch_tool(self.registry, tool_name, payload)
+
+        report_data = raw.get("report") or raw
+        if isinstance(report_data, dict):
+            report_str = json.dumps(report_data)
+        else:
+            report_str = str(report_data)
+
+        return {
+            "owner": "product_intelligence",
+            "schema": "product_research_result",
+            "version": 1,
+            "product_name": product_name,
+            "keywords": keywords,
+            "pdp_url": pdp_url,
+            "report": report_str,
+            "external_provider_id": raw.get("id") or raw.get("external_id"),
+        }
+
+    def build_resource_pack(self, research_result: dict, **kwargs: Any) -> dict[str, Any]:
+        tool_name = self.wire_tools.get("build_resource_pack")
+        if tool_name and tool_name in _get_tool_names_from_registry(self.registry):
+            raw = _dispatch_tool(self.registry, tool_name, {"research_result": research_result})
+            return raw
+        from hermes_personal.integrations.product_intelligence.client import ProductIntelligenceClient
+        return ProductIntelligenceClient().build_resource_pack(research_result, **kwargs)
+
+    def lock_resource_pack(self, pack_dict: dict, owner_user_id: str | None = None, **kwargs: Any) -> dict[str, Any]:
+        tool_name = self.wire_tools.get("lock_resource_pack")
+        if tool_name and tool_name in _get_tool_names_from_registry(self.registry):
+            raw = _dispatch_tool(self.registry, tool_name, {"pack_dict": pack_dict, "owner_user_id": owner_user_id})
+            return raw
+        from hermes_personal.integrations.product_intelligence.client import ProductIntelligenceClient
+        return ProductIntelligenceClient().lock_resource_pack(pack_dict, owner_user_id=owner_user_id, **kwargs)
+
+
+class MCPVideoFactoryAdapter:
+    """Live provider adapter bridging ProductVideoJobHandlers to real/MCP VideoFactory tools."""
+
+    def __init__(self, registry: Any, wire_tools: dict[str, str]) -> None:
+        self.registry = registry
+        self.wire_tools = wire_tools
+
+    def create_creative_brief(self, product_id: str = "", brief_config: dict | None = None, **kwargs: Any) -> dict[str, Any]:
+        tool_name = self.wire_tools.get("brief", "mcp__video_factory__create_brief")
+        payload = {"product_id": product_id, "brief_config": brief_config or {}}
+        raw = _dispatch_tool(self.registry, tool_name, payload)
+        return {
+            "owner": "video_factory",
+            "schema": "creative_brief",
+            "version": 1,
+            "product_id": product_id,
+            "brief_id": raw.get("brief_id") or raw.get("id") or f"brief_{product_id}",
+            "payload": json.dumps({"product_id": product_id, "brief_config": brief_config or {}, "result": raw}),
+            "external_provider_id": raw.get("id") or raw.get("external_id"),
+        }
+
+    def create_scene_plan(self, brief_result: dict, **kwargs: Any) -> dict[str, Any]:
+        tool_name = self.wire_tools.get("scene_plan", "mcp__video_factory__create_scene_plan")
+        raw = _dispatch_tool(self.registry, tool_name, {"brief_result": brief_result})
+        return {
+            "owner": "video_factory",
+            "schema": "scene_plan",
+            "version": 1,
+            "scene_plan_id": raw.get("scene_plan_id") or raw.get("id") or f"scene_{brief_result.get('product_id', 'unknown')}",
+            "payload": json.dumps(raw),
+            "external_provider_id": raw.get("id") or raw.get("external_id"),
+        }
+
+    def create_storyboard(self, scene_plan_result: dict, **kwargs: Any) -> dict[str, Any]:
+        tool_name = self.wire_tools.get("storyboard", "mcp__video_factory__create_storyboard")
+        raw = _dispatch_tool(self.registry, tool_name, {"scene_plan_result": scene_plan_result})
+        return {
+            "owner": "video_factory",
+            "schema": "storyboard",
+            "version": 1,
+            "storyboard_id": raw.get("storyboard_id") or raw.get("id") or "sb_live",
+            "payload": json.dumps(raw),
+            "external_provider_id": raw.get("id") or raw.get("external_id"),
+        }
+
+    def render_video(self, storyboard_result: dict, render_params: dict | None = None, **kwargs: Any) -> dict[str, Any]:
+        tool_name = self.wire_tools.get("render", "mcp__video_factory__render")
+        payload = {"storyboard_result": storyboard_result, "render_params": render_params or {}}
+        raw = _dispatch_tool(self.registry, tool_name, payload)
+
+        if isinstance(raw, dict) and raw.get("status") in ("pending", "processing", "in_progress") and raw.get("job_id"):
+            job_id = raw["job_id"]
+            poll_tool = self.wire_tools.get("get_job_status", "mcp__video_factory__get_job_status")
+            if poll_tool in _get_tool_names_from_registry(self.registry):
+                for _ in range(30):
+                    time.sleep(0.5)
+                    status_raw = _dispatch_tool(self.registry, poll_tool, {"job_id": job_id})
+                    if status_raw.get("status") in ("completed", "ready", "succeeded"):
+                        raw = status_raw
+                        break
+                    if status_raw.get("status") in ("failed", "error"):
+                        raise RuntimeError(f"Async video render job '{job_id}' failed: {status_raw.get('error')}")
+                else:
+                    raise RuntimeError(f"Async video render job '{job_id}' timed out after 15s")
+            else:
+                raise RuntimeError(
+                    f"Async render job '{job_id}' returned status '{raw.get('status')}', but no status polling tool "
+                    f"('{poll_tool}') is registered. Cannot mark render completed without final video result."
+                )
+
+        return {
+            "owner": "video_factory",
+            "schema": "video_render",
+            "version": 1,
+            "render_id": raw.get("render_id") or raw.get("id") or "render_live",
+            "video_url": raw.get("video_url") or raw.get("output_url"),
+            "payload": json.dumps(raw),
+            "external_provider_id": raw.get("id") or raw.get("external_id"),
+        }
+
+    def export_video(self, render_result: dict, export_params: dict | None = None, **kwargs: Any) -> dict[str, Any]:
+        tool_name = self.wire_tools.get("export", "mcp__video_factory__export")
+        payload = {"render_result": render_result, "export_params": export_params or {}}
+        raw = _dispatch_tool(self.registry, tool_name, payload)
+
+        return {
+            "owner": "video_factory",
+            "schema": "video_export",
+            "version": 1,
+            "export_id": raw.get("export_id") or raw.get("id") or "export_live",
+            "final_video_url": raw.get("final_video_url") or raw.get("export_url") or raw.get("url"),
+            "payload": json.dumps(raw),
+            "external_provider_id": raw.get("id") or raw.get("external_id"),
+        }
+
+
 class ProductVideoJobHandlers:
     """Deterministic product-to-video job handlers with injected dependencies and workflow state loading."""
 
@@ -95,18 +278,94 @@ class ProductVideoJobHandlers:
         workflow_engine: WorkflowEngine | None = None,
         workflow_repository: WorkflowRepository | None = None,
         dispatcher: JobDispatcher | None = None,
+        tool_registry: Any | None = None,
         provider_mode: str = "fake",
     ) -> None:
         self.provider_mode = provider_mode
-        self._missing_live_provider = (
-            provider_mode == "configured" and (pi_client is None or video_client is None)
-        )
+        self.tool_registry = tool_registry
+
+        if provider_mode == "configured":
+            if pi_client is None:
+                pi_client = self._resolve_pi_adapter(tool_registry)
+            if video_client is None:
+                video_client = self._resolve_video_adapter(tool_registry)
+
+            self._missing_live_provider = (pi_client is None or video_client is None)
+            if self._missing_live_provider:
+                missing = []
+                if pi_client is None:
+                    missing.append("ProductIntelligence (accepted wire tools: mcp__product_intelligence__*, product_intelligence_*)")
+                if video_client is None:
+                    missing.append("VideoFactory (accepted wire tools: mcp__video_factory__*, video_factory_*, video_generate)")
+                self._missing_provider_details = ", ".join(missing)
+            else:
+                self._missing_provider_details = None
+        else:
+            self._missing_live_provider = False
+            self._missing_provider_details = None
+
         self.pi_client = pi_client or ProductIntelligenceClient()
         self.video_client = video_client or VideoFactoryClient()
         self.workflow_engine = workflow_engine
         self.workflow_repository = workflow_repository or (workflow_engine.repo if workflow_engine else None)
         self.dispatcher = dispatcher
         self._idempotency_cache: dict[str, JobSucceeded] = {}
+
+    def _resolve_pi_adapter(self, registry: Any | None) -> Any | None:
+        effective_registry = registry or _get_global_tool_registry()
+        if effective_registry is None:
+            return None
+        available = _get_tool_names_from_registry(effective_registry)
+        wire_map: dict[str, str] = {}
+        for candidate in ("mcp__product_intelligence__research_product", "product_intelligence_research"):
+            if candidate in available:
+                wire_map["research"] = candidate
+                break
+        for candidate in ("mcp__product_intelligence__build_resource_pack", "product_intelligence_build_resource_pack"):
+            if candidate in available:
+                wire_map["build_resource_pack"] = candidate
+                break
+        for candidate in ("mcp__product_intelligence__lock_resource_pack", "product_intelligence_lock_resource_pack"):
+            if candidate in available:
+                wire_map["lock_resource_pack"] = candidate
+                break
+        if "research" in wire_map:
+            return MCPProductIntelligenceAdapter(effective_registry, wire_map)
+        return None
+
+    def _resolve_video_adapter(self, registry: Any | None) -> Any | None:
+        effective_registry = registry or _get_global_tool_registry()
+        if effective_registry is None:
+            return None
+        available = _get_tool_names_from_registry(effective_registry)
+        wire_map: dict[str, str] = {}
+        for candidate in ("mcp__video_factory__create_brief", "video_factory_create_brief"):
+            if candidate in available:
+                wire_map["brief"] = candidate
+                break
+        for candidate in ("mcp__video_factory__create_scene_plan", "video_factory_create_scene_plan"):
+            if candidate in available:
+                wire_map["scene_plan"] = candidate
+                break
+        for candidate in ("mcp__video_factory__create_storyboard", "video_factory_create_storyboard"):
+            if candidate in available:
+                wire_map["storyboard"] = candidate
+                break
+        for candidate in ("mcp__video_factory__render", "video_factory_render", "video_generate"):
+            if candidate in available:
+                wire_map["render"] = candidate
+                break
+        for candidate in ("mcp__video_factory__export", "video_factory_export"):
+            if candidate in available:
+                wire_map["export"] = candidate
+                break
+        for candidate in ("mcp__video_factory__get_job_status", "video_factory_get_job_status"):
+            if candidate in available:
+                wire_map["get_job_status"] = candidate
+                break
+        if "render" in wire_map or "brief" in wire_map:
+            return MCPVideoFactoryAdapter(effective_registry, wire_map)
+        return None
 
     def _get_workflow_state_and_version(self, ctx: JobContext) -> tuple[str, int] | None:
         """Load state and version through public WorkflowEngine or WorkflowRepository methods."""
@@ -126,10 +385,10 @@ class ProductVideoJobHandlers:
         inputs: dict[str, Any] | None = None,
     ) -> JobFailed | None:
         if getattr(self, "_missing_live_provider", False):
+            details = getattr(self, "_missing_provider_details", None) or "live API provider adapters unconfigured"
             raise RuntimeError(
-                "MISSING_PROVIDER_CONFIG: ProductIntelligence/VideoFactory live API provider adapters "
-                "are unconfigured for provider_mode='configured'. Set provider_mode='fake' for explicit "
-                "offline/test verification."
+                f"MISSING_PROVIDER_CONFIG: {details} for provider_mode='configured'. "
+                "Register the required MCP tools in config.yaml under 'mcp_servers' or set provider_mode='fake' for explicit offline/test verification."
             )
 
         res = self._get_workflow_state_and_version(ctx)
@@ -489,6 +748,7 @@ def create_product_video_topic_handlers(
     handlers_service: ProductVideoJobHandlers | None = None,
     pi_client: ProductIntelligenceClient | None = None,
     video_client: VideoFactoryClient | None = None,
+    tool_registry: Any | None = None,
     provider_mode: str = "configured",
 ) -> dict[str, Callable[[OutboxEnvelope], None]]:
     """Create production topic handlers for durable outbox delivery.
@@ -501,6 +761,7 @@ def create_product_video_topic_handlers(
             video_client=video_client,
             workflow_engine=workflow_engine,
             workflow_repository=workflow_repository,
+            tool_registry=tool_registry,
             provider_mode=provider_mode,
         )
     handlers_map = handlers_service.get_handlers_map()
