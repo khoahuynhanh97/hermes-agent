@@ -32,12 +32,16 @@ def run_worker(
     if stop_event is None:
         stop_event = threading.Event()
 
+    from hermes_personal.product_video.handlers import validate_provider_mode, validate_polling_setting
+
+    _provider_mode = validate_provider_mode(provider_mode or os.environ.get("HERMES_PROVIDER_MODE", "configured"))
+    _render_poll_timeout = validate_polling_setting("render_poll_timeout", render_poll_timeout, 60.0)
+    _render_poll_interval = validate_polling_setting("render_poll_interval", render_poll_interval, 0.5)
+
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     connection = connect(db_path)
     repo = OutboxRepository(connection)
-
-    _provider_mode = provider_mode or os.environ.get("HERMES_PROVIDER_MODE", "configured")
 
     if topic_handlers is None and delivery_fn is None:
         from hermes_personal.product_video.handlers import create_product_video_topic_handlers
@@ -51,19 +55,22 @@ def run_worker(
             workflow_repository=wf_repo,
             tool_registry=tool_registry,
             provider_mode=_provider_mode,
-            poll_timeout=render_poll_timeout,
-            poll_interval=render_poll_interval,
+            poll_timeout=_render_poll_timeout,
+            poll_interval=_render_poll_interval,
         )
 
     _worker_id = worker_id or f"durable-worker-{os.getpid()}"
+    # Scale lease duration so it comfortably covers polling duration + buffer (prevents stale ACK failure)
+    lease_duration = max(30.0, _render_poll_timeout + 60.0)
     dispatcher = OutboxDispatcher(
         repository=repo,
         delivery_fn=delivery_fn,
         worker_id=_worker_id,
+        lease_duration_seconds=lease_duration,
         topic_handlers=topic_handlers,
     )
 
-    logger.info("Durable worker started (db=%s, worker_id=%s, provider_mode=%s)", db_path, _worker_id, _provider_mode)
+    logger.info("Durable worker started (db=%s, worker_id=%s, provider_mode=%s, lease_duration=%.1fs)", db_path, _worker_id, _provider_mode, lease_duration)
     try:
         while not stop_event.is_set():
             try:
@@ -88,7 +95,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--provider-mode",
-        choices=["configured", "fake"],
         default=None,
         help="Provider mode ('configured' for live MCP/provider resolution, 'fake' for offline deterministic test). Defaults to config.yaml value.",
     )
@@ -111,21 +117,23 @@ def main(argv: list[str] | None = None) -> int:
         logger.debug("Failed to load hermes config: %s", exc)
         config = {}
 
-    resolved_provider_mode = (
+    from hermes_personal.product_video.handlers import validate_provider_mode, validate_polling_setting
+
+    raw_provider_mode = (
         args.provider_mode
         or config.get("provider_mode")
         or config.get("workflows", {}).get("provider_mode")
         or os.environ.get("HERMES_PROVIDER_MODE", "configured")
     )
+    resolved_provider_mode = validate_provider_mode(raw_provider_mode)
 
     vf_config = config.get("video_factory", {}) or config.get("workflows", {})
-    render_poll_timeout = float(vf_config.get("polling_timeout_seconds", 60.0))
-    render_poll_interval = float(vf_config.get("polling_interval_seconds", 0.5))
-
-    if render_poll_timeout <= 0:
-        render_poll_timeout = 60.0
-    if render_poll_interval <= 0:
-        render_poll_interval = 0.5
+    render_poll_timeout = validate_polling_setting(
+        "polling_timeout_seconds", vf_config.get("polling_timeout_seconds"), 60.0
+    )
+    render_poll_interval = validate_polling_setting(
+        "polling_interval_seconds", vf_config.get("polling_interval_seconds"), 0.5
+    )
 
     # Initialize MCP tool discovery if running in configured mode
     if resolved_provider_mode == "configured":

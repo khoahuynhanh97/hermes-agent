@@ -1508,3 +1508,160 @@ def test_worker_bootstrap_with_config_yaml_and_env(tmp_path, monkeypatch):
     assert executed[0]["provider_mode"] == "fake"
     assert executed[0]["render_poll_timeout"] == 120.0
     assert executed[0]["render_poll_interval"] == 1.5
+
+
+def test_job_polling_timeout_does_not_resubmit_and_resumes_same_job_id(tmp_path):
+    """Test Fix 1: Provider accepts render job -> timeout -> next attempt resumes polling same job_id (submit_count=1)."""
+    from tools.registry import ToolRegistry
+    from hermes_personal.application.operator_handler import approve_and_advance_workflow
+
+    db_file = tmp_path / "resume_job.db"
+    conn = connect(db_file)
+    repo = WorkflowRepository(conn)
+    wf_id = "wf_resume_01"
+
+    submit_count = 0
+    poll_calls = []
+
+    def mock_render(payload):
+        nonlocal submit_count
+        submit_count += 1
+        return json.dumps({"status": "pending", "job_id": "gpu_paid_job_555"})
+
+    poll_phase = "timeout"
+    def mock_poll(payload):
+        poll_calls.append(payload.get("job_id"))
+        if poll_phase == "timeout":
+            return json.dumps({"status": "pending", "job_id": payload.get("job_id")})
+        return json.dumps({
+            "status": "completed",
+            "job_id": payload.get("job_id"),
+            "video_url": "https://cdn.example.com/resumed_video.mp4",
+        })
+
+    registry = ToolRegistry()
+    registry.register("mcp__product_intelligence__research_product", "mcp-pi", {}, lambda p: json.dumps({"report": "ok"}))
+    registry.register("mcp__video_factory__render", "mcp-vf", {}, mock_render)
+    registry.register("mcp__video_factory__get_job_status", "mcp-vf", {}, mock_poll)
+
+    # Seed workflow in RENDERING state
+    repo.commit_workflow(
+        workflow_id=wf_id,
+        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value}),
+        events=[{"event_id": "evt_1", "command_id": "cmd_1", "event_type": "WorkflowStarted", "timestamp": "2026-01-01T00:00:00+00:00", "payload": {}}],
+        outbox_message=build_envelope(
+            workflow_id=wf_id,
+            topic="job.dispatch",
+            idempotency_key="idemp_render_1",
+            payload={"job_name": "product_video.render", "workflow_id": wf_id, "args": [{"storyboard_id": "sb_1"}]},
+        ),
+    )
+
+    outbox_repo = OutboxRepository(conn)
+    topic_handlers = create_product_video_topic_handlers(
+        workflow_repository=repo,
+        tool_registry=registry,
+        provider_mode="configured",
+        poll_timeout=0.2,
+        poll_interval=0.05,
+    )
+    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="w-resume")
+
+    from hermes_personal.workflows.budgets import BudgetPolicy, init_default_engine
+
+    init_default_engine(BudgetPolicy(max_total=1000, per_channel={"video_factory": 500, "product_intelligence": 500}))
+
+    # Attempt 1: Submits job (submit_count=1) -> polls -> times out -> failure recorded
+    rep1 = dispatcher.process_batch()
+    assert rep1.failed == 1
+    assert rep1.succeeded == 0
+    assert submit_count == 1
+    assert "gpu_paid_job_555" in poll_calls
+
+    # Verify active_render_job_id is preserved on workflow aggregate
+    agg_after_timeout, _ = repo.get_workflow(wf_id)
+    assert agg_after_timeout.get("active_render_job_id") == "gpu_paid_job_555"
+
+    # Reset outbox row next_attempt_at for immediate retry
+    conn.execute("UPDATE workflow_outbox SET next_attempt_at = NULL WHERE workflow_id = ?", (wf_id,))
+    conn.commit()
+
+    # Attempt 2: Switch polling to succeed. Must RESUME polling same job_id WITHOUT re-submitting to provider!
+    poll_phase = "ready"
+    rep2 = dispatcher.process_batch()
+    assert rep2.succeeded == 1
+    assert submit_count == 1  # Still 1! No blind re-submission of paid job!
+    assert poll_calls[-1] == "gpu_paid_job_555"
+
+    agg_final, _ = repo.get_workflow(wf_id)
+    assert agg_final["state"] == ProductVideoWorkflowState.AWAITING_FINAL_APPROVAL.value
+    assert agg_final["latest_artifact"]["video_url"] == "https://cdn.example.com/resumed_video.mp4"
+    assert "active_render_job_id" not in agg_final  # Cleared after success
+
+    conn.close()
+
+
+def test_outbox_extend_lease_heartbeat_and_scaled_lease_duration(tmp_path):
+    """Test Fix 2: extend_lease atomic extension and scaled lease coverage for long jobs."""
+    db_file = tmp_path / "lease_test.db"
+    conn = connect(db_file)
+    repo = OutboxRepository(conn)
+
+    msg = repo.enqueue("wf_lease_01", "test payload")
+    claims = repo.claim("worker_1", lease_duration_seconds=10.0, now_iso="2026-01-01T10:00:00+00:00")
+    assert len(claims) == 1
+    claim = claims[0]
+    assert claim.lease_expires_at == "2026-01-01T10:00:10+00:00"
+
+    # Extend lease at t=5s by 60s
+    success = repo.extend_lease(claim.outbox_id, claim.lease_token, "worker_1", extension_seconds=60.0, now_iso="2026-01-01T10:00:05+00:00")
+    assert success is True
+
+    # At t=15s (original lease would have expired), ACK still succeeds because lease was extended
+    ack_success = repo.ack(claim.outbox_id, claim.lease_token, "worker_1", now_iso="2026-01-01T10:00:15+00:00")
+    assert ack_success is True
+
+    conn.close()
+
+
+def test_invalid_provider_mode_and_polling_settings_fail_closed():
+    """Test Fix 3: Strict validation fails closed on invalid provider_mode and polling settings."""
+    from hermes_personal.product_video.handlers import (
+        ProductVideoJobHandlers,
+        create_product_video_topic_handlers,
+        validate_provider_mode,
+        validate_polling_setting,
+    )
+    from hermes_personal.workflows.worker import run_worker
+
+    # Invalid provider modes
+    with pytest.raises(ValueError, match="Invalid provider_mode"):
+        validate_provider_mode("auto")
+
+    with pytest.raises(ValueError, match="Invalid provider_mode"):
+        validate_provider_mode("mock")
+
+    with pytest.raises(ValueError, match="Invalid provider_mode type"):
+        validate_provider_mode(123)
+
+    with pytest.raises(ValueError, match="Invalid provider_mode"):
+        ProductVideoJobHandlers(provider_mode="invalid")
+
+    with pytest.raises(ValueError, match="Invalid provider_mode"):
+        create_product_video_topic_handlers(provider_mode="unsupported")
+
+    # Invalid polling settings
+    with pytest.raises(ValueError, match="finite and > 0"):
+        validate_polling_setting("poll_timeout", -5.0, 60.0)
+
+    with pytest.raises(ValueError, match="finite and > 0"):
+        validate_polling_setting("poll_timeout", 0.0, 60.0)
+
+    with pytest.raises(ValueError, match="finite and > 0"):
+        validate_polling_setting("poll_timeout", float("nan"), 60.0)
+
+    with pytest.raises(ValueError, match="finite and > 0"):
+        validate_polling_setting("poll_timeout", float("inf"), 60.0)
+
+    with pytest.raises(ValueError, match="type bool"):
+        validate_polling_setting("poll_timeout", True, 60.0)

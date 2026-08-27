@@ -211,7 +211,8 @@ class BudgetRepository:
                                 f"Idempotency conflict for key '{effective_key}': action/input digest mismatch "
                                 f"(existing digest: {row['request_digest']}, incoming digest: {digest})"
                             )
-                        return _row_to_allocation(row)
+                        if row["state"] != "released":
+                            return _row_to_allocation(row)
 
                 channel_limit = policy.per_channel.get(channel, policy.max_total)
 
@@ -240,6 +241,17 @@ class BudgetRepository:
 
                 if total_used + amount > policy.max_total:
                     raise BudgetError("total budget exceeds max_total")
+
+                if effective_key and row is not None and row["state"] == "released":
+                    now_iso = datetime.now(timezone.utc).isoformat()
+                    self._connection.execute(
+                        "UPDATE budget_reservation SET state = 'reserved', updated_at = ? WHERE reservation_id = ?",
+                        (now_iso, row["reservation_id"]),
+                    )
+                    alloc = _row_to_allocation(row)
+                    alloc.state = "reserved"
+                    alloc.updated_at = now_iso
+                    return alloc
 
                 res_id = f"res_{uuid4().hex}"
                 key_to_store = effective_key or res_id

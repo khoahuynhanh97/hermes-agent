@@ -271,6 +271,32 @@ class OutboxRepository:
 
         return claims
 
+    def extend_lease(
+        self,
+        outbox_id: int,
+        lease_token: str,
+        worker_id: str,
+        extension_seconds: float = 60.0,
+        now_iso: str | None = None,
+    ) -> bool:
+        """Extend the active lease expiration time for a running job (heartbeat)."""
+        now = _now_iso(now_iso)
+        new_expires_at = _add_seconds(now, extension_seconds)
+        with self.connection:
+            cur = self.connection.execute(
+                """
+                UPDATE workflow_outbox
+                SET lease_expires_at = ?, updated_at = ?
+                WHERE outbox_id = ?
+                  AND lease_token = ?
+                  AND lease_owner = ?
+                  AND state = 'leased'
+                  AND lease_expires_at > ?
+                """,
+                (new_expires_at, now, outbox_id, lease_token, worker_id, now),
+            )
+            return cur.rowcount > 0
+
     def ack(
         self,
         outbox_id: int,
