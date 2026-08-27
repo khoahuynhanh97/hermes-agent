@@ -120,47 +120,52 @@ remaining happy-path blocker. Append History, set both owners to PLANNER, then e
 
 ## Last Worker Report
 
-Iteration: 95 (REWORK on 50ada93517)
+Iteration: 96 (REWORK on f71a49e7e8)
 Phase: Phase 7 Continuation - Personal Happy Path and Bounded Hardening
 
 Implemented:
-- **Finding 1 (Structured Immediate Checkpointing on Provider Acceptance)**:
-  - Code: `hermes_personal/product_video/handlers.py` (`MCPVideoFactoryAdapter.render_video`, `export_video`, `ProductVideoJobHandlers.render_job`, `export_job`).
+- **Finding 1 (Non-Retryable Classification & Durable Quarantine across Entire Call Chain)**:
+  - Code: `hermes_personal/product_video/handlers.py` (`JobDispatchError`, `TerminalJobError`, `LeaseLostError`, `_check_for_errors`, `MCPVideoFactoryAdapter.render_video`, `export_video`, `ProductVideoJobHandlers.render_job`, `export_job`, `handle_job_dispatch`), `hermes_personal/workflows/outbox_dispatcher.py` (`process_batch`), `hermes_personal/workflows/outbox_repository.py` (`record_failure`).
   - Logic:
-    - Persists provider `job_id` (`active_render_job_id` / `active_export_job_id`) structured via `on_job_accepted` callback immediately upon receipt of accepted pending status, **before** the first poll call begins.
-    - Checkpoint persistence failures are not swallowed: if writing to SQLite fails, auto-resubmit is halted immediately with non-retryable error (`VF_CHECKPOINT_FAILED`) to prevent duplicate paid job submissions.
-    - Terminal failures (`failed`, `cancelled`, or missing status polling tool) are classified as terminal (`VF_RENDER_TERMINAL_FAILED` / `VF_EXPORT_TERMINAL_FAILED`) without blind auto-resubmission.
-    - Restart recovery and generic polling network errors (even with zero job_id text in exception) reliably resume polling with the exact accepted `job_id` loaded from the database aggregate (`submit_count` remains 1).
-  - Tests: `test_job_accepted_persisted_to_db_before_first_poll`, `test_poll_network_exception_without_job_id_recovers_and_resumes_same_job_id`, `test_terminal_failure_and_persistence_failure_handling`.
-- **Finding 2 (Real Runtime Lease Renewal via Heartbeat & Monotonic Deadline)**:
-  - Code: `hermes_personal/workflows/outbox_dispatcher.py` (`_deliver_claim`), `hermes_personal/product_video/handlers.py` (`MCPVideoFactoryAdapter.render_video`, `export_video`, `JobContext`), `hermes_personal/workflows/worker.py` (`run_worker`).
+    - Defined structured exception hierarchy (`TerminalJobError` and `LeaseLostError` inheriting from `JobDispatchError(RuntimeError)` with `retryable=False`).
+    - Provider `failed` / `cancelled` responses and missing polling tools raise `TerminalJobError` immediately from decoder/adapter, eliminating string-matching on `"(terminal)"`.
+    - Checkpoint persistence failures raise `TerminalJobError("CHECKPOINT_PERSISTENCE_FAILED...", code="VF_CHECKPOINT_FAILED")` and halt execution.
+    - `handle_job_dispatch` propagates `TerminalJobError` directly to `OutboxDispatcher.process_batch`.
+    - `OutboxDispatcher.process_batch` checks `getattr(ex, "retryable", True) is False` and sets `force_quarantine=True`, transitioning the outbox row directly to `state='quarantined'` with `next_attempt_at=NULL`, permanently preventing auto-claims / resubmissions without falsely ACKing as success.
+    - If SQLite fails during failure/quarantine recording, worker immediately raises `RuntimeError("CRITICAL: Failed to persist outbox error state...")` to stop the loop and alert the operator instead of silently retrying.
+  - Tests: `test_checkpoint_commit_failure_after_accept_quarantines_and_prevents_resubmit_on_restart`, `test_terminal_provider_response_quarantines_and_no_resubmit_in_subsequent_batches`.
+- **Finding 2 (Single-Invocation Dispatch & Safe TypeError Handling)**:
+  - Code: `hermes_personal/workflows/outbox_dispatcher.py` (`_deliver_claim`).
+  - Logic: Removed `try: handler(..., heartbeat_fn=...) except TypeError: handler(...)` retry pattern. Resolved handler signature upfront using `inspect.signature`. If handler body executes side-effects and subsequently raises `TypeError`, it is handled as a standard execution failure and never invoked a second time (`invocation_count == 1`).
+  - Tests: `test_handler_with_side_effect_raising_typeerror_invoked_exactly_once`.
+- **Finding 3 (Lease Non-Decreasing Renewal & Lease-Lost Halting)**:
+  - Code: `hermes_personal/workflows/outbox_repository.py` (`extend_lease`), `hermes_personal/product_video/handlers.py` (`MCPVideoFactoryAdapter.render_video`, `export_video`).
   - Logic:
-    - Wired `heartbeat_fn` from `OutboxDispatcher` through `handle_job_dispatch` $\rightarrow$ `JobContext` $\rightarrow$ adapter polling loop.
-    - On every poll attempt, `heartbeat_fn()` calls `repository.extend_lease(...)`, extending the lease expiration in SQLite.
-    - Enforced monotonic clock deadline (`time.monotonic() >= deadline`) accounting for actual elapsed network execution time.
-    - Set single-worker loop batch size to 1 in `worker.py` to prevent batch queue lease starvation.
-  - Tests: `test_real_runtime_heartbeat_lease_renewal_during_long_polling`.
-- **Finding 3 (Strict Configuration Resolution Without Truthiness Fallback)**:
-  - Code: `hermes_personal/product_video/handlers.py` (`validate_provider_mode`, `resolve_provider_mode`, `resolve_polling_setting`), `hermes_personal/workflows/worker.py` (`main`).
-  - Logic: Replaced truthiness fallback chains (`or`) with explicit resolution `resolve_provider_mode` and `resolve_polling_setting`. Falsy/invalid inputs (`False`, `0`, `""`, `"   "`) fail closed immediately before tool discovery or dispatcher startup.
-  - Tests: `test_invalid_falsy_provider_mode_fails_closed_without_truthiness_fallback`.
+    - Updated `extend_lease` in SQLite to `SET lease_expires_at = CASE WHEN lease_expires_at IS NOT NULL AND lease_expires_at > :candidate THEN lease_expires_at ELSE :candidate END`, guaranteeing heartbeat renewal NEVER reduces current lease expiration.
+    - If `heartbeat_fn()` returns `False` (lease lost/expired) or raises, adapter immediately raises `LeaseLostError`, halting polling and preventing success state transition.
+  - Tests: `test_lease_renewal_does_not_decrease_existing_expiry`, `test_runtime_polling_advances_past_initial_lease_with_real_heartbeat_renewal`, `test_heartbeat_failure_stops_execution_without_committing_success`.
+- **Finding 4 (Strict Config Presence in `run_worker`)**:
+  - Code: `hermes_personal/workflows/worker.py` (`run_worker`).
+  - Logic: Replaced `provider_mode or os.environ...` with explicit `resolve_provider_mode(cli_arg=provider_mode, env_val=os.environ.get("HERMES_PROVIDER_MODE"))`, rejecting `False`, `0`, `""`, and whitespace strings before opening database or running loop.
+  - Tests: `test_direct_run_worker_and_resolve_provider_mode_rejects_falsy_inputs`.
 
 Files Changed:
 - `hermes_personal/product_video/handlers.py`
 - `hermes_personal/workflows/outbox_dispatcher.py`
+- `hermes_personal/workflows/outbox_repository.py`
 - `hermes_personal/workflows/worker.py`
 - `tests/hermes_personal/workflows/test_product_video_outbox.py`
 
 Verification:
-- `uv run pytest tests/hermes_personal/workflows/test_product_video_outbox.py tests/hermes_personal/workflows/test_outbox_dispatcher.py tests/hermes_personal/workflows/test_worker.py tests/hermes_personal/workflows/test_outbox_repository.py tests/hermes_personal/product_video/test_product_to_video_e2e.py tests/hermes_personal/product_video/test_job_handlers.py tests/hermes_personal/product_video/test_handlers.py tests/hermes_personal/product_video/test_video_factory_client.py -q`: 100 passed in 6.74s.
-- `uv run pytest tests/hermes_personal/workflows/test_budgets.py -q`: 17 passed in 0.89s.
-- `uv run ruff check hermes_personal/product_video/handlers.py hermes_personal/workflows/worker.py hermes_personal/workflows/outbox_dispatcher.py tests/hermes_personal/workflows/test_product_video_outbox.py`: All checks passed.
+- `uv run pytest tests/hermes_personal/workflows/test_product_video_outbox.py tests/hermes_personal/workflows/test_outbox_dispatcher.py tests/hermes_personal/workflows/test_worker.py tests/hermes_personal/workflows/test_outbox_repository.py tests/hermes_personal/product_video/test_product_to_video_e2e.py tests/hermes_personal/product_video/test_job_handlers.py tests/hermes_personal/product_video/test_handlers.py tests/hermes_personal/product_video/test_video_factory_client.py -q`: 104 passed in 7.32s.
+- `uv run pytest tests/hermes_personal/workflows/test_budgets.py -q`: 17 passed in 0.80s.
+- `uv run ruff check hermes_personal/product_video/handlers.py hermes_personal/workflows/worker.py hermes_personal/workflows/outbox_dispatcher.py hermes_personal/workflows/outbox_repository.py tests/hermes_personal/workflows/test_product_video_outbox.py`: All checks passed.
 - `git diff --check`: Clean.
 
-Commit: `f71a49e7e8`
+Commit: `3cc23eb2d3`
 
 Remaining Issues / Blockers:
-- Running live end-to-end video generation requires user to configure live MCP servers (`mcp_servers` in `config.yaml`) with external API credentials in `~/.hermes/.env`. Offline fixture verification with ToolRegistry is fully proven with 100 passing tests.
+- Running live end-to-end video generation requires user to configure live MCP servers (`mcp_servers` in `config.yaml`) with external API credentials in `~/.hermes/.env`. Offline fixture verification with ToolRegistry is fully proven with 104 passing tests.
 
 Deferred Items:
 - Multi-worker scaling, generic outbox broker, HA replication, and cross-node process isolation (deferred to `PRODUCTION_HARDENED` phase).
@@ -200,6 +205,9 @@ WORKER proves or minimally wires the concrete Product Intelligence -> Video Fact
 
 ## History
 ...
+### Iteration 96
+WORKER completed REWORK on f71a49e7e8: (1) preserved structured non-retryable TerminalJobError throughout adapter -> handler -> topic handler -> dispatcher and quarantined terminal/checkpoint failures without auto-resubmit or false ACKs, (2) ensured topic handler is invoked exactly once per delivery by inspecting signature upfront, (3) ensured lease renewal never decreases existing expiration and halts execution on lease lost, (4) enforced strict provider_mode presence in run_worker, (5) verified with 104 targeted tests passing and clean ruff / diff-check (commit `3cc23eb2d3`). Handed off to PLANNER.
+
 ### Iteration 95
 WORKER completed REWORK on 50ada93517: (1) implemented immediate structured checkpointing of accepted provider job_id before polling begins, with non-swallowed persistence error handling and terminal failure handling, (2) connected real runtime heartbeat lease renewal through OutboxDispatcher and monotonic timeout deadlines, (3) eliminated truthiness fallback for provider_mode/polling settings to fail closed on falsy/empty values, (4) verified with 100 targeted tests passing and clean ruff / diff-check (commit `f71a49e7e8`). Handed off to PLANNER.
 
