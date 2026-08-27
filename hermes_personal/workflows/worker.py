@@ -25,6 +25,8 @@ def run_worker(
     worker_id: Optional[str] = None,
     tool_registry: Any | None = None,
     provider_mode: Optional[str] = None,
+    render_poll_timeout: float = 60.0,
+    render_poll_interval: float = 0.5,
 ) -> None:
     """Run the durable outbox worker loop."""
     if stop_event is None:
@@ -49,6 +51,8 @@ def run_worker(
             workflow_repository=wf_repo,
             tool_registry=tool_registry,
             provider_mode=_provider_mode,
+            poll_timeout=render_poll_timeout,
+            poll_interval=render_poll_interval,
         )
 
     _worker_id = worker_id or f"durable-worker-{os.getpid()}"
@@ -80,13 +84,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Hermes durable background worker")
     parser.add_argument("--db-path", default=None, help="Path to SQLite database file")
     parser.add_argument(
-        "--poll-interval", type=float, default=1.0, help="Poll interval in seconds"
+        "--poll-interval", type=float, default=1.0, help="Worker outbox poll interval in seconds"
     )
     parser.add_argument(
         "--provider-mode",
         choices=["configured", "fake"],
-        default=os.environ.get("HERMES_PROVIDER_MODE", "configured"),
-        help="Provider mode ('configured' for live MCP/provider resolution, 'fake' for offline deterministic test)",
+        default=None,
+        help="Provider mode ('configured' for live MCP/provider resolution, 'fake' for offline deterministic test). Defaults to config.yaml value.",
     )
     args = parser.parse_args(argv)
 
@@ -107,8 +111,24 @@ def main(argv: list[str] | None = None) -> int:
         logger.debug("Failed to load hermes config: %s", exc)
         config = {}
 
+    resolved_provider_mode = (
+        args.provider_mode
+        or config.get("provider_mode")
+        or config.get("workflows", {}).get("provider_mode")
+        or os.environ.get("HERMES_PROVIDER_MODE", "configured")
+    )
+
+    vf_config = config.get("video_factory", {}) or config.get("workflows", {})
+    render_poll_timeout = float(vf_config.get("polling_timeout_seconds", 60.0))
+    render_poll_interval = float(vf_config.get("polling_interval_seconds", 0.5))
+
+    if render_poll_timeout <= 0:
+        render_poll_timeout = 60.0
+    if render_poll_interval <= 0:
+        render_poll_interval = 0.5
+
     # Initialize MCP tool discovery if running in configured mode
-    if args.provider_mode == "configured":
+    if resolved_provider_mode == "configured":
         try:
             from tools.mcp_tool import discover_mcp_tools
             discover_mcp_tools()
@@ -132,10 +152,12 @@ def main(argv: list[str] | None = None) -> int:
             db_path=db_path,
             poll_interval=args.poll_interval,
             stop_event=stop_event,
-            provider_mode=args.provider_mode,
+            provider_mode=resolved_provider_mode,
+            render_poll_timeout=render_poll_timeout,
+            render_poll_interval=render_poll_interval,
         )
     finally:
-        if args.provider_mode == "configured":
+        if resolved_provider_mode == "configured":
             try:
                 from tools.mcp_tool import shutdown_mcp_servers
                 shutdown_mcp_servers()

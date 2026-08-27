@@ -1104,8 +1104,8 @@ def test_approve_and_advance_workflow_resolves_workflow_id_without_wf_prefix(tmp
 
 
 def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
-    """Test that provider_mode='configured' properly decodes real MCP response shapes
-    (content blocks, result strings, structuredContent) and handles async job status polling.
+    """Test that provider_mode='configured' properly decodes real MCP response shapes across
+    the entire 14-state workflow, 5 HITL gates, and handles async render polling and export.
     """
     from tools.registry import ToolRegistry
     from hermes_personal.application.operator_handler import approve_and_advance_workflow
@@ -1119,9 +1119,11 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
     wf_id = "wf_mcp_real_01"
 
     real_registry = ToolRegistry()
+    called_tools = []
 
     # Tool 1: Research returning standard MCP CallToolResult content block
     def mcp_research_handler(args):
+        called_tools.append(("research", args))
         return json.dumps({
             "content": [{
                 "type": "text",
@@ -1137,6 +1139,7 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
 
     # Tool 2: Resource pack builder
     def mcp_build_pack_handler(args):
+        called_tools.append(("build_pack", args))
         return json.dumps({
             "structuredContent": {
                 "owner": "product_intelligence",
@@ -1151,17 +1154,48 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
 
     # Tool 3: Creative brief
     def mcp_brief_handler(args):
+        called_tools.append(("brief", args))
         return json.dumps({
             "result": json.dumps({
                 "brief_id": f"brief_{args.get('product_id')}",
                 "product_id": args.get("product_id"),
+                "script": "High performance 4K drone script",
+                "angle": "Tech / Feature Showcase",
                 "id": "ext_brief_002",
             })
         })
 
-    # Tool 4: Render returning async pending job
+    # Tool 4: Scene plan
+    def mcp_scene_plan_handler(args):
+        called_tools.append(("scene_plan", args))
+        return json.dumps({
+            "result": json.dumps({
+                "scene_plan_id": "scene_plan_mcp_003",
+                "scenes": [
+                    {"scene_id": "s1", "duration": 5, "description": "Drone takeoff"},
+                    {"scene_id": "s2", "duration": 10, "description": "4K camera specs"},
+                ],
+                "id": "ext_scene_003",
+            })
+        })
+
+    # Tool 5: Storyboard
+    def mcp_storyboard_handler(args):
+        called_tools.append(("storyboard", args))
+        return json.dumps({
+            "structuredContent": {
+                "storyboard_id": "sb_mcp_004",
+                "frames": [
+                    {"frame_id": "f1", "visual": "drone_air.jpg", "caption": "Clear 4K View"},
+                ],
+                "id": "ext_sb_004",
+            }
+        })
+
+    # Tool 6: Render returning async pending job
     render_poll_count = 0
     def mcp_render_handler(args):
+        called_tools.append(("render", args))
         return json.dumps({
             "result": json.dumps({
                 "status": "pending",
@@ -1169,10 +1203,11 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
             })
         })
 
-    # Tool 5: Polling tool for render status
+    # Tool 7: Polling tool for render status
     def mcp_poll_status_handler(args):
         nonlocal render_poll_count
         render_poll_count += 1
+        called_tools.append(("poll_status", args))
         return json.dumps({
             "result": json.dumps({
                 "status": "completed",
@@ -1182,8 +1217,9 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
             })
         })
 
-    # Tool 6: Export tool
+    # Tool 8: Export tool
     def mcp_export_handler(args):
+        called_tools.append(("export", args))
         return json.dumps({
             "structuredContent": {
                 "export_id": "export_mcp_999",
@@ -1194,6 +1230,8 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
     real_registry.register("mcp__product_intelligence__research_product", "mcp-pi", {}, mcp_research_handler)
     real_registry.register("mcp__product_intelligence__build_resource_pack", "mcp-pi", {}, mcp_build_pack_handler)
     real_registry.register("mcp__video_factory__create_brief", "mcp-vf", {}, mcp_brief_handler)
+    real_registry.register("mcp__video_factory__create_scene_plan", "mcp-vf", {}, mcp_scene_plan_handler)
+    real_registry.register("mcp__video_factory__create_storyboard", "mcp-vf", {}, mcp_storyboard_handler)
     real_registry.register("mcp__video_factory__render", "mcp-vf", {}, mcp_render_handler)
     real_registry.register("mcp__video_factory__get_job_status", "mcp-vf", {}, mcp_poll_status_handler)
     real_registry.register("mcp__video_factory__export", "mcp-vf", {}, mcp_export_handler)
@@ -1209,6 +1247,8 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
         workflow_repository=repo,
         tool_registry=real_registry,
         provider_mode="configured",
+        poll_timeout=10.0,
+        poll_interval=0.1,
     )
     outbox_repo = OutboxRepository(conn)
     dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="real-mcp-worker")
@@ -1216,7 +1256,6 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
     # Step 1: research -> AwaitingProductLock
     rep1 = dispatcher.process_batch()
     assert rep1.succeeded == 1
-
     agg, ver = repo.get_workflow(wf_id)
     assert agg["state"] == ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK.value
     assert agg["latest_artifact"]["external_provider_id"] == "ext_mcp_pi_001"
@@ -1225,16 +1264,62 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
     approve_and_advance_workflow(conn, agg["pending_approval_id"], expected_version=ver)
     rep2 = dispatcher.process_batch()  # resource_pack -> enqueues lock
     assert rep2.succeeded == 1
-
     rep3 = dispatcher.process_batch()  # lock -> enqueues brief
     assert rep3.succeeded == 1
-
     rep4 = dispatcher.process_batch()  # brief -> AwaitingBriefApproval
     assert rep4.succeeded == 1
 
-    agg_brief, _ = repo.get_workflow(wf_id)
+    agg_brief, ver_brief = repo.get_workflow(wf_id)
     assert agg_brief["state"] == ProductVideoWorkflowState.AWAITING_BRIEF_APPROVAL.value
     assert agg_brief["latest_artifact"]["product_id"] == "rp_real_999"
+
+    # Step 3: approve AwaitingBriefApproval -> scene_plan -> AwaitingSceneApproval
+    approve_and_advance_workflow(conn, agg_brief["pending_approval_id"], expected_version=ver_brief)
+    rep5 = dispatcher.process_batch()  # scene_plan -> AwaitingSceneApproval
+    assert rep5.succeeded == 1
+
+    agg_scene, ver_scene = repo.get_workflow(wf_id)
+    assert agg_scene["state"] == ProductVideoWorkflowState.AWAITING_SCENE_APPROVAL.value
+    assert agg_scene["latest_artifact"]["scene_plan_id"] == "scene_plan_mcp_003"
+
+    # Step 4: approve AwaitingSceneApproval -> storyboard -> AwaitingStoryboardApproval
+    approve_and_advance_workflow(conn, agg_scene["pending_approval_id"], expected_version=ver_scene)
+    rep6 = dispatcher.process_batch()  # storyboard -> AwaitingStoryboardApproval
+    assert rep6.succeeded == 1
+
+    agg_sb, ver_sb = repo.get_workflow(wf_id)
+    assert agg_sb["state"] == ProductVideoWorkflowState.AWAITING_STORYBOARD_APPROVAL.value
+    assert agg_sb["latest_artifact"]["storyboard_id"] == "sb_mcp_004"
+
+    # Step 5: approve AwaitingStoryboardApproval -> render (async pending + poll status) -> AwaitingFinalApproval
+    approve_and_advance_workflow(conn, agg_sb["pending_approval_id"], expected_version=ver_sb)
+    rep7 = dispatcher.process_batch()  # render -> polls get_job_status -> AwaitingFinalApproval
+    assert rep7.succeeded == 1
+    assert render_poll_count >= 1
+
+    agg_render, ver_render = repo.get_workflow(wf_id)
+    assert agg_render["state"] == ProductVideoWorkflowState.AWAITING_FINAL_APPROVAL.value
+    assert agg_render["latest_artifact"]["video_url"] == "https://cdn.example.com/final_render.mp4"
+
+    # Step 6: approve AwaitingFinalApproval -> export -> COMPLETED
+    approve_and_advance_workflow(conn, agg_render["pending_approval_id"], expected_version=ver_render)
+    rep8 = dispatcher.process_batch()  # export -> COMPLETED
+    assert rep8.succeeded == 1
+
+    agg_final, _ = repo.get_workflow(wf_id)
+    assert agg_final["state"] == ProductVideoWorkflowState.COMPLETED.value
+    assert agg_final["latest_artifact"]["final_video_url"] == "https://cdn.example.com/final_export_1080p.mp4"
+
+    # Verify all tools were exercised
+    tool_types_called = [t[0] for t in called_tools]
+    assert "research" in tool_types_called
+    assert "build_pack" in tool_types_called
+    assert "brief" in tool_types_called
+    assert "scene_plan" in tool_types_called
+    assert "storyboard" in tool_types_called
+    assert "render" in tool_types_called
+    assert "poll_status" in tool_types_called
+    assert "export" in tool_types_called
 
     conn.close()
 
@@ -1332,3 +1417,94 @@ def test_mcp_error_payload_raises_runtime_error():
     }
     with pytest.raises(RuntimeError, match="CUDA device out of memory"):
         _decode_mcp_output(error_response)
+
+
+def test_wrapped_error_in_result_string_fails_closed():
+    """Test that wrapped error inside a JSON result string raises RuntimeError."""
+    from hermes_personal.product_video.handlers import _decode_mcp_output
+
+    wrapped_error = {
+        "result": json.dumps({"status": "failed", "error": "Rate limit exceeded (429)"}),
+    }
+    with pytest.raises(RuntimeError, match="Rate limit exceeded"):
+        _decode_mcp_output(wrapped_error)
+
+
+def test_wrapped_error_in_structured_content_fails_closed():
+    """Test that wrapped error inside structuredContent raises RuntimeError."""
+    from hermes_personal.product_video.handlers import _decode_mcp_output
+
+    wrapped_error = {
+        "structuredContent": {"error": "Invalid API token", "code": "UNAUTHORIZED"},
+    }
+    with pytest.raises(RuntimeError, match="Invalid API token"):
+        _decode_mcp_output(wrapped_error)
+
+
+def test_creative_brief_empty_content_fails_closed():
+    """Test that creative brief tool returning empty output fails closed."""
+    from hermes_personal.product_video.handlers import MCPVideoFactoryAdapter
+
+    registry_empty_brief = {
+        "mcp__video_factory__create_brief": lambda p: {"unrelated_field": "data"},
+    }
+    adapter = MCPVideoFactoryAdapter(registry_empty_brief, {"brief": "mcp__video_factory__create_brief"})
+    with pytest.raises(RuntimeError, match="empty creative brief content"):
+        adapter.create_creative_brief("prod_1", {})
+
+
+def test_failed_render_with_id_fails_closed():
+    """Test that render returning failed status even with an ID raises RuntimeError."""
+    from hermes_personal.product_video.handlers import MCPVideoFactoryAdapter
+
+    registry_failed_render = {
+        "mcp__video_factory__render": lambda p: {"status": "failed", "job_id": "job_123", "error": "GPU kernel crash"},
+    }
+    adapter = MCPVideoFactoryAdapter(registry_failed_render, {"render": "mcp__video_factory__render"})
+    with pytest.raises(RuntimeError, match="GPU kernel crash"):
+        adapter.render_video({"storyboard_id": "sb_1"})
+
+    registry_failed_no_error_field = {
+        "mcp__video_factory__render": lambda p: {"status": "failed", "job_id": "job_456"},
+    }
+    adapter2 = MCPVideoFactoryAdapter(registry_failed_no_error_field, {"render": "mcp__video_factory__render"})
+    with pytest.raises(RuntimeError, match="status 'failed'"):
+        adapter2.render_video({"storyboard_id": "sb_1"})
+
+
+def test_worker_bootstrap_with_config_yaml_and_env(tmp_path, monkeypatch):
+    """Test worker startup configuration resolution from config.yaml and .env with temp HERMES_HOME."""
+    import yaml
+    from hermes_personal.workflows.worker import main
+
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    config_file = home / "config.yaml"
+    env_file = home / ".env"
+
+    config_data = {
+        "provider_mode": "fake",
+        "video_factory": {
+            "polling_timeout_seconds": 120.0,
+            "polling_interval_seconds": 1.5,
+        },
+    }
+    config_file.write_text(yaml.safe_dump(config_data), encoding="utf-8")
+    env_file.write_text("HERMES_API_KEY=test_secret_key\n", encoding="utf-8")
+
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    db_file = str(home / "test_worker.db")
+
+    # Run worker with poll-interval 0.01 and immediately exit via mocked signal
+    executed = []
+    def mock_run_worker(**kwargs):
+        executed.append(kwargs)
+
+    monkeypatch.setattr("hermes_personal.workflows.worker.run_worker", mock_run_worker)
+
+    exit_code = main(["--db-path", db_file])
+    assert exit_code == 0
+    assert len(executed) == 1
+    assert executed[0]["provider_mode"] == "fake"
+    assert executed[0]["render_poll_timeout"] == 120.0
+    assert executed[0]["render_poll_interval"] == 1.5
