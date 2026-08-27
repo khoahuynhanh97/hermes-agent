@@ -131,30 +131,33 @@ uv run pytest tests/hermes_personal/product_video tests/hermes_personal/migratio
 
 ---
 
-### Sample Configuration (`config.yaml`) & Secrets
+### Sample Configuration Template (`config.yaml`) & Secrets
+
+> [!NOTE]
+> The configuration below is an **illustrative template**. Live execution requires deploying actual MCP server implementations providing the tools listed in the matrix above.
 
 In `~/.hermes/config.yaml` (behavioral settings only; no secrets):
 ```yaml
-# ~/.hermes/config.yaml
+# ~/.hermes/config.yaml (Template Example)
 mcp_servers:
   product_intelligence:
     command: "python"
-    args: ["-m", "mcp_servers.product_intelligence"]
+    args: ["-m", "my_mcp_servers.product_intelligence"]
     env:
-      API_ENDPOINT: "https://api.product-intel.local/v1"
+      API_ENDPOINT: "https://api.product-intel.example.com/v1"
   video_factory:
     command: "python"
-    args: ["-m", "mcp_servers.video_factory"]
+    args: ["-m", "my_mcp_servers.video_factory"]
     env:
-      GPU_ENDPOINT: "https://gpu-render.local/v1"
+      GPU_ENDPOINT: "https://gpu-render.example.com/v1"
 
 # Provider mode for background worker: 'configured' (live MCP) or 'fake' (offline test)
 provider_mode: "configured"
 ```
 
-In `~/.hermes/.env` (credentials only):
+In `~/.hermes/.env` (credentials only; never committed to git):
 ```bash
-# Secrets are loaded into environment variables; never checked into git
+# Credentials loaded into environment variables via load_hermes_dotenv()
 HERMES_API_KEY=hermes_operator_secret_token_here
 VIDEO_FACTORY_API_KEY=vf_live_secret_key_here
 PRODUCT_INTELLIGENCE_API_KEY=pi_live_secret_key_here
@@ -164,16 +167,22 @@ PRODUCT_INTELLIGENCE_API_KEY=pi_live_secret_key_here
 
 ### Verification Tiers & Readiness Status
 
-1. **Offline Verified (100% Passing)**:
-   - Full 9-stage data progression, 5 HITL gates, optimistic concurrency (`expected_version`), atomic SQLite transactions, and outbox claim/lease/retry/quarantine mechanisms.
-   - Tested and verified with 84 targeted tests and 609 personal package tests without calling paid external APIs.
-
-2. **Live Wired but Unverified**:
-   - `MCPProductIntelligenceAdapter` and `MCPVideoFactoryAdapter` dynamically probe `ToolRegistry` for registered tools, map payloads, handle async job polling, and forward product/resource pack IDs across all stages.
-   - Fails closed with explicit, actionable error message if required MCP tools are missing in `configured` mode.
-
+1. **Adapter Implemented**:
+   - `MCPProductIntelligenceAdapter` and `MCPVideoFactoryAdapter` implement canonical payload mapping, `_decode_mcp_output` parsing for text blocks, JSON result strings, and `structuredContent`, async job status polling, and fail-closed validation on empty or missing outputs.
+2. **Runtime Integration Verified Offline**:
+   - Full 9-stage data progression, 5 HITL gates, optimistic concurrency (`expected_version`), atomic SQLite transactions, outbox lease/claim/quarantine, and registered MCP wire tool mocks.
+   - Tested and verified with 87 targeted tests without calling paid external APIs.
 3. **Live Verified**:
-   - Requires user to launch live MCP servers with external credentials and run a complete real-world video generation.
+   - Requires user to launch live MCP servers with external credentials and execute a complete real-world video generation.
+
+---
+
+### User Requirements Checklist for Live Provider Connection
+
+To transition from **Runtime Integration Verified Offline** to **Live Verified**, the user needs to provide:
+1. **Product Intelligence MCP Server**: A runnable command (or stdio/SSE service) providing tool `mcp__product_intelligence__research_product` and optionally `mcp__product_intelligence__build_resource_pack` returning real PDP market research.
+2. **Video Factory MCP Server**: A runnable command providing tools `mcp__video_factory__create_brief`, `mcp__video_factory__create_scene_plan`, `mcp__video_factory__create_storyboard`, `mcp__video_factory__render`, `mcp__video_factory__export`, and status polling tool `mcp__video_factory__get_job_status`.
+3. **Credentials**: Corresponding API keys configured in `~/.hermes/.env`.
 
 ---
 

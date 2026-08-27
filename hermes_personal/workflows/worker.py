@@ -93,6 +93,28 @@ def main(argv: list[str] | None = None) -> int:
     home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
     db_path = Path(args.db_path) if args.db_path else home / "hermes.db"
 
+    # Bootstrap configuration and environment secrets
+    try:
+        from hermes_cli.env_loader import load_hermes_dotenv
+        load_hermes_dotenv(hermes_home=home)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Failed to load hermes dotenv: %s", exc)
+
+    try:
+        from hermes_cli.config import load_config
+        config = load_config()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Failed to load hermes config: %s", exc)
+        config = {}
+
+    # Initialize MCP tool discovery if running in configured mode
+    if args.provider_mode == "configured":
+        try:
+            from tools.mcp_tool import discover_mcp_tools
+            discover_mcp_tools()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("MCP tool discovery failed on worker startup: %s", exc)
+
     stop_event = threading.Event()
 
     def _signal_handler(signum: int, frame: Any) -> None:
@@ -105,12 +127,20 @@ def main(argv: list[str] | None = None) -> int:
     except (ValueError, AttributeError):
         pass
 
-    run_worker(
-        db_path=db_path,
-        poll_interval=args.poll_interval,
-        stop_event=stop_event,
-        provider_mode=args.provider_mode,
-    )
+    try:
+        run_worker(
+            db_path=db_path,
+            poll_interval=args.poll_interval,
+            stop_event=stop_event,
+            provider_mode=args.provider_mode,
+        )
+    finally:
+        if args.provider_mode == "configured":
+            try:
+                from tools.mcp_tool import shutdown_mcp_servers
+                shutdown_mcp_servers()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("MCP shutdown failed: %s", exc)
     return 0
 
 

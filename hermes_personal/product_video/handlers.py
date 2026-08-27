@@ -103,7 +103,64 @@ def _get_tool_names_from_registry(registry: Any) -> set[str]:
     return set()
 
 
-def _dispatch_tool(registry: Any, tool_name: str, payload: dict[str, Any]) -> Any:
+def _decode_mcp_output(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return {"output": raw}
+
+    if isinstance(raw, dict):
+        if raw.get("isError") is True or raw.get("is_error") is True:
+            err_text = ""
+            if isinstance(raw.get("content"), list):
+                err_text = " ".join(
+                    item.get("text", "") for item in raw["content"] if isinstance(item, dict) and item.get("type") == "text"
+                )
+            err_text = err_text or raw.get("error") or "MCP tool reported an error"
+            raise RuntimeError(f"MCP tool error: {err_text}")
+
+        if "error" in raw and raw["error"]:
+            raise RuntimeError(f"Tool error: {raw['error']}")
+
+        # If structuredContent is present, use it as primary structured payload
+        if isinstance(raw.get("structuredContent"), dict):
+            res = dict(raw["structuredContent"])
+            if "_meta" in raw:
+                res["_meta"] = raw["_meta"]
+            return res
+
+        # If content list is present (e.g. standard MCP CallToolResult format)
+        if isinstance(raw.get("content"), list):
+            for block in raw["content"]:
+                if isinstance(block, dict) and block.get("type") == "text" and block.get("text"):
+                    text_val = block["text"]
+                    try:
+                        parsed_block = json.loads(text_val)
+                        if isinstance(parsed_block, dict):
+                            return parsed_block
+                    except json.JSONDecodeError:
+                        return {"output": text_val}
+
+        # If result field is present
+        if "result" in raw:
+            res_val = raw["result"]
+            if isinstance(res_val, dict):
+                return res_val
+            if isinstance(res_val, str):
+                try:
+                    parsed_res = json.loads(res_val)
+                    if isinstance(parsed_res, dict):
+                        return parsed_res
+                except json.JSONDecodeError:
+                    return {"output": res_val}
+
+        return raw
+
+    return {"output": str(raw)}
+
+
+def _dispatch_tool(registry: Any, tool_name: str, payload: dict[str, Any]) -> dict[str, Any]:
     if hasattr(registry, "dispatch"):
         raw = registry.dispatch(tool_name, payload)
     elif isinstance(registry, dict) and callable(registry.get(tool_name)):
@@ -111,17 +168,10 @@ def _dispatch_tool(registry: Any, tool_name: str, payload: dict[str, Any]) -> An
     else:
         raise RuntimeError(f"Tool '{tool_name}' cannot be dispatched on registry {registry!r}")
 
-    if isinstance(raw, str):
-        try:
-            parsed = json.loads(raw)
-            if isinstance(parsed, dict) and "error" in parsed and parsed.get("error"):
-                raise RuntimeError(f"Tool '{tool_name}' returned error: {parsed['error']}")
-            return parsed
-        except json.JSONDecodeError:
-            return {"output": raw}
-    if isinstance(raw, dict) and "error" in raw and raw.get("error"):
-        raise RuntimeError(f"Tool '{tool_name}' returned error: {raw['error']}")
-    return raw
+    decoded = _decode_mcp_output(raw)
+    if not decoded:
+        raise RuntimeError(f"Tool '{tool_name}' returned empty response")
+    return decoded
 
 
 class MCPProductIntelligenceAdapter:
@@ -160,35 +210,61 @@ class MCPProductIntelligenceAdapter:
         if tool_name and tool_name in _get_tool_names_from_registry(self.registry):
             raw = _dispatch_tool(self.registry, tool_name, {"research_result": research_result})
             return raw
-        from hermes_personal.integrations.product_intelligence.client import ProductIntelligenceClient
-        return ProductIntelligenceClient().build_resource_pack(research_result, **kwargs)
+        raise RuntimeError(
+            "MISSING_PROVIDER_CONFIG: Wire tool for 'product.resource_pack.build' is not registered in ToolRegistry. "
+            "Fails closed without generating mock assets in configured mode."
+        )
 
     def lock_resource_pack(self, pack_dict: dict, owner_user_id: str | None = None, **kwargs: Any) -> dict[str, Any]:
         tool_name = self.wire_tools.get("lock_resource_pack")
         if tool_name and tool_name in _get_tool_names_from_registry(self.registry):
             raw = _dispatch_tool(self.registry, tool_name, {"pack_dict": pack_dict, "owner_user_id": owner_user_id})
             return raw
-        from hermes_personal.integrations.product_intelligence.client import ProductIntelligenceClient
-        return ProductIntelligenceClient().lock_resource_pack(pack_dict, owner_user_id=owner_user_id, **kwargs)
+
+        # Local provenance validation for real resource pack assets
+        assets = pack_dict.get("assets_mapping") or pack_dict.get("assets")
+        if not assets:
+            raise ValueError("Cannot lock empty resource pack: missing assets")
+
+        resource_pack_id = str(pack_dict.get("resource_pack_id") or f"rp_{hash(json.dumps(pack_dict, sort_keys=True)) & 0xffffffff}")
+        return {
+            "owner": "product_intelligence",
+            "schema": "product_resource_pack_locked",
+            "version": 1,
+            "resource_pack_id": resource_pack_id,
+            "status": "locked",
+            "summary": pack_dict.get("summary", ""),
+            "assets_mapping": assets if isinstance(assets, dict) else {a.get("asset_id", f"asset_{i}"): a.get("local_path", "") for i, a in enumerate(assets)},
+            "scene_plan": pack_dict.get("scene_plan", []),
+            "owner_user_id": owner_user_id or "local-owner",
+            "external_provider_id": pack_dict.get("external_provider_id") or pack_dict.get("id"),
+        }
 
 
 class MCPVideoFactoryAdapter:
     """Live provider adapter bridging ProductVideoJobHandlers to real/MCP VideoFactory tools."""
 
-    def __init__(self, registry: Any, wire_tools: dict[str, str]) -> None:
+    def __init__(self, registry: Any, wire_tools: dict[str, str], poll_timeout: float = 60.0, poll_interval: float = 0.5) -> None:
         self.registry = registry
         self.wire_tools = wire_tools
+        self.poll_timeout = poll_timeout
+        self.poll_interval = poll_interval
 
     def create_creative_brief(self, product_id: str = "", brief_config: dict | None = None, **kwargs: Any) -> dict[str, Any]:
         tool_name = self.wire_tools.get("brief", "mcp__video_factory__create_brief")
         payload = {"product_id": product_id, "brief_config": brief_config or {}}
         raw = _dispatch_tool(self.registry, tool_name, payload)
+
+        brief_id = raw.get("brief_id") or raw.get("id")
+        if not brief_id and not product_id:
+            raise RuntimeError(f"Tool '{tool_name}' returned brief without brief_id or product_id")
+
         return {
             "owner": "video_factory",
             "schema": "creative_brief",
             "version": 1,
             "product_id": product_id,
-            "brief_id": raw.get("brief_id") or raw.get("id") or f"brief_{product_id}",
+            "brief_id": brief_id or f"brief_{product_id}",
             "payload": json.dumps({"product_id": product_id, "brief_config": brief_config or {}, "result": raw}),
             "external_provider_id": raw.get("id") or raw.get("external_id"),
         }
@@ -196,11 +272,16 @@ class MCPVideoFactoryAdapter:
     def create_scene_plan(self, brief_result: dict, **kwargs: Any) -> dict[str, Any]:
         tool_name = self.wire_tools.get("scene_plan", "mcp__video_factory__create_scene_plan")
         raw = _dispatch_tool(self.registry, tool_name, {"brief_result": brief_result})
+
+        scene_plan_id = raw.get("scene_plan_id") or raw.get("id")
+        if not scene_plan_id and not raw.get("scenes") and not raw.get("steps"):
+            raise RuntimeError(f"Tool '{tool_name}' returned empty scene plan output")
+
         return {
             "owner": "video_factory",
             "schema": "scene_plan",
             "version": 1,
-            "scene_plan_id": raw.get("scene_plan_id") or raw.get("id") or f"scene_{brief_result.get('product_id', 'unknown')}",
+            "scene_plan_id": scene_plan_id or f"scene_{brief_result.get('product_id', 'unknown')}",
             "payload": json.dumps(raw),
             "external_provider_id": raw.get("id") or raw.get("external_id"),
         }
@@ -208,11 +289,16 @@ class MCPVideoFactoryAdapter:
     def create_storyboard(self, scene_plan_result: dict, **kwargs: Any) -> dict[str, Any]:
         tool_name = self.wire_tools.get("storyboard", "mcp__video_factory__create_storyboard")
         raw = _dispatch_tool(self.registry, tool_name, {"scene_plan_result": scene_plan_result})
+
+        storyboard_id = raw.get("storyboard_id") or raw.get("id")
+        if not storyboard_id and not raw.get("frames") and not raw.get("scenes"):
+            raise RuntimeError(f"Tool '{tool_name}' returned empty storyboard output")
+
         return {
             "owner": "video_factory",
             "schema": "storyboard",
             "version": 1,
-            "storyboard_id": raw.get("storyboard_id") or raw.get("id") or "sb_live",
+            "storyboard_id": storyboard_id or "sb_custom",
             "payload": json.dumps(raw),
             "external_provider_id": raw.get("id") or raw.get("external_id"),
         }
@@ -222,12 +308,14 @@ class MCPVideoFactoryAdapter:
         payload = {"storyboard_result": storyboard_result, "render_params": render_params or {}}
         raw = _dispatch_tool(self.registry, tool_name, payload)
 
+        # Handle async job status polling
         if isinstance(raw, dict) and raw.get("status") in ("pending", "processing", "in_progress") and raw.get("job_id"):
             job_id = raw["job_id"]
             poll_tool = self.wire_tools.get("get_job_status", "mcp__video_factory__get_job_status")
             if poll_tool in _get_tool_names_from_registry(self.registry):
-                for _ in range(30):
-                    time.sleep(0.5)
+                max_attempts = max(1, int(self.poll_timeout / self.poll_interval))
+                for _ in range(max_attempts):
+                    time.sleep(self.poll_interval)
                     status_raw = _dispatch_tool(self.registry, poll_tool, {"job_id": job_id})
                     if status_raw.get("status") in ("completed", "ready", "succeeded"):
                         raw = status_raw
@@ -235,19 +323,25 @@ class MCPVideoFactoryAdapter:
                     if status_raw.get("status") in ("failed", "error"):
                         raise RuntimeError(f"Async video render job '{job_id}' failed: {status_raw.get('error')}")
                 else:
-                    raise RuntimeError(f"Async video render job '{job_id}' timed out after 15s")
+                    raise RuntimeError(f"Async video render job '{job_id}' timed out after {self.poll_timeout}s")
             else:
                 raise RuntimeError(
                     f"Async render job '{job_id}' returned status '{raw.get('status')}', but no status polling tool "
-                    f"('{poll_tool}') is registered. Cannot mark render completed without final video result."
+                    f"('{poll_tool}') is registered. Cannot mark render completed without final video output reference."
                 )
+
+        # Enforce that output reference is present and non-empty
+        render_id = raw.get("render_id") or raw.get("id")
+        video_url = raw.get("video_url") or raw.get("output_url")
+        if not render_id and not video_url:
+            raise RuntimeError(f"Video render response missing required output reference (render_id or video_url): {raw!r}")
 
         return {
             "owner": "video_factory",
             "schema": "video_render",
             "version": 1,
-            "render_id": raw.get("render_id") or raw.get("id") or "render_live",
-            "video_url": raw.get("video_url") or raw.get("output_url"),
+            "render_id": render_id or f"render_{job_id if 'job_id' in locals() else 'output'}",
+            "video_url": video_url,
             "payload": json.dumps(raw),
             "external_provider_id": raw.get("id") or raw.get("external_id"),
         }
@@ -257,15 +351,21 @@ class MCPVideoFactoryAdapter:
         payload = {"render_result": render_result, "export_params": export_params or {}}
         raw = _dispatch_tool(self.registry, tool_name, payload)
 
+        export_id = raw.get("export_id") or raw.get("id")
+        final_video_url = raw.get("final_video_url") or raw.get("export_url") or raw.get("url")
+        if not export_id and not final_video_url:
+            raise RuntimeError(f"Video export response missing required final output reference (export_id or final_video_url): {raw!r}")
+
         return {
             "owner": "video_factory",
             "schema": "video_export",
             "version": 1,
-            "export_id": raw.get("export_id") or raw.get("id") or "export_live",
-            "final_video_url": raw.get("final_video_url") or raw.get("export_url") or raw.get("url"),
+            "export_id": export_id or f"export_{render_result.get('render_id', 'output')}",
+            "final_video_url": final_video_url,
             "payload": json.dumps(raw),
             "external_provider_id": raw.get("id") or raw.get("external_id"),
         }
+
 
 
 class ProductVideoJobHandlers:

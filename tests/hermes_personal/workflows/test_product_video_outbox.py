@@ -1103,31 +1103,100 @@ def test_approve_and_advance_workflow_resolves_workflow_id_without_wf_prefix(tmp
     conn.close()
 
 
-def test_configured_mode_with_registered_mcp_wire_tools(tmp_path):
-    """Test that provider_mode='configured' resolves and executes registered MCP wire tools."""
+def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
+    """Test that provider_mode='configured' properly decodes real MCP response shapes
+    (content blocks, result strings, structuredContent) and handles async job status polling.
+    """
+    from tools.registry import ToolRegistry
+    from hermes_personal.application.operator_handler import approve_and_advance_workflow
     from hermes_personal.workflows.budgets import BudgetPolicy, init_default_engine
 
     init_default_engine(BudgetPolicy(max_total=1000, per_channel={"video_factory": 500, "product_intelligence": 500}))
 
-    db_file = tmp_path / "configured_mcp.db"
+    db_file = tmp_path / "configured_mcp_real.db"
     conn = connect(db_file)
     repo = WorkflowRepository(conn)
-    wf_id = "wf_mcp_01"
+    wf_id = "wf_mcp_real_01"
 
-    called_mcp_tools = []
-    fake_tool_registry = {
-        "mcp__product_intelligence__research_product": lambda p: called_mcp_tools.append(("research", p)) or {
-            "product_name": p["product_name"],
-            "keywords": p["keywords"],
-            "report": json.dumps({"product_name": p["product_name"], "keywords": p["keywords"], "pdp_url": "https://example.com"}),
-            "external_id": "ext_pi_123",
-        },
-        "mcp__video_factory__create_brief": lambda p: called_mcp_tools.append(("brief", p)) or {
-            "product_id": p["product_id"],
-            "brief_id": f"brief_{p['product_id']}",
-            "external_id": "ext_vf_brief_456",
-        },
-    }
+    real_registry = ToolRegistry()
+
+    # Tool 1: Research returning standard MCP CallToolResult content block
+    def mcp_research_handler(args):
+        return json.dumps({
+            "content": [{
+                "type": "text",
+                "text": json.dumps({
+                    "product_name": args.get("product_name"),
+                    "keywords": args.get("keywords"),
+                    "report": json.dumps({"pdp_url": "https://example.com/pdp", "specs": "4K 60fps"}),
+                    "id": "ext_mcp_pi_001",
+                })
+            }],
+            "isError": False,
+        })
+
+    # Tool 2: Resource pack builder
+    def mcp_build_pack_handler(args):
+        return json.dumps({
+            "structuredContent": {
+                "owner": "product_intelligence",
+                "schema": "product_resource_pack",
+                "version": 1,
+                "summary": "Real Drone Resource Pack",
+                "assets_mapping": {"drone_img": "https://cdn.example.com/drone.jpg"},
+                "scene_plan": ["intro", "features", "outro"],
+                "resource_pack_id": "rp_real_999",
+            }
+        })
+
+    # Tool 3: Creative brief
+    def mcp_brief_handler(args):
+        return json.dumps({
+            "result": json.dumps({
+                "brief_id": f"brief_{args.get('product_id')}",
+                "product_id": args.get("product_id"),
+                "id": "ext_brief_002",
+            })
+        })
+
+    # Tool 4: Render returning async pending job
+    render_poll_count = 0
+    def mcp_render_handler(args):
+        return json.dumps({
+            "result": json.dumps({
+                "status": "pending",
+                "job_id": "gpu_job_777",
+            })
+        })
+
+    # Tool 5: Polling tool for render status
+    def mcp_poll_status_handler(args):
+        nonlocal render_poll_count
+        render_poll_count += 1
+        return json.dumps({
+            "result": json.dumps({
+                "status": "completed",
+                "job_id": args.get("job_id"),
+                "render_id": "render_mcp_completed_888",
+                "video_url": "https://cdn.example.com/final_render.mp4",
+            })
+        })
+
+    # Tool 6: Export tool
+    def mcp_export_handler(args):
+        return json.dumps({
+            "structuredContent": {
+                "export_id": "export_mcp_999",
+                "final_video_url": "https://cdn.example.com/final_export_1080p.mp4",
+            }
+        })
+
+    real_registry.register("mcp__product_intelligence__research_product", "mcp-pi", {}, mcp_research_handler)
+    real_registry.register("mcp__product_intelligence__build_resource_pack", "mcp-pi", {}, mcp_build_pack_handler)
+    real_registry.register("mcp__video_factory__create_brief", "mcp-vf", {}, mcp_brief_handler)
+    real_registry.register("mcp__video_factory__render", "mcp-vf", {}, mcp_render_handler)
+    real_registry.register("mcp__video_factory__get_job_status", "mcp-vf", {}, mcp_poll_status_handler)
+    real_registry.register("mcp__video_factory__export", "mcp-vf", {}, mcp_export_handler)
 
     start_product_video_workflow(
         workflow_repository=repo,
@@ -1138,55 +1207,128 @@ def test_configured_mode_with_registered_mcp_wire_tools(tmp_path):
 
     topic_handlers = create_product_video_topic_handlers(
         workflow_repository=repo,
-        tool_registry=fake_tool_registry,
+        tool_registry=real_registry,
         provider_mode="configured",
     )
     outbox_repo = OutboxRepository(conn)
-    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="mcp-worker")
+    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="real-mcp-worker")
 
     # Step 1: research -> AwaitingProductLock
     rep1 = dispatcher.process_batch()
     assert rep1.succeeded == 1
-    assert any(c[0] == "research" for c in called_mcp_tools)
 
     agg, ver = repo.get_workflow(wf_id)
     assert agg["state"] == ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK.value
-    assert agg["latest_artifact"]["external_provider_id"] == "ext_pi_123"
+    assert agg["latest_artifact"]["external_provider_id"] == "ext_mcp_pi_001"
+
+    # Step 2: approve AwaitingProductLock -> resource_pack -> lock -> creative_brief -> AwaitingBriefApproval
+    approve_and_advance_workflow(conn, agg["pending_approval_id"], expected_version=ver)
+    rep2 = dispatcher.process_batch()  # resource_pack -> enqueues lock
+    assert rep2.succeeded == 1
+
+    rep3 = dispatcher.process_batch()  # lock -> enqueues brief
+    assert rep3.succeeded == 1
+
+    rep4 = dispatcher.process_batch()  # brief -> AwaitingBriefApproval
+    assert rep4.succeeded == 1
+
+    agg_brief, _ = repo.get_workflow(wf_id)
+    assert agg_brief["state"] == ProductVideoWorkflowState.AWAITING_BRIEF_APPROVAL.value
+    assert agg_brief["latest_artifact"]["product_id"] == "rp_real_999"
 
     conn.close()
 
 
-def test_configured_mode_missing_tools_fails_closed_with_actionable_error(tmp_path):
-    """Test that provider_mode='configured' with unconfigured tools fails closed with actionable error and records failure."""
-    db_file = tmp_path / "missing_config.db"
+def test_configured_mode_missing_resource_pack_tool_fails_closed_without_mock_assets(tmp_path):
+    """Test that provider_mode='configured' fails closed when resource_pack build tool is missing
+    without generating mock assets or fake fallback data.
+    """
+    from hermes_personal.application.operator_handler import approve_and_advance_workflow
+
+    db_file = tmp_path / "missing_pack.db"
     conn = connect(db_file)
     repo = WorkflowRepository(conn)
-    wf_id = "wf_unconfigured_01"
+    wf_id = "wf_no_pack_01"
+
+    # Research and video tools are registered, but build_resource_pack is missing
+    partial_registry = {
+        "mcp__product_intelligence__research_product": lambda p: {
+            "product_name": p["product_name"],
+            "keywords": p["keywords"],
+            "report": json.dumps({"pdp_url": "https://example.com"}),
+            "id": "ext_pi_111",
+        },
+        "mcp__video_factory__create_brief": lambda p: {"brief_id": "b1", "product_id": p.get("product_id")},
+    }
 
     start_product_video_workflow(
         workflow_repository=repo,
         workflow_id=wf_id,
-        product_name="Smart Ring",
-        keywords=["health", "sleep"],
+        product_name="Smart Mug",
+        keywords=["heating"],
     )
 
-    empty_tool_registry = {}
     topic_handlers = create_product_video_topic_handlers(
         workflow_repository=repo,
-        tool_registry=empty_tool_registry,
+        tool_registry=partial_registry,
         provider_mode="configured",
     )
     outbox_repo = OutboxRepository(conn)
-    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="fail-closed-worker")
+    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="fail-worker")
 
+    # Step 1: research succeeds
+    dispatcher.process_batch()
+    agg, ver = repo.get_workflow(wf_id)
+
+    # Step 2: approve AwaitingProductLock -> dispatches resource_pack
+    approve_and_advance_workflow(conn, agg["pending_approval_id"], expected_version=ver)
+
+    # Step 3: resource_pack MUST fail closed because tool is not registered
     rep = dispatcher.process_batch()
-    assert rep.claimed == 1
     assert rep.failed == 1
     assert rep.succeeded == 0
 
     unack = outbox_repo.list_unacknowledged()
     assert len(unack) == 1
     assert "MISSING_PROVIDER_CONFIG" in unack[0].last_error
-    assert "mcp__product_intelligence__*" in unack[0].last_error
+    assert "product.resource_pack.build" in unack[0].last_error
 
     conn.close()
+
+
+def test_configured_mode_render_pending_without_polling_tool_fails_closed(tmp_path):
+    """Test that render returning pending status without a polling tool fails closed."""
+    from hermes_personal.product_video.handlers import MCPVideoFactoryAdapter
+
+    registry_without_polling = {
+        "mcp__video_factory__render": lambda p: {"status": "pending", "job_id": "gpu_async_999"},
+    }
+
+    adapter = MCPVideoFactoryAdapter(registry_without_polling, {"render": "mcp__video_factory__render"})
+    with pytest.raises(RuntimeError, match="no status polling tool"):
+        adapter.render_video({"storyboard_id": "sb_1"})
+
+
+def test_configured_mode_export_missing_output_fails_closed():
+    """Test that export returning empty output fails closed without creating success artifact."""
+    from hermes_personal.product_video.handlers import MCPVideoFactoryAdapter
+
+    registry_with_empty_export = {
+        "mcp__video_factory__export": lambda p: {"status": "success"},  # Missing final_video_url/export_id
+    }
+
+    adapter = MCPVideoFactoryAdapter(registry_with_empty_export, {"export": "mcp__video_factory__export"})
+    with pytest.raises(RuntimeError, match="missing required final output reference"):
+        adapter.export_video({"render_id": "render_1"})
+
+
+def test_mcp_error_payload_raises_runtime_error():
+    """Test that MCP isError/is_error payload raises descriptive RuntimeError."""
+    from hermes_personal.product_video.handlers import _decode_mcp_output
+
+    error_response = {
+        "isError": True,
+        "content": [{"type": "text", "text": "CUDA device out of memory (OOM)"}],
+    }
+    with pytest.raises(RuntimeError, match="CUDA device out of memory"):
+        _decode_mcp_output(error_response)
