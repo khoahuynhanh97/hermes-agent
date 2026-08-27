@@ -120,27 +120,30 @@ remaining happy-path blocker. Append History, set both owners to PLANNER, then e
 
 ## Last Worker Report
 
-Iteration: 90
+Iteration: 91
 Phase: Phase 7 Continuation - Personal Happy Path and Bounded Hardening
 
 Implemented:
-- **Task 1: Production Progression & Data Chain**: Restored complete 9-stage data progression chain: `research` -> HITL `AwaitingProductLock` -> `resource_pack` -> `lock` -> `creative_brief` -> HITL `AwaitingBriefApproval` -> `scene_plan` -> HITL `AwaitingSceneApproval` -> `storyboard` -> HITL `AwaitingStoryboardApproval` -> `render` -> HITL `AwaitingFinalApproval` -> `export` -> `COMPLETED`. Enforces that `resource_pack` is locked before moving to `CREATING_BRIEF`, and extracts string `product_id` from locked resource pack for `creative_brief`.
-- **Task 2: Single Atomic Transaction & Approval Validation**: Resolved approval requests by exact ID (eliminating wildcard `LIKE` JSON searches), validated workflow aggregate state and version against `expected_version`, and wrapped approval status mutation (`approved`), aggregate state transition, event emission, and outbox message creation in a single atomic SQLite `with connection:` transaction block. Clears `pending_approval_id` and `pending_approval_gate` upon resumption. Rejects terminal/already approved requests without duplicate jobs.
-- **Task 3: Focused Integration & Regression Testing**: Added full end-to-end HTTP route integration test via `TestClient(app)` verifying all 9 workflow stages and 5 HITL gates, as well as focused regression tests for `expected_version` rejection, SQLite commit rollback consistency, and duplicate approval prevention.
-- **Documentation**: Updated `docs/hermes-personal/product-video-runbook.md` detailing the HTTP operator commands, complete data chain, and explicit live provider adapter blocker (`HP-008`).
+- **FIX 1: Canonical Version & Precondition Binding**: Enforced canonical top-level `cmd.expected_version` validation in `approve_and_advance_workflow` without bypassing `expected_version == 0`. Strictly validates all 5 binding preconditions (`request_id == pending_approval_id`, `request.workflow_id == target_wf`, `request.gate == pending_approval_gate == current_state`, `request.workflow_version == current_version`, `request.status == PENDING`) before any mutation. Added regression test `test_approval_request_mismatch_rejected_without_db_mutation` proving stale/non-pending approvals are rejected without DB mutations.
+- **FIX 2: Atomic HITL Approval Creation**: Updated `ApprovalService.submit_request` to accept an optional `cursor` parameter, allowing `INSERT INTO approval_request` to run within an active transaction. Enclosed HITL approval creation and `repo.commit_workflow(...)` inside a single `with repo.conn:` transaction block in `create_product_video_topic_handlers`. Added regression test `test_job_completion_hitl_approval_creation_rollback_on_persistence_failure` verifying zero orphan approval records remain on commit failure.
+- **FIX 3: Product Identity to Provider**: Updated `CreativeBriefRequest` and `VideoFactoryClient.create_creative_brief` to accept and bind `product_id`. Updated `creative_brief_job` to pass `product_id=product_id` to `create_creative_brief`. Added spy test `test_provider_boundary_spy_receives_product_identity_and_locked_resource_pack` asserting `VideoFactoryClient` receives the exact `product_id` (string `rp_...`) and locked resource pack ref.
 
 Files Changed:
-- `hermes_personal/product_video/handlers.py`
 - `hermes_personal/application/operator_handler.py`
+- `hermes_personal/workflows/approvals.py`
+- `hermes_personal/integrations/video_factory/contracts.py`
+- `hermes_personal/integrations/video_factory/client.py`
+- `hermes_personal/product_video/handlers.py`
 - `tests/hermes_personal/workflows/test_product_video_outbox.py`
-- `docs/hermes-personal/product-video-runbook.md`
+- `tests/hermes_personal/product_video/test_video_factory_client.py`
 
 Verification:
-- `uv run pytest tests/hermes_personal/workflows/test_product_video_outbox.py tests/hermes_personal/workflows/test_outbox_dispatcher.py tests/hermes_personal/workflows/test_worker.py tests/hermes_personal/workflows/test_outbox_repository.py tests/hermes_personal/product_video/test_product_to_video_e2e.py tests/hermes_personal/product_video/test_job_handlers.py tests/hermes_personal/product_video/test_handlers.py -q`: 76 passed in 3.45s.
-- `uv run ruff check hermes_personal/product_video/handlers.py hermes_personal/application/operator_handler.py tests/hermes_personal/workflows/test_product_video_outbox.py`: All checks passed.
+- `uv run pytest tests/hermes_personal/workflows/test_product_video_outbox.py tests/hermes_personal/workflows/test_outbox_dispatcher.py tests/hermes_personal/workflows/test_worker.py tests/hermes_personal/workflows/test_outbox_repository.py tests/hermes_personal/product_video/test_product_to_video_e2e.py tests/hermes_personal/product_video/test_job_handlers.py tests/hermes_personal/product_video/test_handlers.py tests/hermes_personal/product_video/test_video_factory_client.py -q`: 81 passed in 3.88s.
+- `uv run pytest tests/hermes_personal -q`: 608 passed in 57.29s.
+- `uv run ruff check`: All checks passed.
 - `git diff --check`: Clean.
 
-Commit: `04e0c00e52`
+Commit: `2beffbf1e1`
 
 Remaining Issues / Blockers:
 - Live external API provider adapters for Product Intelligence & Video Factory remain unconfigured for live `provider_mode="configured"`.
@@ -183,6 +186,9 @@ WORKER proves or minimally wires the concrete Product Intelligence -> Video Fact
 
 ## History
 ...
+### Iteration 91
+WORKER completed REWORK on baseline 04e0c00e52: (1) enforced canonical top-level `cmd.expected_version` and 5 binding preconditions in `approve_and_advance_workflow`, (2) made HITL `ApprovalRequest` creation and `commit_workflow` atomic in job completion handler using transaction cursors, (3) bound `product_id` through `CreativeBriefRequest` & `VideoFactoryClient`, verified with spy boundary tests and 608 passing unit/integration tests (commit `2beffbf1e1`). Handed off to PLANNER.
+
 ### Iteration 90
 WORKER resolved three tasks: (1) restored data progression chain `research` -> HITL `AwaitingProductLock` -> `resource_pack` -> `lock` -> `creative_brief` -> ... -> `export` -> `COMPLETED`, (2) implemented single atomic SQLite transaction for approval status, aggregate state, events, and outbox messages with version & state validation, (3) added full HTTP `TestClient(app)` operator route E2E integration test and focused regression tests for version mismatch, transaction rollback, and duplicate approval. Verified with 76 focused pytest tests passing and clean ruff / diff-check (commit `04e0c00e52`). Handed off to PLANNER.
 
