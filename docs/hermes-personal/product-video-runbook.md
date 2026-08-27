@@ -170,19 +170,67 @@ PRODUCT_INTELLIGENCE_API_KEY=pi_live_secret_key_here
 1. **Adapter Implemented**:
    - `MCPProductIntelligenceAdapter` and `MCPVideoFactoryAdapter` implement canonical payload mapping, `_decode_mcp_output` parsing for text blocks, JSON result strings, and `structuredContent`, async job status polling, and fail-closed validation on empty or missing outputs.
 2. **Runtime Integration Verified Offline**:
-   - Full 9-stage data progression, 5 HITL gates, optimistic concurrency (`expected_version`), atomic SQLite transactions, outbox lease/claim/quarantine, and registered MCP wire tool mocks.
-   - Tested and verified with 87 targeted tests without calling paid external APIs.
+   - Full 9-stage data progression, 5 HITL gates, optimistic concurrency (`expected_version`), atomic SQLite transactions, outbox lease/claim/quarantine, monotonic deadline enforcement, heartbeat renewal, structured terminal error handling, and registered MCP wire tool mocks.
+   - Tested and verified with 106 targeted tests without calling paid external APIs.
 3. **Live Verified**:
    - Requires user to launch live MCP servers with external credentials and execute a complete real-world video generation.
 
 ---
 
-### User Requirements Checklist for Live Provider Connection
+## 6. MCP Setup Readiness & Staged Validation Plan (PERSONAL_HAPPY_PATH_V1)
 
-To transition from **Runtime Integration Verified Offline** to **Live Verified**, the user needs to provide:
-1. **Product Intelligence MCP Server**: A runnable command (or stdio/SSE service) providing tool `mcp__product_intelligence__research_product` and optionally `mcp__product_intelligence__build_resource_pack` returning real PDP market research.
-2. **Video Factory MCP Server**: A runnable command providing tools `mcp__video_factory__create_brief`, `mcp__video_factory__create_scene_plan`, `mcp__video_factory__create_storyboard`, `mcp__video_factory__render`, `mcp__video_factory__export`, and status polling tool `mcp__video_factory__get_job_status`.
-3. **Credentials**: Corresponding API keys configured in `~/.hermes/.env`.
+### 6.1 Concrete Required Tool Inventory & Stage Contracts
+
+| Stage | Canonical Tool Name | Expected Input Shape | Expected Output Shape | Sync / Async Polling | Cost / Paid Operation | HITL Gate Gated |
+|---|---|---|---|---|---|---|
+| 1. Market Research | `mcp__product_intelligence__research_product` | `{"product_id": str, ...}` | `{"report": str/dict, "brief_config": dict}` | Sync | Free / Local | Pre-Gate 1 |
+| 2. Resource Pack Draft | `mcp__product_intelligence__build_resource_pack` | `{"product_id": str, "research_data": dict}` | `{"resource_pack": dict, "assets": list}` | Sync | Free / Local | Pre-Gate 1 |
+| 3. Lock Resource Pack | `mcp__product_intelligence__lock_resource_pack` | `{"resource_pack": dict, ...}` | `{"status": "locked", "resource_pack_id": str}` | Sync | Free / Local | **Gate 1 (ProductLock)** |
+| 4. Creative Brief | `mcp__video_factory__create_brief` | `{"product_id": str, "brief_config": dict}` | `{"brief_id": str, "script": str, ...}` | Sync | Free / Low-cost LLM ($5 max) | **Gate 2 (Brief)** |
+| 5. Scene Plan | `mcp__video_factory__create_scene_plan` | `{"brief_id": str, ...}` | `{"scene_plan_id": str, "scenes": list}` | Sync | Free / Low-cost LLM ($5 max) | **Gate 3 (ScenePlan)** |
+| 6. Storyboard | `mcp__video_factory__create_storyboard` | `{"scene_plan_id": str, ...}` | `{"storyboard_id": str, "frames": list}` | Sync | Free / Image Gen ($10 max) | **Gate 4 (Storyboard)** |
+| 7. GPU Render | `mcp__video_factory__render` | `{"storyboard_id": str, "render_params": dict}` | `{"status": "pending", "job_id": str}` | **Async (polls `get_job_status`)** | **Paid GPU ($50 reserved)** | **Gate 5 (Final Video)** |
+| 7b. Render Status Poll | `mcp__video_factory__get_job_status` | `{"job_id": str}` | `{"status": "completed", "video_url": str}` | Sync (polled at interval) | Included in Render | Pre-Gate 5 |
+| 8. MP4 Export | `mcp__video_factory__export` | `{"render_id": str, "export_params": dict}` | `{"status": "completed", "final_video_url": str}` | Sync or Async | **Paid Encoding ($20 reserved)** | Post-Gate 5 Terminal |
+
+> [!NOTE]
+> Registered tool names above represent canonical naming (`mcp__{server_name}__{tool_name}`). If an existing local server registers under a different server key (e.g. `hermes_video_factory` instead of `video_factory`), configure alias mapping in `wire_tools` or align the `mcp_servers` key in `config.yaml`.
+
+### 6.2 Local Setup Inspection & Verified Environment Facts
+
+- **Hermes Home Resolution**: Platform-native path is `%LOCALAPPDATA%\hermes` (Windows) or `~/.hermes` (macOS/Linux).
+- **Configuration File**: `%LOCALAPPDATA%\hermes\config.yaml` is parsed and contains:
+  - `mcp_servers.product_intelligence` (Configured: Python module `product_scout.mcp_server` under `D:\work\Personal\Product-Intelligence`).
+  - `mcp_servers.hermes_video_factory` (Configured: Python module `mcp_servers.video_factory.server` under `D:\work\hermes-agent`).
+- **Secret Management**: Stored locally in `%LOCALAPPDATA%\hermes\.env` or `~/.hermes/.env` (never committed to version control, loaded via `load_hermes_dotenv()`).
+
+### 6.3 Staged Operator Validation Plan with Clear Stop Gates
+
+```mermaid
+flowchart TD
+    S1[Stage 1: Static Inventory & Contract Audit] -->|Approved by Planner| S2[Stage 2: Safe Non-Paid Discovery Check]
+    S2 -->|Tools Registered Cleanly| S3[Stage 3: Operator HITL Supervised Run]
+    S3 -->|Gate 1: Product Lock| S4[Stage 4: Low-Cost Creative Generation]
+    S4 -->|Gate 2-4: Brief/Scene/Storyboard Approvals| S5[Stage 5: Budget-Gated GPU Render & Export]
+```
+
+1. **Stage 1 (Static Readiness - Completed)**:
+   - Verify tool schemas, input/output decoders, error taxonomy, and fail-closed behavior via offline unit/mock test suites.
+   - Zero external network requests or paid token consumption.
+2. **Stage 2 (Non-Paid Tool Discovery & Liveness Probe - Next Step)**:
+   - Run safe discovery probe (`tools.mcp_tool.discover_mcp_tools()`) to verify both MCP child processes launch cleanly via stdio and register expected tool names without invoking tool bodies.
+   - Stop Gate: If discovery fails or expected tool names are missing, halt without starting background worker.
+3. **Stage 3 (Operator-Supervised Workflow Execution)**:
+   - Initiate workflow via `POST /api/operator/command` (`start_workflow`).
+   - Stop Gate: Require human review and approval at each of the 5 HITL gates (`AwaitingProductLock`, `AwaitingBriefApproval`, `AwaitingSceneApproval`, `AwaitingStoryboardApproval`, `AwaitingFinalApproval`).
+   - Stop Gate: Hard budget cap enforced by SQLite `BudgetEngine` ($90 total max, $50 render max) before any GPU render call.
+
+### 6.4 Missing User Inputs Checklist Before Live Execution
+
+To proceed from Static Readiness to Live Execution, confirm the following inputs:
+1. **Server Key Alignment**: Confirm whether `video_factory` should be aliased to `hermes_video_factory` in `config.yaml` or if tool mapping `wire_tools` should be used.
+2. **Local Credential Presence**: Ensure all required third-party API keys (e.g. AI provider / video generation credentials) are populated in `%LOCALAPPDATA%\hermes\.env` or `~/.hermes/.env` (do NOT share in chat).
+3. **Explicit Live Execution Authorization**: Explicit operator confirmation authorizing live external provider calls and confirming the spending budget limit prior to starting the pipeline.
 
 ---
 
