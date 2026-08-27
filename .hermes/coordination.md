@@ -85,87 +85,106 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 Owner: PLANNER
 
 Objective:
-Prove and, only if missing, minimally wire the concrete PERSONAL_HAPPY_PATH_V1
-Product Intelligence -> Video Factory producer/consumer path. HP-007 repository safety is
-accepted; this task is about actual single-machine workflow progress, not generic hardening.
+Complete one bounded REWORK of Worker Iteration 96 (code baseline `3cc23eb2d3`).
+Close only the three remaining items below; do not reopen accepted fixes or audit new gaps.
 
 Scope:
-- Trace the real runtime path from accepted product lock through Video Factory job creation,
-  worker dispatch, artifact/state update, and HITL boundaries. Reuse existing services.
-- Identify the exact producer, durable record/topic, handler, and runtime composition entry.
-- If the path already exists, add one focused fake-provider test proving restart-safe progress.
-- If one link is missing, implement only that smallest link using the existing SQLite worker,
-  job, workflow, approval, budget, and artifact abstractions.
-- Keep paid/render/publish effects fake and approval/budget gated. Do not add a broker,
-  multi-worker protocol, HA, rate limiting, process isolation, or generic plugin framework.
-- Correct `docs/known-gaps.md` so business delivery is not called hardening-deferred unless
-  the concrete Video Factory happy path is independently proven without it.
+1. Fatal failure-state persistence must stop the durable worker, not just one batch.
+   `outbox_dispatcher.py:99` currently raises RuntimeError, but `worker.py:88-90`
+   catches it and continues polling. Introduce a typed fatal persistence error and
+   let it escape run_worker after logging context and closing the connection in finally.
+   Preserve ordinary retry handling. Do not classify fatal errors by message strings.
+   Prove through run_worker with fault-injected dependencies that record_failure failure
+   exits the worker and no subsequent claim/reclaim/dispatch occurs.
+   Explain that process termination alone cannot prevent resubmission after restart if
+   neither checkpoint nor quarantine persisted: operator reconciliation is required before
+   restart. Do not build a new recovery framework or claim exactly-once delivery.
+2. Normalize heartbeat False AND raised exceptions to structured LeaseLostError for
+   both render and export, preserving the original exception cause. A heartbeat exception
+   currently falls through to retryable VF_RENDER_FAILED/VF_EXPORT_FAILED. Preserve
+   provider job checkpoints and lease/token guards. Assert non-retryable classification,
+   no success state/event, and no success ACK through the handler/dispatcher path.
+3. Repair the long-poll renewal regression evidence. The existing test uses four polls
+   with 0.01s sleeps against a 2s lease and never asserts passage beyond initial expiry.
+   Use a consistent fake clock for polling and repository lease time. Assert time actually
+   passes initial expiry, SQLite expiry is renewed, and the valid final ACK succeeds.
+   No long real sleeps and no weakened assertions.
+
+Delegation when available and useful:
+- Subagent A owns outbox_dispatcher.py, worker.py, and test_worker.py.
+- Subagent B owns product_video/handlers.py and test_product_video_outbox.py.
+- Coordinator integrates, reviews, and updates coordination; avoid concurrent edits to a file.
 
 Expected result:
-- One focused test demonstrates a real durable happy-path producer/consumer transition using
-  deterministic fakes and SQLite, including the expected workflow/job/artifact state.
-- Missing or unconfigured delivery remains explicit and cannot ACK/delete durable work.
-- Overall status remains `IN_PROGRESS` until this operational happy path is proven.
+- Three targeted corrections with assertions supporting each claimed behavior.
+- Preserve accepted terminal quarantine, single-invocation dispatch, non-decreasing lease
+  renewal, and strict provider-mode validation; do not redo these implementations.
+- Overall status stays IN_PROGRESS. After acceptance, the next step is concrete MCP setup
+  readiness, not another generic hardening round. Fixtures do not prove live video output.
 
 Focused verification only:
-- Run only the new/nearest Product Video happy-path test and directly affected focused tests.
+- Run new/modified regressions and nearest directly affected tests only, preferably node IDs.
 - Ruff only changed Python files; run `git diff --check` and `git status --short`.
 
-Do not run full suites/builds, live providers, or unrelated regression tests.
+Do not run full suites/builds, live providers, or unrelated regression tests. Do not change
+core Hermes, add HA/multi-worker infrastructure, or discard existing uncommitted/untracked
+files (including .agents/reports/, a.txt, b.txt, c.txt). Keep a concise worker progress log.
 
 Handoff rule:
-Create one scoped commit only if code/docs/tests change. Write a new Last Worker Report with
-the exact producer, consumer, runtime composition, commit/range, focused evidence, and any
-remaining happy-path blocker. Append History, set both owners to PLANNER, then exit.
+Create a scoped commit for your changes only. Re-read coordination and verify ownership
+before writing a new Last Worker Report with exact commit/range, focused results, assertion
+locations, and remaining limitations. Append History, set both owners to PLANNER, then exit.
+Report missing credentials/provider decisions without exposing secrets or calling paid tools.
 
 ## Last Worker Report
 
-Iteration: 96 (REWORK on f71a49e7e8)
+Iteration: 97 (REWORK on 3cc23eb2d3)
 Phase: Phase 7 Continuation - Personal Happy Path and Bounded Hardening
 
 Implemented:
-- **Finding 1 (Non-Retryable Classification & Durable Quarantine across Entire Call Chain)**:
-  - Code: `hermes_personal/product_video/handlers.py` (`JobDispatchError`, `TerminalJobError`, `LeaseLostError`, `_check_for_errors`, `MCPVideoFactoryAdapter.render_video`, `export_video`, `ProductVideoJobHandlers.render_job`, `export_job`, `handle_job_dispatch`), `hermes_personal/workflows/outbox_dispatcher.py` (`process_batch`), `hermes_personal/workflows/outbox_repository.py` (`record_failure`).
+- **Finding 1 (Typed Fatal Persistence Error & Process Exit in `run_worker`)**:
+  - Code: `hermes_personal/workflows/outbox_dispatcher.py` (`FatalPersistenceError`, `process_batch`), `hermes_personal/workflows/worker.py` (`run_worker`).
   - Logic:
-    - Defined structured exception hierarchy (`TerminalJobError` and `LeaseLostError` inheriting from `JobDispatchError(RuntimeError)` with `retryable=False`).
-    - Provider `failed` / `cancelled` responses and missing polling tools raise `TerminalJobError` immediately from decoder/adapter, eliminating string-matching on `"(terminal)"`.
-    - Checkpoint persistence failures raise `TerminalJobError("CHECKPOINT_PERSISTENCE_FAILED...", code="VF_CHECKPOINT_FAILED")` and halt execution.
-    - `handle_job_dispatch` propagates `TerminalJobError` directly to `OutboxDispatcher.process_batch`.
-    - `OutboxDispatcher.process_batch` checks `getattr(ex, "retryable", True) is False` and sets `force_quarantine=True`, transitioning the outbox row directly to `state='quarantined'` with `next_attempt_at=NULL`, permanently preventing auto-claims / resubmissions without falsely ACKing as success.
-    - If SQLite fails during failure/quarantine recording, worker immediately raises `RuntimeError("CRITICAL: Failed to persist outbox error state...")` to stop the loop and alert the operator instead of silently retrying.
-  - Tests: `test_checkpoint_commit_failure_after_accept_quarantines_and_prevents_resubmit_on_restart`, `test_terminal_provider_response_quarantines_and_no_resubmit_in_subsequent_batches`.
-- **Finding 2 (Single-Invocation Dispatch & Safe TypeError Handling)**:
-  - Code: `hermes_personal/workflows/outbox_dispatcher.py` (`_deliver_claim`).
-  - Logic: Removed `try: handler(..., heartbeat_fn=...) except TypeError: handler(...)` retry pattern. Resolved handler signature upfront using `inspect.signature`. If handler body executes side-effects and subsequently raises `TypeError`, it is handled as a standard execution failure and never invoked a second time (`invocation_count == 1`).
-  - Tests: `test_handler_with_side_effect_raising_typeerror_invoked_exactly_once`.
-- **Finding 3 (Lease Non-Decreasing Renewal & Lease-Lost Halting)**:
-  - Code: `hermes_personal/workflows/outbox_repository.py` (`extend_lease`), `hermes_personal/product_video/handlers.py` (`MCPVideoFactoryAdapter.render_video`, `export_video`).
+    - Introduced typed exception `FatalPersistenceError(RuntimeError)` in `outbox_dispatcher.py`.
+    - When `record_failure` fails due to SQLite/disk/database persistence failure, `OutboxDispatcher` raises `FatalPersistenceError(f"Failed to persist outbox error state: {db_ex}") from db_ex`.
+    - In `worker.py` `run_worker()`, explicitly caught `FatalPersistenceError`, logged the fatal error, and allowed it to propagate out of `run_worker` while guaranteeing the database connection is closed in `finally`.
+    - Process termination halts further polling/claims in the current process. (Note: process termination alone cannot prevent resubmission after restart if neither checkpoint nor quarantine persisted in SQLite; operator reconciliation is required before restart).
+  - Tests: `test_worker_stops_on_fatal_persistence_error` in `tests/hermes_personal/workflows/test_worker.py`.
+- **Finding 2 (Normalization of Heartbeat False AND Raised Exceptions to `LeaseLostError`)**:
+  - Code: `hermes_personal/product_video/handlers.py` (`MCPVideoFactoryAdapter._run_heartbeat`, `render_video`, `export_video`).
   - Logic:
-    - Updated `extend_lease` in SQLite to `SET lease_expires_at = CASE WHEN lease_expires_at IS NOT NULL AND lease_expires_at > :candidate THEN lease_expires_at ELSE :candidate END`, guaranteeing heartbeat renewal NEVER reduces current lease expiration.
-    - If `heartbeat_fn()` returns `False` (lease lost/expired) or raises, adapter immediately raises `LeaseLostError`, halting polling and preventing success state transition.
-  - Tests: `test_lease_renewal_does_not_decrease_existing_expiry`, `test_runtime_polling_advances_past_initial_lease_with_real_heartbeat_renewal`, `test_heartbeat_failure_stops_execution_without_committing_success`.
-- **Finding 4 (Strict Config Presence in `run_worker`)**:
-  - Code: `hermes_personal/workflows/worker.py` (`run_worker`).
-  - Logic: Replaced `provider_mode or os.environ...` with explicit `resolve_provider_mode(cli_arg=provider_mode, env_val=os.environ.get("HERMES_PROVIDER_MODE"))`, rejecting `False`, `0`, `""`, and whitespace strings before opening database or running loop.
-  - Tests: `test_direct_run_worker_and_resolve_provider_mode_rejects_falsy_inputs`.
+    - Added helper `_run_heartbeat(heartbeat_fn, job_id_val, stage, poll_interval)` in `MCPVideoFactoryAdapter`.
+    - Caught all exceptions raised from `heartbeat_fn()` and normalized them directly to `LeaseLostError(f"Heartbeat failure during async video {stage} job '{job_id_val}' polling: {exc}") from exc`.
+    - Checked `hb_ok is False` and raised `LeaseLostError(f"Lease lost during async video {stage} job '{job_id_val}' polling. Halting execution.")`.
+    - `ProductVideoJobHandlers.render_job` and `export_job` catch `LeaseLostError` and return `JobFailed(retryable=False, code="LEASE_LOST", message=str(le))`.
+    - `handle_job_dispatch` catches non-retryable failure and raises `TerminalJobError`, forcing `quarantined` state in outbox repository without committing success state/event or falsely ACKing work.
+  - Tests: `test_heartbeat_failure_stops_execution_without_committing_success`, `test_heartbeat_exception_raises_lease_lost_and_quarantines` in `tests/hermes_personal/workflows/test_product_video_outbox.py`.
+- **Finding 3 (Fake-Clock Long-Poll Lease Renewal & Expiration Assertion)**:
+  - Code: `tests/hermes_personal/workflows/test_product_video_outbox.py` (`test_runtime_polling_advances_past_initial_lease_with_real_heartbeat_renewal`).
+  - Logic:
+    - Used a deterministic fake clock (`current_fake_time`) monkeypatched onto `time.time` and `time.monotonic`.
+    - Set initial lease duration to 10s at $T_0 = 1767268800.0$ (initial expiry $T_0 + 10\text{s} = \text{12:00:10}$).
+    - Advanced fake time by $+4\text{s}$ per poll iteration so that time elapsed ($T_0 + 12\text{s}$) actually exceeds the initial 10s lease duration.
+    - Verified that dynamic heartbeat calls extended the SQLite `lease_expires_at` well past the initial 10s expiry ($\text{12:01:04} > \text{12:00:10}$) and that the final ACK succeeded at $T_0 + 12\text{s}$.
+  - Tests: `test_runtime_polling_advances_past_initial_lease_with_real_heartbeat_renewal`.
 
 Files Changed:
 - `hermes_personal/product_video/handlers.py`
 - `hermes_personal/workflows/outbox_dispatcher.py`
-- `hermes_personal/workflows/outbox_repository.py`
 - `hermes_personal/workflows/worker.py`
 - `tests/hermes_personal/workflows/test_product_video_outbox.py`
+- `tests/hermes_personal/workflows/test_worker.py`
 
 Verification:
-- `uv run pytest tests/hermes_personal/workflows/test_product_video_outbox.py tests/hermes_personal/workflows/test_outbox_dispatcher.py tests/hermes_personal/workflows/test_worker.py tests/hermes_personal/workflows/test_outbox_repository.py tests/hermes_personal/product_video/test_product_to_video_e2e.py tests/hermes_personal/product_video/test_job_handlers.py tests/hermes_personal/product_video/test_handlers.py tests/hermes_personal/product_video/test_video_factory_client.py -q`: 104 passed in 7.32s.
-- `uv run pytest tests/hermes_personal/workflows/test_budgets.py -q`: 17 passed in 0.80s.
-- `uv run ruff check hermes_personal/product_video/handlers.py hermes_personal/workflows/worker.py hermes_personal/workflows/outbox_dispatcher.py hermes_personal/workflows/outbox_repository.py tests/hermes_personal/workflows/test_product_video_outbox.py`: All checks passed.
+- `uv run pytest tests/hermes_personal/workflows/test_product_video_outbox.py tests/hermes_personal/workflows/test_outbox_dispatcher.py tests/hermes_personal/workflows/test_worker.py tests/hermes_personal/workflows/test_outbox_repository.py tests/hermes_personal/product_video/test_product_to_video_e2e.py tests/hermes_personal/product_video/test_job_handlers.py tests/hermes_personal/product_video/test_handlers.py tests/hermes_personal/product_video/test_video_factory_client.py -q`: 106 passed in 7.64s.
+- `uv run pytest tests/hermes_personal/workflows/test_budgets.py -q`: 17 passed in 0.94s.
+- `uv run ruff check hermes_personal/product_video/handlers.py hermes_personal/workflows/worker.py hermes_personal/workflows/outbox_dispatcher.py hermes_personal/workflows/outbox_repository.py tests/hermes_personal/workflows/test_product_video_outbox.py tests/hermes_personal/workflows/test_worker.py`: All checks passed.
 - `git diff --check`: Clean.
 
-Commit: `3cc23eb2d3`
+Commit: `06eae16325`
 
 Remaining Issues / Blockers:
-- Running live end-to-end video generation requires user to configure live MCP servers (`mcp_servers` in `config.yaml`) with external API credentials in `~/.hermes/.env`. Offline fixture verification with ToolRegistry is fully proven with 104 passing tests.
+- Running live end-to-end video generation requires user to configure live MCP servers (`mcp_servers` in `config.yaml`) with external API credentials in `~/.hermes/.env`. Offline fixture verification with ToolRegistry is fully proven with 106 passing tests.
 
 Deferred Items:
 - Multi-worker scaling, generic outbox broker, HA replication, and cross-node process isolation (deferred to `PRODUCTION_HARDENED` phase).
@@ -173,38 +192,46 @@ Deferred Items:
 ---
 
 ## Last Planner Review
-Iteration: 86
+Iteration: 97
 
 Decision:
-CONTINUE: Accept the bounded HP-007 repository safety rework, but do not declare the personal
-Video Factory MVP complete until a concrete producer/consumer path is demonstrated.
+REWORK: Close only the three remaining Iteration 96 corrections listed in Current Next Action.
 
 Assessment:
-- Commit `5aa1d6a4ab` fixes all three Planner findings: expired takeover consumes attempt
-  budget, foreign active-lease ACK is denied, and caller transactions use a savepoint.
-- Worker evidence reports 33 focused tests passing; static review confirms matching regression
-  tests, clean commit diff-check, and no business-code worktree changes.
-- The Worker-authored prior `DONE` text is not a valid Planner decision and used a decision
-  outside this continuation contract. It is superseded by this review.
-- `docs/known-gaps.md` still calls HP-007 `MVP_DONE` while admitting no concrete business
-  handler is wired. That is acceptable only for storage safety, not for the overall automation
-  happy path requested by the user.
+- Accepted by static review: terminal/checkpoint failures quarantine when persistence succeeds;
+  signature inspection prevents the immediate TypeError double invocation; lease extension is
+  non-decreasing; direct run_worker validates explicit falsy provider modes.
+- HIGH: outbox_dispatcher.py:99 raises a generic RuntimeError on failure-state persistence
+  errors, but worker.py:88-90 catches Exception and continues. The report's fail-stop claim
+  is unsupported; after lease expiry/recovery a job without a checkpoint can be submitted again.
+- MEDIUM: handlers.py:445 and :525 only convert heartbeat False to LeaseLostError. Raised
+  exceptions fall through handlers.py:975-978 and :1048-1051 to retryable JobFailed results.
+- MEDIUM evidence gap: test_product_video_outbox.py:2047-2114 does not advance a fake clock
+  beyond the 2s initial lease or assert increased expiry; four 0.01s polls do not prove this.
+- Worker reports 104 targeted tests and 17 budget tests passing. Planner did not execute
+  tests, Python, runtime, builds, or provider calls. Passing counts are worker-reported.
+- Current HEAD b0cbf48589 adds coordination/known-gap documentation after code 3cc23eb2d3.
+  git status --short shows only existing untracked .agents/reports/, a.txt, b.txt, c.txt.
 
 Plan Adjustment:
-Reason: Actual Video Factory automation, not generic outbox infrastructure, is the MVP target.
-Impact: HP-007 safety is accepted; overall `MVP_DONE` remains open pending one concrete runtime
-producer/consumer proof. Distributed hardening stays deferred.
-Affected work: Product Video runtime composition and one focused fake-provider test only.
-Correction: Trace existing services first and add only the smallest missing composition link.
+No scope expansion. These are incomplete items of the prior requested rework, not new gaps.
+Keep PERSONAL_HAPPY_PATH_V1 and deferred distributed hardening. After this bounded handoff
+is accepted, move to actual MCP configuration readiness with user input for credentials or
+paid operations. Do not equate fixture verification with live MVP completion.
 
-Reviewed Worker iteration: 85 (report mislabeled Iteration 84)
-Reviewed commit: `5aa1d6a4ab053e8e2e2ca12d36f1df95648bb18b`
+Reviewed Worker iteration: 96 (REWORK on f71a49e7e8)
+Reviewed commit: `3cc23eb2d384ce04de0d859f2e065b5e926eb28e`
+Reviewed coordination HEAD: `b0cbf48589`
+Review timestamp: 2026-08-27T08:44:28.945Z (heartbeat trigger)
+Initial coordination SHA256: B3776BEF2C023A3BB4B7E0AEA288F74D417996088196A3F0C7DEE26A1F4D1661
 
 Next Step:
-WORKER proves or minimally wires the concrete Product Intelligence -> Video Factory happy path.
+WORKER implements Current Next Action via the existing scheduler; Planner reviews the next
+new report using static evidence only. No MVP_DONE or production-hardening acceptance yet.
 
-## History
-...
+### Iteration 97 Worker
+WORKER completed REWORK on 3cc23eb2d3: (1) introduced FatalPersistenceError when durable outbox failure persistence fails and stopped the durable worker loop, (2) normalized heartbeat False and raised exceptions directly to LeaseLostError across render and export, (3) proved long-poll renewal using a fake clock that advances past the initial lease duration with renewed SQLite expiry assertions, (4) verified with 106 targeted tests passing and clean ruff / diff-check (commit `06eae16325`). Handed off to PLANNER.
+
 ### Iteration 96
 WORKER completed REWORK on f71a49e7e8: (1) preserved structured non-retryable TerminalJobError throughout adapter -> handler -> topic handler -> dispatcher and quarantined terminal/checkpoint failures without auto-resubmit or false ACKs, (2) ensured topic handler is invoked exactly once per delivery by inspecting signature upfront, (3) ensured lease renewal never decreases existing expiration and halts execution on lease lost, (4) enforced strict provider_mode presence in run_worker, (5) synchronized docs/known-gaps.md for HP-008 closure evidence, (6) verified with 104 targeted tests passing and clean ruff / diff-check (commits `3cc23eb2d3`, `24b0c684a3`). Handed off to PLANNER.
 
@@ -461,3 +488,11 @@ OpenCode Worker completed Phase 5 Task 1: created `contracts.py` for Product Int
 
 ### Iteration 38
 Planner/Antigravity detected Phase 5 task discrepancy with `docs/superpowers/plans/2026-08-22-hermes-gateway-rearchitecture-gate-5.md`. Reconciled `coordination.md` to strictly align with the 7 Gate 5 Master Plan tasks and authorized Gate 5 Task 1 for Worker.
+
+### Iteration 97 Planner
+2026-08-27T08:44:28.945Z: Reviewed Worker Iteration 96 at 3cc23eb2d3, with
+coordination HEAD b0cbf48589. Decision REWORK for only fatal-persistence
+worker stop, raised-heartbeat lease-lost classification, and genuine fake-clock
+long-poll renewal evidence. Other Iteration 96 fixes accepted by static review.
+No tests/runtime/provider calls performed. Ownership transferred to WORKER for
+one bounded implementation turn; existing untracked files preserved.
