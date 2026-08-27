@@ -1,7 +1,13 @@
 import json
 import sqlite3
+from unittest.mock import patch
 
 import pytest
+from starlette.testclient import TestClient
+
+from hermes_personal.application.app import create_application
+from hermes_personal.application.events_api import EventsAPI
+from hermes_personal.application.operator_handler import create_operator_command_handler
 
 from hermes_personal.storage.sqlite import connect
 from hermes_personal.workflows.approvals import ApprovalService
@@ -398,12 +404,16 @@ def test_user_entrypoint_operator_command_starts_and_advances_workflow(tmp_path)
     assert status_code_appr == 200
     assert resp_appr["result"]["status"] == "approved"
     assert resp_appr["result"]["new_state"] == ProductVideoWorkflowState.BUILDING_RESOURCE_PACK.value
-    assert resp_appr["result"]["enqueued_job"] == "product_video.lock"
+    assert resp_appr["result"]["enqueued_job"] == "product_video.resource_pack"
 
-    # 5. Process next stage outbox message
+    # 5. Process next stage outbox messages (product_video.resource_pack -> product_video.lock)
     report2 = dispatcher.process_batch()
     assert report2.claimed == 1
     assert report2.succeeded == 1
+
+    report3 = dispatcher.process_batch()
+    assert report3.claimed == 1
+    assert report3.succeeded == 1
 
     agg2, _ = repo.get_workflow(wf_id)
     assert agg2["state"] == ProductVideoWorkflowState.CREATING_BRIEF.value
@@ -436,4 +446,431 @@ def test_unconfigured_provider_mode_configured_fails_without_ack(tmp_path):
     assert report.succeeded == 0
     # Outbox message MUST NOT be ACKed!
     assert len(outbox_repo.list_unacknowledged()) == 1
+    conn.close()
+
+
+def test_e2e_http_operator_route_full_workflow_progression(tmp_path):
+    """Full end-to-end HTTP route integration test using TestClient(app) progressing through all workflow stages."""
+    db_file = tmp_path / "e2e_http.db"
+    conn = connect(db_file)
+    cmd_handler = create_operator_command_handler(conn, provider_mode="fake")
+    events_api = EventsAPI(
+        command_handler=cmd_handler,
+        auth_validator=lambda token, owner: token == "valid_token" and owner == "alice",
+    )
+    app = create_application(events_api=events_api)
+    client = TestClient(app)
+
+    repo = WorkflowRepository(conn)
+    topic_handlers = create_product_video_topic_handlers(workflow_repository=repo, provider_mode="fake")
+    outbox_repo = OutboxRepository(conn)
+    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="e2e-http-worker")
+
+    wf_id = "wf_e2e_http"
+    headers = {"Authorization": "Bearer valid_token"}
+
+    # Step 1: POST /api/operator/command (start_workflow)
+    resp1 = client.post(
+        "/api/operator/command",
+        headers=headers,
+        json={
+            "owner_id": "alice",
+            "command_type": "start_workflow",
+            "target_id": wf_id,
+            "expected_version": 0,
+            "payload": {"product_name": "Earbuds", "keywords": ["anc"]},
+        },
+    )
+    assert resp1.status_code == 200
+    body1 = resp1.json()
+    assert body1["status"] == "ok"
+    assert body1["result"]["status"] == "started"
+    assert body1["result"]["workflow_id"] == wf_id
+
+    agg1, ver1 = repo.get_workflow(wf_id)
+    assert agg1["state"] == ProductVideoWorkflowState.RESEARCHING.value
+    assert ver1 == 1
+
+    # Step 2: Run dispatcher.process_batch() for product_video.research
+    report2 = dispatcher.process_batch()
+    assert report2.claimed == 1
+    assert report2.succeeded == 1
+
+    agg2, ver2 = repo.get_workflow(wf_id)
+    assert agg2["state"] == ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK.value
+    assert "pending_approval_id" in agg2
+    req_id_1 = agg2["pending_approval_id"]
+    assert agg2["latest_artifact"]["owner"] == "product_intelligence"
+    assert ver2 == 2
+
+    # Step 3: POST /api/operator/command (approve req_id_1)
+    resp3 = client.post(
+        "/api/operator/command",
+        headers=headers,
+        json={
+            "owner_id": "alice",
+            "command_type": "approve",
+            "target_id": req_id_1,
+            "expected_version": ver2,
+            "payload": {"expected_version": ver2},
+        },
+    )
+    assert resp3.status_code == 200
+    body3 = resp3.json()
+    assert body3["status"] == "ok"
+    assert body3["result"]["status"] == "approved"
+    assert body3["result"]["new_state"] == ProductVideoWorkflowState.BUILDING_RESOURCE_PACK.value
+    assert body3["result"]["enqueued_job"] == "product_video.resource_pack"
+
+    agg3, ver3 = repo.get_workflow(wf_id)
+    assert agg3["state"] == ProductVideoWorkflowState.BUILDING_RESOURCE_PACK.value
+    assert ver3 == 3
+
+    # Step 4: Run dispatcher for product_video.resource_pack -> enqueues product_video.lock, then run dispatcher for product_video.lock -> CREATING_BRIEF
+    report4a = dispatcher.process_batch()
+    assert report4a.claimed == 1
+    assert report4a.succeeded == 1
+
+    agg4a, ver4a = repo.get_workflow(wf_id)
+    assert agg4a["state"] == ProductVideoWorkflowState.BUILDING_RESOURCE_PACK.value
+    assert ver4a == 4
+
+    report4b = dispatcher.process_batch()
+    assert report4b.claimed == 1
+    assert report4b.succeeded == 1
+
+    agg4b, ver4b = repo.get_workflow(wf_id)
+    assert agg4b["state"] == ProductVideoWorkflowState.CREATING_BRIEF.value
+    assert ver4b == 5
+
+    # Step 5: Run dispatcher.process_batch() for product_video.creative_brief -> AwaitingBriefApproval
+    report5 = dispatcher.process_batch()
+    assert report5.claimed == 1
+    assert report5.succeeded == 1
+
+    agg5, ver5 = repo.get_workflow(wf_id)
+    assert agg5["state"] == ProductVideoWorkflowState.AWAITING_BRIEF_APPROVAL.value
+    assert "pending_approval_id" in agg5
+    req_id_2 = agg5["pending_approval_id"]
+    assert "latest_artifact" in agg5
+    assert ver5 == 6
+
+    # Step 6: POST /api/operator/command (approve req_id_2) -> scene_plan job -> AwaitingSceneApproval
+    resp6 = client.post(
+        "/api/operator/command",
+        headers=headers,
+        json={
+            "owner_id": "alice",
+            "command_type": "approve",
+            "target_id": req_id_2,
+            "expected_version": ver5,
+            "payload": {"expected_version": ver5},
+        },
+    )
+    assert resp6.status_code == 200
+    assert resp6.json()["result"]["new_state"] == ProductVideoWorkflowState.CREATING_SCENE_PLAN.value
+    assert resp6.json()["result"]["enqueued_job"] == "product_video.scene_plan"
+
+    report6_job = dispatcher.process_batch()
+    assert report6_job.claimed == 1
+    assert report6_job.succeeded == 1
+
+    agg6, ver6 = repo.get_workflow(wf_id)
+    assert agg6["state"] == ProductVideoWorkflowState.AWAITING_SCENE_APPROVAL.value
+    assert "pending_approval_id" in agg6
+    req_id_3 = agg6["pending_approval_id"]
+    assert "latest_artifact" in agg6
+    assert ver6 == 8
+
+    # Step 7: POST /api/operator/command (approve req_id_3) -> storyboard job -> AwaitingStoryboardApproval
+    resp7 = client.post(
+        "/api/operator/command",
+        headers=headers,
+        json={
+            "owner_id": "alice",
+            "command_type": "approve",
+            "target_id": req_id_3,
+            "expected_version": ver6,
+            "payload": {"expected_version": ver6},
+        },
+    )
+    assert resp7.status_code == 200
+    assert resp7.json()["result"]["new_state"] == ProductVideoWorkflowState.CREATING_STORYBOARD.value
+    assert resp7.json()["result"]["enqueued_job"] == "product_video.storyboard"
+
+    report7_job = dispatcher.process_batch()
+    assert report7_job.claimed == 1
+    assert report7_job.succeeded == 1
+
+    agg7, ver7 = repo.get_workflow(wf_id)
+    assert agg7["state"] == ProductVideoWorkflowState.AWAITING_STORYBOARD_APPROVAL.value
+    assert "pending_approval_id" in agg7
+    req_id_4 = agg7["pending_approval_id"]
+    assert "latest_artifact" in agg7
+    assert ver7 == 10
+
+    # Step 8: POST /api/operator/command (approve req_id_4) -> render job -> AwaitingFinalApproval
+    resp8 = client.post(
+        "/api/operator/command",
+        headers=headers,
+        json={
+            "owner_id": "alice",
+            "command_type": "approve",
+            "target_id": req_id_4,
+            "expected_version": ver7,
+            "payload": {"expected_version": ver7},
+        },
+    )
+    assert resp8.status_code == 200
+    assert resp8.json()["result"]["new_state"] == ProductVideoWorkflowState.RENDERING.value
+    assert resp8.json()["result"]["enqueued_job"] == "product_video.render"
+
+    report8_job = dispatcher.process_batch()
+    assert report8_job.claimed == 1
+    assert report8_job.succeeded == 1
+
+    agg8, ver8 = repo.get_workflow(wf_id)
+    assert agg8["state"] == ProductVideoWorkflowState.AWAITING_FINAL_APPROVAL.value
+    assert "pending_approval_id" in agg8
+    req_id_5 = agg8["pending_approval_id"]
+    assert "latest_artifact" in agg8
+    assert ver8 == 12
+
+    # Step 9: POST /api/operator/command (approve req_id_5) -> export job -> COMPLETED!
+    resp9 = client.post(
+        "/api/operator/command",
+        headers=headers,
+        json={
+            "owner_id": "alice",
+            "command_type": "approve",
+            "target_id": req_id_5,
+            "expected_version": ver8,
+            "payload": {"expected_version": ver8},
+        },
+    )
+    assert resp9.status_code == 200
+    assert resp9.json()["result"]["new_state"] == ProductVideoWorkflowState.EXPORTING.value
+    assert resp9.json()["result"]["enqueued_job"] == "product_video.export"
+
+    report9_job = dispatcher.process_batch()
+    assert report9_job.claimed == 1
+    assert report9_job.succeeded == 1
+
+    agg9, ver9 = repo.get_workflow(wf_id)
+    assert agg9["state"] == ProductVideoWorkflowState.COMPLETED.value
+    assert "latest_artifact" in agg9
+    assert ver9 == 14
+    conn.close()
+
+
+def test_stale_expected_version_rejected_without_db_mutation(tmp_path):
+    """Test that commit_workflow with a stale expected_version raises VersionConflict,
+    and submitting an approve command with a stale expected_version returns an error
+    without mutating the database state or approval request.
+    """
+    from hermes_personal.workflows.repository import VersionConflict
+
+    db_file = tmp_path / "stale_version.db"
+    conn = connect(db_file)
+    cmd_handler = create_operator_command_handler(conn, provider_mode="fake")
+    events_api = EventsAPI(
+        command_handler=cmd_handler,
+        auth_validator=lambda token, owner: token == "valid_token" and owner == "alice",
+    )
+    app = create_application(events_api=events_api)
+    client = TestClient(app)
+
+    repo = WorkflowRepository(conn)
+    topic_handlers = create_product_video_topic_handlers(workflow_repository=repo, provider_mode="fake")
+    outbox_repo = OutboxRepository(conn)
+    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="stale-worker")
+
+    wf_id = "wf_stale_01"
+    start_product_video_workflow(
+        workflow_repository=repo,
+        workflow_id=wf_id,
+        product_name="Smart Ring",
+        keywords=["health"],
+    )
+    dispatcher.process_batch()
+
+    agg_before, version_before = repo.get_workflow(wf_id)
+    assert agg_before["state"] == ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK.value
+    req_id = agg_before["pending_approval_id"]
+
+    # 1. Direct repository test: stale expected_version raises VersionConflict
+    with pytest.raises(VersionConflict):
+        repo.commit_workflow(
+            workflow_id=wf_id,
+            aggregate_json=json.dumps({"state": "invalid_mutation"}),
+            events=[],
+            expected_version=999,
+        )
+
+    # Assert repository state remains unmutated
+    agg_mid, version_mid = repo.get_workflow(wf_id)
+    assert agg_mid["state"] == ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK.value
+    assert version_mid == version_before
+
+    # 2. HTTP route test: approve command with stale expected_version is rejected with HTTP 400
+    resp = client.post(
+        "/api/operator/command",
+        headers={"Authorization": "Bearer valid_token"},
+        json={
+            "owner_id": "alice",
+            "command_type": "approve",
+            "target_id": req_id,
+            "expected_version": 999,
+            "payload": {"expected_version": 999},
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "command_failed"
+    assert "Stale workflow version" in resp.json()["message"]
+
+    # Assert database state remains unmutated (approval is still pending, state is awaiting)
+    appr_svc = ApprovalService(conn)
+    assert appr_svc.get_request(req_id).status.value == "pending"
+    agg_after, version_after = repo.get_workflow(wf_id)
+    assert agg_after["state"] == ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK.value
+    assert version_after == version_before
+    conn.close()
+
+
+def test_transaction_rollback_on_commit_failure(tmp_path):
+    """Test that if repo.commit_workflow raises an error during approve_and_advance_workflow,
+    the single atomic SQLite transaction rolls back completely: approval status remains 'pending',
+    aggregate state remains unchanged, and no outbox message is written.
+    """
+    db_file = tmp_path / "rollback.db"
+    conn = connect(db_file)
+    cmd_handler = create_operator_command_handler(conn, provider_mode="fake")
+    events_api = EventsAPI(
+        command_handler=cmd_handler,
+        auth_validator=lambda token, owner: token == "valid_token" and owner == "alice",
+    )
+    app = create_application(events_api=events_api)
+    client = TestClient(app)
+
+    repo = WorkflowRepository(conn)
+    topic_handlers = create_product_video_topic_handlers(workflow_repository=repo, provider_mode="fake")
+    outbox_repo = OutboxRepository(conn)
+    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="rollback-worker")
+
+    wf_id = "wf_rollback_01"
+    start_product_video_workflow(
+        workflow_repository=repo,
+        workflow_id=wf_id,
+        product_name="Smart Glasses",
+        keywords=["ai", "ar"],
+    )
+    dispatcher.process_batch()
+
+    agg_before, ver_before = repo.get_workflow(wf_id)
+    assert agg_before["state"] == ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK.value
+    req_id = agg_before["pending_approval_id"]
+    approval_svc = ApprovalService(conn)
+    assert approval_svc.get_request(req_id).status.value == "pending"
+
+    def failing_commit_workflow(*args, **kwargs):
+        raise RuntimeError("Simulated Commit Failure")
+
+    # Inject failure into WorkflowRepository.commit_workflow on class level during approval processing
+    with patch.object(WorkflowRepository, "commit_workflow", side_effect=failing_commit_workflow):
+        resp = client.post(
+            "/api/operator/command",
+            headers={"Authorization": "Bearer valid_token"},
+            json={
+                "owner_id": "alice",
+                "command_type": "approve",
+                "target_id": req_id,
+                "expected_version": ver_before,
+                "payload": {"expected_version": ver_before},
+            },
+        )
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "command_failed"
+
+    # Assert transaction rolled back completely: approval remains pending, state unchanged, outbox empty
+    assert approval_svc.get_request(req_id).status.value == "pending"
+    agg_after, ver_after = repo.get_workflow(wf_id)
+    assert agg_after["state"] == ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK.value
+    assert ver_after == ver_before
+    assert outbox_repo.list_unacknowledged() == []
+    conn.close()
+
+
+def test_repeated_approval_does_not_duplicate_job(tmp_path):
+    """Test that approving an already approved request raises ValueError
+    and does NOT enqueue duplicate outbox jobs.
+    """
+    db_file = tmp_path / "repeat_approval.db"
+    conn = connect(db_file)
+    cmd_handler = create_operator_command_handler(conn, provider_mode="fake")
+    events_api = EventsAPI(
+        command_handler=cmd_handler,
+        auth_validator=lambda token, owner: token == "valid_token" and owner == "alice",
+    )
+    app = create_application(events_api=events_api)
+    client = TestClient(app)
+
+    repo = WorkflowRepository(conn)
+    topic_handlers = create_product_video_topic_handlers(workflow_repository=repo, provider_mode="fake")
+    outbox_repo = OutboxRepository(conn)
+    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="repeat-worker")
+
+    wf_id = "wf_repeat_01"
+    start_product_video_workflow(
+        workflow_repository=repo,
+        workflow_id=wf_id,
+        product_name="Wireless Speaker",
+        keywords=["audio"],
+    )
+    dispatcher.process_batch()
+
+    agg, version = repo.get_workflow(wf_id)
+    req_id = agg["pending_approval_id"]
+
+    # 1. First approval via POST /api/operator/command succeeds
+    res1 = client.post(
+        "/api/operator/command",
+        headers={"Authorization": "Bearer valid_token"},
+        json={
+            "owner_id": "alice",
+            "command_type": "approve",
+            "target_id": req_id,
+            "expected_version": version,
+            "payload": {"expected_version": version},
+        },
+    )
+    assert res1.status_code == 200
+    assert res1.json()["result"]["status"] == "approved"
+
+    outbox_after_first = outbox_repo.list_unacknowledged()
+    assert len(outbox_after_first) == 1
+
+    # 2. Repeated approval directly via ApprovalService raises ValueError
+    appr_svc = ApprovalService(conn)
+    with pytest.raises(ValueError, match="already|APPROVED"):
+        appr_svc.approve(req_id)
+
+    # 3. Repeated approval via POST /api/operator/command returns 400 error
+    res2 = client.post(
+        "/api/operator/command",
+        headers={"Authorization": "Bearer valid_token"},
+        json={
+            "owner_id": "alice",
+            "command_type": "approve",
+            "target_id": req_id,
+            "expected_version": version,
+            "payload": {"expected_version": version},
+        },
+    )
+    assert res2.status_code == 400
+    assert res2.json()["error"] == "command_failed"
+
+    # 4. Outbox MUST NOT contain any duplicate jobs
+    outbox_after_second = outbox_repo.list_unacknowledged()
+    assert len(outbox_after_second) == 1
+    assert outbox_after_second[0].outbox_id == outbox_after_first[0].outbox_id
     conn.close()

@@ -95,6 +95,13 @@ uv run pytest tests/hermes_personal/product_video tests/hermes_personal/migratio
   ```bash
   curl http://127.0.0.1:8642/api/artifacts/{artifact_id}?owner_id=local-owner
   ```
+- **Data Progression Chain & HITL Approvals**:
+  - `start_workflow` -> `product_video.research` -> HITL `AwaitingProductLock`
+  - `approve` `AwaitingProductLock` -> `product_video.resource_pack` -> `product_video.lock` -> `product_video.creative_brief` -> HITL `AwaitingBriefApproval`
+  - `approve` `AwaitingBriefApproval` -> `product_video.scene_plan` -> HITL `AwaitingSceneApproval`
+  - `approve` `AwaitingSceneApproval` -> `product_video.storyboard` -> HITL `AwaitingStoryboardApproval`
+  - `approve` `AwaitingStoryboardApproval` -> `product_video.render` -> HITL `AwaitingFinalApproval`
+  - `approve` `AwaitingFinalApproval` -> `product_video.export` -> `COMPLETED`
 - **Operator HITL Approval & Workflow Progression (`POST /api/operator/command`)**:
   ```bash
   curl -X POST http://127.0.0.1:8642/api/operator/command \
@@ -107,7 +114,7 @@ uv run pytest tests/hermes_personal/product_video tests/hermes_personal/migratio
       "expected_version": 1
     }'
   ```
-  `approve` marks the approval request `APPROVED`, validates state transition via `transition()`, and enqueues the next job outbox message.
+  `approve` validates approval request state, verifies `expected_version`, marks request `APPROVED`, validates state transition via `transition()`, enqueues the next outbox job, and commits atomically in SQLite.
 
 ### Fake-Provider Verification vs. Live-Provider Readiness
 - **Fake-Provider Verification (MVP / PERSONAL_HAPPY_PATH_V1)**:
@@ -116,8 +123,11 @@ uv run pytest tests/hermes_personal/product_video tests/hermes_personal/migratio
   - Zero external network calls, zero paid API spend, 100% offline verification.
 - **Live-Provider Readiness & Blocker**:
   - In `provider_mode="configured"`, if live API adapters for Product Intelligence or Video Factory are missing/unconfigured, the worker fails closed (`MISSING_PROVIDER_CONFIG`) and does **NOT** ACK work as successful.
-  - Live mode requires implementing real external API adapters and configuring API credentials.
+  - Required live adapters missing:
+    1. `ProductIntelligenceClient`: Requires HTTP REST/gRPC client implementation for real PDP scrapers & LLM extraction services.
+    2. `VideoFactoryClient`: Requires HTTP REST client for GPU video rendering engine & cloud MP4 encoding/export pipeline.
+    3. `RuntimeConfig`: Requires `provider_mode: "configured"` with credentials (`HERMES_API_KEY`, GPU render service endpoints).
 
 ### Deferred Gaps & Blockers
-- **Live Provider Adapter Blocker**: Live external API adapters for Product Intelligence & Video Factory are unconfigured in `provider_mode="configured"`.
+- **Live Provider Adapter Blocker**: Real external API HTTP/gRPC adapters for `ProductIntelligenceClient` and `VideoFactoryClient` remain unconfigured in `provider_mode="configured"`.
 - **Infrastructure**: Distributed outbox broker, multi-worker leader election, high-availability replication, and cross-node process isolation remain deferred to `PRODUCTION_HARDENED` phase. Single-machine SQLite happy path is fully verified.

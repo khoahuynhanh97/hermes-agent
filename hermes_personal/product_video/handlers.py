@@ -547,108 +547,108 @@ def create_product_video_topic_handlers(
                 wf_data = repo.get_workflow(target_wf)
                 if wf_data:
                     agg, version = wf_data
+                    from hermes_personal.product_video.workflow import transition, WorkflowTransitionError
 
-                    JOB_STAGE_MAP = {
-                        "product_video.research": (
-                            ProductVideoWorkflowState.RESEARCHING,
-                            ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK,
-                            True,
-                            "AwaitingProductLock",
-                        ),
-                        "product_video.lock": (
-                            ProductVideoWorkflowState.BUILDING_RESOURCE_PACK,
-                            ProductVideoWorkflowState.CREATING_BRIEF,
-                            False,
-                            None,
-                        ),
-                        "product_video.resource_pack": (
-                            ProductVideoWorkflowState.BUILDING_RESOURCE_PACK,
-                            ProductVideoWorkflowState.CREATING_BRIEF,
-                            False,
-                            None,
-                        ),
-                        "product_video.creative_brief": (
-                            ProductVideoWorkflowState.CREATING_BRIEF,
-                            ProductVideoWorkflowState.AWAITING_BRIEF_APPROVAL,
-                            True,
-                            "AwaitingBriefApproval",
-                        ),
-                        "product_video.scene_plan": (
-                            ProductVideoWorkflowState.CREATING_SCENE_PLAN,
-                            ProductVideoWorkflowState.AWAITING_SCENE_APPROVAL,
-                            True,
-                            "AwaitingSceneApproval",
-                        ),
-                        "product_video.storyboard": (
-                            ProductVideoWorkflowState.CREATING_STORYBOARD,
-                            ProductVideoWorkflowState.AWAITING_STORYBOARD_APPROVAL,
-                            True,
-                            "AwaitingStoryboardApproval",
-                        ),
-                        "product_video.render": (
-                            ProductVideoWorkflowState.RENDERING,
-                            ProductVideoWorkflowState.AWAITING_FINAL_APPROVAL,
-                            True,
-                            "AwaitingFinalApproval",
-                        ),
-                        "product_video.export": (
-                            ProductVideoWorkflowState.EXPORTING,
-                            ProductVideoWorkflowState.COMPLETED,
-                            False,
-                            None,
-                        ),
-                    }
+                    is_hitl = False
+                    gate_name = None
+                    outbox_next = None
 
-                    if job_name in JOB_STAGE_MAP:
-                        from hermes_personal.product_video.workflow import transition
-                        curr_enum, next_enum, is_hitl, gate_name = JOB_STAGE_MAP[job_name]
-                        next_validated = transition(curr_enum, next_enum)
-                        next_agg = dict(agg)
-                        next_agg["state"] = next_validated.value
-                        if result.artifact_ref:
-                            next_agg["latest_artifact"] = result.artifact_ref
-
-                        outbox_next = None
-                        if is_hitl:
-                            approval_svc = ApprovalService(repo.conn)
-                            req_id = approval_svc.submit_request({
-                                "workflow_id": target_wf,
-                                "gate": gate_name,
-                                "workflow_version": version + 1,
-                                "artifact_ref": result.artifact_ref,
-                            })
-                            next_agg["pending_approval_gate"] = gate_name
-                            next_agg["pending_approval_id"] = req_id
-                        else:
-                            next_job_name = "product_video.creative_brief" if job_name in ("product_video.lock", "product_video.resource_pack") else None
-                            if next_job_name:
-                                outbox_next = build_envelope(
-                                    workflow_id=target_wf,
-                                    topic="job.dispatch",
-                                    idempotency_key=f"idemp_{next_job_name}_{target_wf}_v{version + 1}",
-                                    payload={
-                                        "job_name": next_job_name,
-                                        "workflow_id": target_wf,
-                                        "args": [result.artifact_ref],
-                                        "owner_user_id": payload.get("owner_user_id", "local-owner"),
-                                    },
-                                )
-
-                        repo.commit_workflow(
+                    if job_name == "product_video.research":
+                        next_validated = transition(ProductVideoWorkflowState.RESEARCHING, ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK)
+                        is_hitl = True
+                        gate_name = "AwaitingProductLock"
+                    elif job_name == "product_video.resource_pack":
+                        curr_st = agg.get("state")
+                        if curr_st != ProductVideoWorkflowState.BUILDING_RESOURCE_PACK.value and curr_st != ProductVideoWorkflowState.BUILDING_RESOURCE_PACK:
+                            raise WorkflowTransitionError(f"Current state '{curr_st}' is not BUILDING_RESOURCE_PACK")
+                        next_validated = ProductVideoWorkflowState.BUILDING_RESOURCE_PACK
+                        outbox_next = build_envelope(
                             workflow_id=target_wf,
-                            aggregate_json=json.dumps(next_agg),
-                            events=[
-                                {
-                                    "event_id": f"evt_{envelope.message_id}",
-                                    "command_id": f"cmd_{envelope.message_id}",
-                                    "event_type": "JobSucceeded",
-                                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                                    "payload": {"job_name": job_name, "artifact_ref": result.artifact_ref},
-                                }
-                            ],
-                            outbox_message=outbox_next,
-                            expected_version=version,
+                            topic="job.dispatch",
+                            idempotency_key=f"idemp_product_video.lock_{target_wf}_v{version + 1}",
+                            payload={
+                                "job_name": "product_video.lock",
+                                "workflow_id": target_wf,
+                                "args": [result.artifact_ref],
+                                "owner_user_id": payload.get("owner_user_id", "local-owner"),
+                            },
                         )
+                    elif job_name == "product_video.lock":
+                        next_validated = transition(ProductVideoWorkflowState.BUILDING_RESOURCE_PACK, ProductVideoWorkflowState.CREATING_BRIEF)
+                        artifact = result.artifact_ref
+                        if isinstance(artifact, dict):
+                            pid = artifact.get("product_id") or artifact.get("id") or f"prod_{target_wf}"
+                        elif isinstance(artifact, str) and artifact:
+                            pid = artifact
+                        else:
+                            pid = f"prod_{target_wf}"
+                        product_id = str(pid)
+                        outbox_next = build_envelope(
+                            workflow_id=target_wf,
+                            topic="job.dispatch",
+                            idempotency_key=f"idemp_product_video.creative_brief_{target_wf}_v{version + 1}",
+                            payload={
+                                "job_name": "product_video.creative_brief",
+                                "workflow_id": target_wf,
+                                "args": [product_id, {"resource_pack": result.artifact_ref}],
+                                "owner_user_id": payload.get("owner_user_id", "local-owner"),
+                            },
+                        )
+                    elif job_name == "product_video.creative_brief":
+                        next_validated = transition(ProductVideoWorkflowState.CREATING_BRIEF, ProductVideoWorkflowState.AWAITING_BRIEF_APPROVAL)
+                        is_hitl = True
+                        gate_name = "AwaitingBriefApproval"
+                    elif job_name == "product_video.scene_plan":
+                        next_validated = transition(ProductVideoWorkflowState.CREATING_SCENE_PLAN, ProductVideoWorkflowState.AWAITING_SCENE_APPROVAL)
+                        is_hitl = True
+                        gate_name = "AwaitingSceneApproval"
+                    elif job_name == "product_video.storyboard":
+                        next_validated = transition(ProductVideoWorkflowState.CREATING_STORYBOARD, ProductVideoWorkflowState.AWAITING_STORYBOARD_APPROVAL)
+                        is_hitl = True
+                        gate_name = "AwaitingStoryboardApproval"
+                    elif job_name == "product_video.render":
+                        next_validated = transition(ProductVideoWorkflowState.RENDERING, ProductVideoWorkflowState.AWAITING_FINAL_APPROVAL)
+                        is_hitl = True
+                        gate_name = "AwaitingFinalApproval"
+                    elif job_name == "product_video.export":
+                        next_validated = transition(ProductVideoWorkflowState.EXPORTING, ProductVideoWorkflowState.COMPLETED)
+                    else:
+                        raise ValueError(f"Unknown job_name in handle_job_dispatch: {job_name}")
+
+                    next_agg = dict(agg)
+                    next_agg["state"] = next_validated.value
+                    if result.artifact_ref is not None:
+                        next_agg["latest_artifact"] = result.artifact_ref
+
+                    if is_hitl and gate_name:
+                        approval_svc = ApprovalService(repo.conn)
+                        req_id = approval_svc.submit_request({
+                            "workflow_id": target_wf,
+                            "gate": gate_name,
+                            "workflow_version": version + 1,
+                            "artifact_ref": result.artifact_ref,
+                        })
+                        next_agg["pending_approval_gate"] = gate_name
+                        next_agg["pending_approval_id"] = req_id
+                    else:
+                        next_agg.pop("pending_approval_gate", None)
+                        next_agg.pop("pending_approval_id", None)
+
+                    repo.commit_workflow(
+                        workflow_id=target_wf,
+                        aggregate_json=json.dumps(next_agg),
+                        events=[
+                            {
+                                "event_id": f"evt_{envelope.message_id}",
+                                "command_id": f"cmd_{envelope.message_id}",
+                                "event_type": "JobSucceeded",
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                                "payload": {"job_name": job_name, "artifact_ref": result.artifact_ref},
+                            }
+                        ],
+                        outbox_message=outbox_next,
+                        expected_version=version,
+                    )
 
     return {"job.dispatch": handle_job_dispatch}
 
