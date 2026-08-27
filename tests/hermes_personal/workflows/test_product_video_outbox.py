@@ -2046,6 +2046,7 @@ def test_lease_renewal_does_not_decrease_existing_expiry(tmp_path):
 
 def test_runtime_polling_advances_past_initial_lease_with_real_heartbeat_renewal(tmp_path, monkeypatch):
     """Test 5: Polling exceeding initial lease duration extends lease dynamically and ACKs cleanly."""
+    from datetime import datetime, timezone
     from tools.registry import ToolRegistry
     from hermes_personal.workflows.budgets import BudgetPolicy, init_default_engine
 
@@ -2057,19 +2058,26 @@ def test_runtime_polling_advances_past_initial_lease_with_real_heartbeat_renewal
     init_default_engine(BudgetPolicy(max_total=1000, per_channel={"video_factory": 500, "product_intelligence": 500}))
 
     # Fake clock progression:
-    # t0 = 2026-01-01T12:00:00+00:00 (initial lease 10s -> expires at 12:00:10)
-    # Poll 1 at t=12:00:04 (extends lease by 60s -> expires at 12:01:04)
-    # Poll 2 at t=12:00:12 (time passes initial 10s expiry: 12:00:12 > 12:00:10!)
-    # Poll 3 at t=12:00:15 (returns completed)
-    # ACK at t=12:00:15 succeeds because lease is 12:01:04 > 12:00:15!
-
+    # t0 = 1767268800.0 (2026-01-01T12:00:00+00:00)
+    # Initial lease: 10.0s -> initial expiry: 2026-01-01T12:00:10+00:00
+    # Poll 1 at t=12:00:04 -> extends lease by 60s (to 12:01:04)
+    # Poll 2 at t=12:00:08 -> extends lease by 60s (to 12:01:08)
+    # Poll 3 at t=12:00:12 -> extends lease by 60s (to 12:01:12) (t=12:00:12 strictly > initial expiry 12:00:10)
+    # Final ACK at t=12:00:12 -> succeeds because 12:01:12 > 12:00:12
     current_fake_time = [1767268800.0]  # 2026-01-01T12:00:00+00:00
 
     def fake_time():
         return current_fake_time[0]
 
+    def fake_now_iso(now_iso: str | None = None) -> str:
+        if now_iso is not None:
+            return now_iso
+        return datetime.fromtimestamp(current_fake_time[0], tz=timezone.utc).isoformat()
+
     monkeypatch.setattr("time.time", fake_time)
     monkeypatch.setattr("time.monotonic", fake_time)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    monkeypatch.setattr("hermes_personal.workflows.outbox_repository._now_iso", fake_now_iso)
 
     poll_count = 0
     observed_expirations = []
@@ -2080,7 +2088,7 @@ def test_runtime_polling_advances_past_initial_lease_with_real_heartbeat_renewal
     def mock_poll(payload):
         nonlocal poll_count
         poll_count += 1
-        # Advance fake time by 4 seconds per poll
+        # Advance fake time by 4.0 seconds on each poll
         current_fake_time[0] += 4.0
 
         reader = connect(db_file)
@@ -2112,6 +2120,19 @@ def test_runtime_polling_advances_past_initial_lease_with_real_heartbeat_renewal
     )
 
     outbox_repo = OutboxRepository(conn)
+
+    # Spy on claim to capture initial claim expiry
+    orig_claim = outbox_repo.claim
+    captured_claims = []
+
+    def spy_claim(*args, **kwargs):
+        claims = orig_claim(*args, **kwargs)
+        if claims and not captured_claims:
+            captured_claims.append(claims[0])
+        return claims
+
+    outbox_repo.claim = spy_claim
+
     topic_handlers = create_product_video_topic_handlers(
         workflow_repository=repo,
         tool_registry=registry,
@@ -2119,26 +2140,117 @@ def test_runtime_polling_advances_past_initial_lease_with_real_heartbeat_renewal
         poll_timeout=60.0,
         poll_interval=0.001,
     )
-    # Start with an initial 10-second lease
     dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="w-long", lease_duration_seconds=10.0)
 
     rep = dispatcher.process_batch()
+
+    # 1. Assert initial claim expiry was exactly T0 + 10s
+    assert len(captured_claims) == 1
+    initial_claim_expiry = captured_claims[0].lease_expires_at
+    assert initial_claim_expiry == "2026-01-01T12:00:10+00:00"
+
+    # 2. Assert that clock advanced deterministically past initial expiry (T0 + 12s > T0 + 10s)
+    clock_at_ack_iso = datetime.fromtimestamp(current_fake_time[0], tz=timezone.utc).isoformat()
+    assert current_fake_time[0] == 1767268812.0
+    assert clock_at_ack_iso > initial_claim_expiry
+
+    # 3. Assert renewed SQLite expiry is greater than initial expiry and greater than the clock at final ACK
+    assert len(observed_expirations) == 3
+    latest_renewed_expiry = observed_expirations[-1]
+    assert latest_renewed_expiry == "2026-01-01T12:01:08+00:00"
+    assert latest_renewed_expiry > initial_claim_expiry
+    assert latest_renewed_expiry > clock_at_ack_iso
+
+    # 4. Assert successful dispatch and clean outbox row deletion
     assert rep.succeeded == 1
     assert rep.stale == 0
-    assert len(observed_expirations) >= 3
-
-    # Assert that fake clock advanced past initial 10s lease duration
-    initial_start_time = 1767268800.0
-    assert current_fake_time[0] >= initial_start_time + 12.0
-
-    # Assert that the latest observed lease expiration in SQLite was extended well beyond the initial 10s expiry
-    initial_expiry_iso = "2026-01-01T12:00:10+00:00"
-    latest_expiry = observed_expirations[-1]
-    assert latest_expiry > initial_expiry_iso
-
-    # Outbox message was cleanly ACKed and deleted upon successful completion
     cur = conn.execute("SELECT COUNT(*) as cnt FROM workflow_outbox WHERE workflow_id = ?", (wf_id,))
     assert cur.fetchone()["cnt"] == 0
+
+    conn.close()
+
+
+def test_runtime_polling_without_renewal_expires_and_fails_ack(tmp_path, monkeypatch):
+    """Test 5b (Negative Control): Without heartbeat lease renewal, time passing initial expiry causes stale ACK."""
+    from datetime import datetime, timezone
+    from tools.registry import ToolRegistry
+    from hermes_personal.workflows.budgets import BudgetPolicy, init_default_engine
+
+    db_file = tmp_path / "neg_long_poll.db"
+    conn = connect(db_file)
+    repo = WorkflowRepository(conn)
+    wf_id = "wf_neg_poll_01"
+
+    init_default_engine(BudgetPolicy(max_total=1000, per_channel={"video_factory": 500, "product_intelligence": 500}))
+
+    current_fake_time = [1767268800.0]  # 2026-01-01T12:00:00+00:00
+
+    def fake_time():
+        return current_fake_time[0]
+
+    def fake_now_iso(now_iso: str | None = None) -> str:
+        if now_iso is not None:
+            return now_iso
+        return datetime.fromtimestamp(current_fake_time[0], tz=timezone.utc).isoformat()
+
+    monkeypatch.setattr("time.time", fake_time)
+    monkeypatch.setattr("time.monotonic", fake_time)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    monkeypatch.setattr("hermes_personal.workflows.outbox_repository._now_iso", fake_now_iso)
+
+    poll_count = 0
+
+    def mock_render(payload):
+        return json.dumps({"status": "pending", "job_id": "gpu_neg_01"})
+
+    def mock_poll(payload):
+        nonlocal poll_count
+        poll_count += 1
+        # Advance clock past initial 10s lease (4s + 4s + 4s = 12s elapsed)
+        current_fake_time[0] += 4.0
+        if poll_count < 3:
+            return json.dumps({"status": "pending", "job_id": "gpu_neg_01"})
+        return json.dumps({"status": "completed", "job_id": "gpu_neg_01", "video_url": "https://cdn.example.com/neg.mp4"})
+
+    registry = ToolRegistry()
+    registry.register("mcp__product_intelligence__research_product", "mcp-pi", {}, lambda p: json.dumps({"report": "ok"}))
+    registry.register("mcp__video_factory__render", "mcp-vf", {}, mock_render)
+    registry.register("mcp__video_factory__get_job_status", "mcp-vf", {}, mock_poll)
+
+    repo.commit_workflow(
+        workflow_id=wf_id,
+        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value}),
+        events=[{"event_id": "evt_1", "command_id": "cmd_1", "event_type": "WorkflowStarted", "timestamp": "2026-01-01T00:00:00+00:00", "payload": {}}],
+        outbox_message=build_envelope(
+            workflow_id=wf_id,
+            topic="job.dispatch",
+            idempotency_key="idemp_neg_poll_1",
+            payload={"job_name": "product_video.render", "workflow_id": wf_id, "args": [{"storyboard_id": "sb_1"}]},
+        ),
+    )
+
+    outbox_repo = OutboxRepository(conn)
+    # Negative control: heartbeat returns True but does NOT extend lease in SQLite
+    outbox_repo.extend_lease = lambda *args, **kwargs: True  # type: ignore
+
+    topic_handlers = create_product_video_topic_handlers(
+        workflow_repository=repo,
+        tool_registry=registry,
+        provider_mode="configured",
+        poll_timeout=60.0,
+        poll_interval=0.001,
+    )
+    dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="w-neg", lease_duration_seconds=10.0)
+
+    rep = dispatcher.process_batch()
+
+    # Initial lease expired (12:00:10 < 12:00:12) -> ACK fails as stale!
+    assert rep.succeeded == 0
+    assert rep.stale == 1
+
+    # Outbox message was NOT deleted (retained in SQLite)
+    cur = conn.execute("SELECT COUNT(*) as cnt FROM workflow_outbox WHERE workflow_id = ?", (wf_id,))
+    assert cur.fetchone()["cnt"] == 1
 
     conn.close()
 
