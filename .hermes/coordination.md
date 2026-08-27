@@ -120,48 +120,47 @@ remaining happy-path blocker. Append History, set both owners to PLANNER, then e
 
 ## Last Worker Report
 
-Iteration: 94 (REWORK on 433f151916)
+Iteration: 95 (REWORK on 50ada93517)
 Phase: Phase 7 Continuation - Personal Happy Path and Bounded Hardening
 
 Implemented:
-- **Finding 1 (Do Not Resubmit Accepted Provider Jobs & Resumption Strategy)**:
-  - Code: `hermes_personal/product_video/handlers.py` (`render_video`, `export_video`, `render_job`, `export_job`, `handle_job_dispatch`).
+- **Finding 1 (Structured Immediate Checkpointing on Provider Acceptance)**:
+  - Code: `hermes_personal/product_video/handlers.py` (`MCPVideoFactoryAdapter.render_video`, `export_video`, `ProductVideoJobHandlers.render_job`, `export_job`).
   - Logic:
-    - When an async job is accepted by the provider and assigned a `job_id`, `active_render_job_id` / `active_export_job_id` is persisted on the workflow aggregate if polling fails or times out.
-    - Subsequent worker attempts automatically resume polling the accepted `job_id` without calling the submission tool again (`submit_count` remains 1; no paid job duplicates).
-    - If polling permanently fails or no polling tool is registered, the job halts with actionable operator error preserving `active_job_id` (operator intervention or retry resume).
-    - Forwarded `idempotency_key` in request payloads to provider wire tools.
-  - Tests: `test_job_polling_timeout_does_not_resubmit_and_resumes_same_job_id`.
-- **Finding 2 (Lease Scaling & Heartbeat for Long Running Jobs)**:
-  - Code: `hermes_personal/workflows/outbox_repository.py` (`extend_lease`), `hermes_personal/workflows/worker.py` (`run_worker`).
-  - Logic: Added `extend_lease(...)` to `OutboxRepository` for atomic heartbeat lease extensions. In `run_worker`, scaled `lease_duration_seconds = max(30.0, render_poll_timeout + 60.0)` to ensure long polling executions are fully covered by active leases, preventing stale lease rejection on ACK and eliminating duplicate dispatch.
-  - Tests: `test_outbox_extend_lease_heartbeat_and_scaled_lease_duration`.
-- **Finding 3 (Provider Mode Strict Fail-Closed Validation)**:
-  - Code: `hermes_personal/product_video/handlers.py` (`validate_provider_mode`, `validate_polling_setting`), `hermes_personal/workflows/worker.py` (`main`, `run_worker`).
-  - Logic: Strict fail-closed validation for `provider_mode` (only `"configured"` or `"fake"`) and positive finite numbers for `poll_timeout` and `poll_interval`. Invalid types, values (e.g. `"auto"`, `"mock"`, negative, NaN, bool), or unconfigured modes raise `ValueError` immediately before discovery/dispatch, eliminating fallback defaults.
-  - Tests: `test_invalid_provider_mode_and_polling_settings_fail_closed`.
-- **Finding 4 (Budget Idempotency on Retry)**:
-  - Code: `hermes_personal/workflows/budgets.py` (`reserve`).
-  - Logic: Allowed re-reserving previously released budget allocations under the same idempotency key upon job retry after transient failure.
-  - Tests: `test_job_polling_timeout_does_not_resubmit_and_resumes_same_job_id`, `tests/hermes_personal/workflows/test_budgets.py`.
+    - Persists provider `job_id` (`active_render_job_id` / `active_export_job_id`) structured via `on_job_accepted` callback immediately upon receipt of accepted pending status, **before** the first poll call begins.
+    - Checkpoint persistence failures are not swallowed: if writing to SQLite fails, auto-resubmit is halted immediately with non-retryable error (`VF_CHECKPOINT_FAILED`) to prevent duplicate paid job submissions.
+    - Terminal failures (`failed`, `cancelled`, or missing status polling tool) are classified as terminal (`VF_RENDER_TERMINAL_FAILED` / `VF_EXPORT_TERMINAL_FAILED`) without blind auto-resubmission.
+    - Restart recovery and generic polling network errors (even with zero job_id text in exception) reliably resume polling with the exact accepted `job_id` loaded from the database aggregate (`submit_count` remains 1).
+  - Tests: `test_job_accepted_persisted_to_db_before_first_poll`, `test_poll_network_exception_without_job_id_recovers_and_resumes_same_job_id`, `test_terminal_failure_and_persistence_failure_handling`.
+- **Finding 2 (Real Runtime Lease Renewal via Heartbeat & Monotonic Deadline)**:
+  - Code: `hermes_personal/workflows/outbox_dispatcher.py` (`_deliver_claim`), `hermes_personal/product_video/handlers.py` (`MCPVideoFactoryAdapter.render_video`, `export_video`, `JobContext`), `hermes_personal/workflows/worker.py` (`run_worker`).
+  - Logic:
+    - Wired `heartbeat_fn` from `OutboxDispatcher` through `handle_job_dispatch` $\rightarrow$ `JobContext` $\rightarrow$ adapter polling loop.
+    - On every poll attempt, `heartbeat_fn()` calls `repository.extend_lease(...)`, extending the lease expiration in SQLite.
+    - Enforced monotonic clock deadline (`time.monotonic() >= deadline`) accounting for actual elapsed network execution time.
+    - Set single-worker loop batch size to 1 in `worker.py` to prevent batch queue lease starvation.
+  - Tests: `test_real_runtime_heartbeat_lease_renewal_during_long_polling`.
+- **Finding 3 (Strict Configuration Resolution Without Truthiness Fallback)**:
+  - Code: `hermes_personal/product_video/handlers.py` (`validate_provider_mode`, `resolve_provider_mode`, `resolve_polling_setting`), `hermes_personal/workflows/worker.py` (`main`).
+  - Logic: Replaced truthiness fallback chains (`or`) with explicit resolution `resolve_provider_mode` and `resolve_polling_setting`. Falsy/invalid inputs (`False`, `0`, `""`, `"   "`) fail closed immediately before tool discovery or dispatcher startup.
+  - Tests: `test_invalid_falsy_provider_mode_fails_closed_without_truthiness_fallback`.
 
 Files Changed:
 - `hermes_personal/product_video/handlers.py`
-- `hermes_personal/workflows/budgets.py`
-- `hermes_personal/workflows/outbox_repository.py`
+- `hermes_personal/workflows/outbox_dispatcher.py`
 - `hermes_personal/workflows/worker.py`
 - `tests/hermes_personal/workflows/test_product_video_outbox.py`
 
 Verification:
-- `uv run pytest tests/hermes_personal/workflows/test_product_video_outbox.py tests/hermes_personal/workflows/test_outbox_dispatcher.py tests/hermes_personal/workflows/test_worker.py tests/hermes_personal/workflows/test_outbox_repository.py tests/hermes_personal/product_video/test_product_to_video_e2e.py tests/hermes_personal/product_video/test_job_handlers.py tests/hermes_personal/product_video/test_handlers.py tests/hermes_personal/product_video/test_video_factory_client.py -q`: 95 passed in 5.04s.
-- `uv run pytest tests/hermes_personal/workflows/test_budgets.py -q`: 17 passed in 0.90s.
-- `uv run ruff check hermes_personal/product_video/handlers.py hermes_personal/workflows/worker.py hermes_personal/workflows/outbox_repository.py hermes_personal/workflows/budgets.py tests/hermes_personal/workflows/test_product_video_outbox.py`: All checks passed.
+- `uv run pytest tests/hermes_personal/workflows/test_product_video_outbox.py tests/hermes_personal/workflows/test_outbox_dispatcher.py tests/hermes_personal/workflows/test_worker.py tests/hermes_personal/workflows/test_outbox_repository.py tests/hermes_personal/product_video/test_product_to_video_e2e.py tests/hermes_personal/product_video/test_job_handlers.py tests/hermes_personal/product_video/test_handlers.py tests/hermes_personal/product_video/test_video_factory_client.py -q`: 100 passed in 6.74s.
+- `uv run pytest tests/hermes_personal/workflows/test_budgets.py -q`: 17 passed in 0.89s.
+- `uv run ruff check hermes_personal/product_video/handlers.py hermes_personal/workflows/worker.py hermes_personal/workflows/outbox_dispatcher.py tests/hermes_personal/workflows/test_product_video_outbox.py`: All checks passed.
 - `git diff --check`: Clean.
 
-Commit: `50ada93517`
+Commit: `f71a49e7e8`
 
 Remaining Issues / Blockers:
-- Running live end-to-end video generation requires user to configure live MCP servers (`mcp_servers` in `config.yaml`) with external API credentials in `~/.hermes/.env`. Offline fixture verification with ToolRegistry is fully proven with 95 passing tests.
+- Running live end-to-end video generation requires user to configure live MCP servers (`mcp_servers` in `config.yaml`) with external API credentials in `~/.hermes/.env`. Offline fixture verification with ToolRegistry is fully proven with 100 passing tests.
 
 Deferred Items:
 - Multi-worker scaling, generic outbox broker, HA replication, and cross-node process isolation (deferred to `PRODUCTION_HARDENED` phase).
@@ -201,6 +200,9 @@ WORKER proves or minimally wires the concrete Product Intelligence -> Video Fact
 
 ## History
 ...
+### Iteration 95
+WORKER completed REWORK on 50ada93517: (1) implemented immediate structured checkpointing of accepted provider job_id before polling begins, with non-swallowed persistence error handling and terminal failure handling, (2) connected real runtime heartbeat lease renewal through OutboxDispatcher and monotonic timeout deadlines, (3) eliminated truthiness fallback for provider_mode/polling settings to fail closed on falsy/empty values, (4) verified with 100 targeted tests passing and clean ruff / diff-check (commit `f71a49e7e8`). Handed off to PLANNER.
+
 ### Iteration 94
 WORKER completed REWORK on 433f151916: (1) prevented resubmission of accepted provider jobs via `active_render_job_id` tracking and automatic polling resumption without blind re-submits, (2) implemented `extend_lease` heartbeat and scaled worker lease duration to comfortably cover long job polling, (3) enforced strict fail-closed validation on `provider_mode` and polling parameters, (4) enabled budget re-reservation on idempotent job retries, (5) verified with 95 targeted tests passing and clean ruff / diff-check (commit `50ada93517`). Handed off to PLANNER.
 
