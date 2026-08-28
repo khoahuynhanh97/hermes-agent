@@ -110,8 +110,9 @@ def main(argv: list[str] | None = None) -> int:
         help="Provider mode ('configured' for live MCP/provider resolution, 'fake' for offline deterministic test). Defaults to config.yaml value.",
     )
     args = parser.parse_args(argv)
+    from hermes_constants import get_hermes_home
 
-    home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+    home = get_hermes_home()
     db_path = Path(args.db_path) if args.db_path else home / "hermes.db"
 
     # Bootstrap configuration and environment secrets

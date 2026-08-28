@@ -123,3 +123,36 @@ def test_worker_stops_on_fatal_persistence_error(tmp_path):
             )
     finally:
         OutboxRepository.record_failure = orig_record  # type: ignore
+
+
+def test_worker_main_uses_canonical_hermes_home_and_respects_explicit_db_path(tmp_path, monkeypatch):
+    """Test that worker.main resolves canonical hermes home and respects explicit --db-path."""
+    from pathlib import Path
+    import hermes_personal.workflows.worker as worker_module
+
+    recorded_calls = []
+
+    def mock_run_worker(db_path, poll_interval=1.0, stop_event=None, delivery_fn=None, provider_mode=None, **kwargs):
+        recorded_calls.append({
+            "db_path": Path(db_path),
+            "poll_interval": poll_interval,
+            "provider_mode": provider_mode,
+        })
+        return 0
+
+    monkeypatch.setattr(worker_module, "run_worker", mock_run_worker)
+
+    # 1. Explicit --db-path
+    explicit_db = tmp_path / "explicit_dir" / "my_worker.db"
+    exit_code1 = worker_module.main(["--db-path", str(explicit_db), "--provider-mode", "fake"])
+    assert exit_code1 == 0
+    assert len(recorded_calls) == 1
+    assert recorded_calls[0]["db_path"] == explicit_db
+
+    # 2. Unset db-path with HERMES_HOME set -> resolves to HERMES_HOME / hermes.db
+    fake_home = tmp_path / "worker_home"
+    monkeypatch.setenv("HERMES_HOME", str(fake_home))
+    exit_code2 = worker_module.main(["--provider-mode", "fake"])
+    assert exit_code2 == 0
+    assert len(recorded_calls) == 2
+    assert recorded_calls[1]["db_path"] == fake_home / "hermes.db"

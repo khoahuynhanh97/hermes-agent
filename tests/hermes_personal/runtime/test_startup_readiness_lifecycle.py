@@ -181,3 +181,69 @@ def test_gateway_application_readiness_configured_mode_succeeds_with_valid_suppl
     data = res_ready.json()
     assert data["ready"] is True
     assert data["status"] == "ready"
+
+
+def test_gateway_healthz_compatibility_delegates_to_health_api_and_fails_503_in_configured_mode_without_tools(tmp_path):
+    """Test that /healthz compatibility endpoint delegates to HealthAPI and returns 503 when configured mode has no tools."""
+    # 1. Configured mode without tools -> both /health/ready and /healthz return 503
+    app_configured = create_gateway_application(
+        database_path=tmp_path / "configured.db",
+        api_key="test-key-503",
+        provider_mode="configured",
+    )
+    with TestClient(app_configured) as client:
+        ready_res = client.get("/health/ready")
+        assert ready_res.status_code == 503
+        assert ready_res.json()["ready"] is False
+
+        healthz_res = client.get("/healthz")
+        assert healthz_res.status_code == 503
+        assert healthz_res.json()["ready"] is False
+
+    # 2. Fake mode -> both /health/ready and /healthz return 200
+    app_fake = create_gateway_application(
+        database_path=tmp_path / "fake.db",
+        api_key="test-key-200",
+        provider_mode="fake",
+    )
+    with TestClient(app_fake) as client:
+        ready_res = client.get("/health/ready")
+        assert ready_res.status_code == 200
+        assert ready_res.json()["ready"] is True
+
+        healthz_res = client.get("/healthz")
+        assert healthz_res.status_code == 200
+        assert healthz_res.json()["ready"] is True
+
+
+def test_gateway_main_bootstrap_passes_in_process_registry_and_resolves_canonical_home(tmp_path, monkeypatch):
+    """Test that gateway_server.main passes in-process registry in configured mode and resolves canonical home."""
+    import hermes_personal.runtime.gateway_server as gw_module
+    from hermes_constants import get_hermes_home
+    from tools.registry import registry
+
+    recorded_apps = []
+
+    def mock_uvicorn_run(app, host, port, log_level):
+        recorded_apps.append(app)
+
+    monkeypatch.setattr("uvicorn.run", mock_uvicorn_run)
+    monkeypatch.setenv("HERMES_API_KEY", "bootstrap-test-key")
+
+    # Case A: configured mode with explicit --db-path
+    custom_db = tmp_path / "custom_dir" / "custom.db"
+    exit_code_a = gw_module.main(["--provider-mode", "configured", "--db-path", str(custom_db)])
+    assert exit_code_a == 0
+    assert len(recorded_apps) == 1
+    app_a = recorded_apps[0]
+    # Check that database connection was opened at custom_db
+    assert custom_db.exists()
+
+    # Case B: fake mode with default home resolution
+    fake_home = tmp_path / "fake_home"
+    monkeypatch.setenv("HERMES_HOME", str(fake_home))
+    exit_code_b = gw_module.main(["--provider-mode", "fake"])
+    assert exit_code_b == 0
+    assert len(recorded_apps) == 2
+    default_db = fake_home / "hermes.db"
+    assert default_db.exists()

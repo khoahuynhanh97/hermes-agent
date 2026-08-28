@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
 from hermes_personal.application import (
     EventsAPI,
@@ -339,14 +340,15 @@ def create_gateway_application(
         owner == owner_user_id and hmac.compare_digest(token, api_key)
     )
     cmd_handler = create_operator_command_handler(connection, provider_mode=provider_mode)
+    health_api_instance = _health_api(
+        connection=connection,
+        outbox_repository=outbox_repository,
+        catalog_service=catalog_service,
+        snapshots=snapshots,
+        provider_mode=provider_mode,
+    )
     app = create_application(
-        health_api=_health_api(
-            connection=connection,
-            outbox_repository=outbox_repository,
-            catalog_service=catalog_service,
-            snapshots=snapshots,
-            provider_mode=provider_mode,
-        ),
+        health_api=health_api_instance,
         events_api=EventsAPI(events, auth_validator=validate_token, command_handler=cmd_handler),
         turn_service=service,
         turn_normalizers={
@@ -359,8 +361,9 @@ def create_gateway_application(
     )
 
     @app.get("/healthz", include_in_schema=False)
-    def healthz() -> dict[str, bool]:
-        return {"ready": True}
+    def healthz() -> JSONResponse:
+        status_code, body = health_api_instance.handle_ready()
+        return JSONResponse(status_code=status_code, content=body)
 
     @app.on_event("shutdown")
     def _shutdown_gateway() -> None:
@@ -393,14 +396,24 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     api_key = os.environ.get("HERMES_API_KEY", "")
-    home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+    from hermes_constants import get_hermes_home
+
+    home = get_hermes_home()
     database_path = Path(args.db_path) if args.db_path else home / "hermes.db"
+
+    tool_registry = None
+    if args.provider_mode == "configured":
+        from tools.registry import registry
+
+        tool_registry = registry
+
     app = create_gateway_application(
         database_path=database_path,
         api_key=api_key,
         owner_user_id=os.environ.get("HERMES_OWNER_ID", "local-owner"),
         external_subject=os.environ.get("HERMES_EXTERNAL_SUBJECT", "local-owner"),
         provider_mode=args.provider_mode,
+        tool_registry=tool_registry,
     )
     import uvicorn
 

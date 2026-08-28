@@ -99,7 +99,7 @@ def build_process_topology(config: RuntimeConfig) -> tuple[ProcessSpec, ...]:
             required=True,
             readiness_probe=ProbeSpec(
                 probe_type="http",
-                endpoint=f"http://127.0.0.1:{config.gateway_port}/healthz",
+                endpoint=f"http://127.0.0.1:{config.gateway_port}/health/ready",
             ),
             shutdown_timeout_seconds=5.0,
             restart=RestartPolicy(max_attempts=5, window_seconds=60.0, base_backoff_seconds=1.0),

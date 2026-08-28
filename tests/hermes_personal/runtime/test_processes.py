@@ -194,3 +194,16 @@ runtime:
 
     assert config.provider_mode == "fake"
     assert config.enable_telegram is False
+
+
+def test_gateway_readiness_probe_uses_canonical_health_ready(repo_root):
+    """Test that build_process_topology assigns the canonical /health/ready probe to gateway ProcessSpec."""
+    config = RuntimeConfig(
+        mode="development",
+        repo_root=repo_root,
+        gateway_port=8642,
+    )
+    specs = build_process_topology(config)
+    gateway_spec = next(spec for spec in specs if spec.name == "gateway")
+    assert gateway_spec.readiness_probe.probe_type == "http"
+    assert gateway_spec.readiness_probe.endpoint == "http://127.0.0.1:8642/health/ready"
