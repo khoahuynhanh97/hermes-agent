@@ -84,63 +84,55 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 ## Current Next Action
 Owner: PLANNER
 
-Assignment: Worker 106 / Task 2 completed (commit `42230d62b3`).
+Assignment: Worker 107 / Task 2 Rework completed (commit `8f6c622a0d`).
 Plan: docs/superpowers/plans/2026-08-28-hermes-personal-live-integration.md
 
 Objective:
-Review Worker Iteration 106 PI adapter contract alignment and durable identifier mapping:
-1. Outgoing parameter mapping: `pdp_url` -> `url`, `keywords` space-joined into `query`, no unsupported keys sent to PI server; `build_resource_pack` forwards `snapshot_id` (and optional `variant_id`); `lock_resource_pack` forwards `resource_pack_id` and `owner_user_id`.
-2. Fail-closed prerequisite validations: missing or non-persisted research snapshot halts build; missing pack or non-lockable status (`needs_review`, `incomplete`, `rejected`, `unknown`) halts lock; owner or pack_id mismatch raises non-retryable TerminalJobError.
-3. Durable identifier round-trip: verified `snapshot_id`, `resource_pack_id`, `lock_id`, `manifest_digest`, and `assets` persist across SQLite connection closure and restart without loss or corruption.
-4. Positive local fixture validation passing 9 tests across `test_pi_mcp_contract.py` and `test_product_video_outbox.py`.
+Review Worker Iteration 107 PI adapter contract rework and test evidence:
+1. Exact persistence status: enforces `snapshot_id` present and `persistence_status` in `('saved', 'persisted')` per `media/research_persistence/service.py` contract. Missing/failed/skipped/unconfirmed persistence halts with non-retryable `TerminalJobError(PERSISTENCE_FAILED)` / `TerminalJobError(MISSING_SNAPSHOT_ID)`.
+2. Strict `ready_to_lock` gating: requires `pack_status == 'ready_to_lock'`, explicit non-empty `owner_user_id`, matching `resource_pack_id`, matching `snapshot_id`, matching `canonical_product_id`, required `manifest_digest`, and validated `assets`. No fallback synthesis of lock IDs when tool is absent.
+3. Explicit fake mode compatibility: handler prerequisite checks scoped to `provider_mode == 'configured'`, preserving seamless progression for deterministic `ProductIntelligenceClient`.
+4. Comprehensive offline contract test suite: 11 tests passing across `test_pi_mcp_contract.py` and named outbox tests including `test_e2e_http_operator_route_full_workflow_progression`.
 
 Required next action:
-1. Review Task 2 implementation and test evidence; accept Task 2.
-2. Determine next assignment (Task 3: Reconcile Operator Documentation).
+1. Review Task 2 rework implementation and test evidence; accept Task 2.
+2. Sequence next assignment (Task 3: Reconcile Operator Documentation).
 3. Do not execute live provider calls or paid operations autonomously.
 
 ## Last Worker Report
 
-Iteration: 106 (Task 2: PI MCP Contract Alignment and Durable Identifier Mapping on 5ae93e505e)
+Iteration: 107 (Task 2 Rework: Strict PI Contract, Exact Persistence Status, ready_to_lock Gating, and Fake Mode Compatibility on 8f6c622a0d)
 Phase: Phase 7 Continuation - Personal Happy Path and Bounded Hardening
 
 Implemented:
-- **1. PI Adapter Outgoing Parameter Mapping**:
-  - Code: `hermes_personal/product_video/handlers.py` (`MCPProductIntelligenceAdapter`).
-  - Logic:
-    - `research`: maps `pdp_url` to `url`, space-joins `keywords` to `query`, forwards `product_name`. Excludes unsupported parameter keys (`keywords`, `pdp_url`). Captures `snapshot_id`, `persistence_status`, `research_id`, `canonical_products`, `media_assets`, and raw results as top-level machine-readable fields alongside serialized `report`.
-    - `build_resource_pack`: validates presence and persisted state of `snapshot_id`, sends `{"snapshot_id": snapshot_id}` and optional `variant_id`. Preserves `resource_pack_id`, `canonical_product_id`, `pack_status`, `restrictions`, and `completeness`.
-    - `lock_resource_pack`: validates `resource_pack_id` and lockable status; dispatches `{"resource_pack_id": resource_pack_id, "owner_user_id": owner_user_id}` when lock tool is wired, or performs local locking fallback with real asset validation.
-- **2. Fail-Closed Prerequisite Checks & Structured Terminal Errors**:
-  - Code: `hermes_personal/product_video/handlers.py` (`MCPProductIntelligenceAdapter` and `ProductVideoJobHandlers`).
-  - Logic:
-    - Missing or failed persistence snapshot halts `build_resource_pack` with non-retryable `PREREQUISITE_FAILED` before tool dispatch.
-    - Missing `resource_pack_id` or non-lockable status (`needs_review`, `incomplete`, `rejected`, `unknown`) halts `lock_resource_pack` with non-retryable `NON_LOCKABLE_STATUS` / `PREREQUISITE_FAILED`.
-    - Provider `not_found` returns structured `TerminalJobError(SNAPSHOT_NOT_FOUND)` / `TerminalJobError(PACK_NOT_FOUND)`.
-    - Provider `owner_user_id` or `resource_pack_id` mismatch raises `TerminalJobError(OWNER_MISMATCH)` / `TerminalJobError(PACK_ID_MISMATCH)`.
-- **3. Durable Identifier Round-Trip Across Restart**:
-  - Test: `tests/hermes_personal/product_video/test_pi_mcp_contract.py` (`test_product_video_job_handlers_roundtrip_identifiers_through_sqlite`).
-  - Logic: Exercises research -> pack build -> pack lock across real SQLite repository transactions, closes database connection, reopens from disk, and proves `snapshot_id`, `resource_pack_id`, `lock_id`, `owner_user_id`, `manifest_digest`, and `assets` are intact.
-- **4. Strict MCP Signature Fixtures**:
-  - Created `tests/hermes_personal/product_video/test_pi_mcp_contract.py` with `StrictPIMCPToolRegistry` asserting exact signatures and rejecting unexpected arguments.
-  - Updated `tests/hermes_personal/workflows/test_product_video_outbox.py` handlers to accept `query` / `keywords`.
+- **1. Strict Persistence Contract**:
+  - Code: `hermes_personal/product_video/handlers.py` (`MCPProductIntelligenceAdapter.research` & `build_resource_pack`).
+  - Logic: Requires actual `snapshot_id` and explicit successful persistence (`persistence_status` in `("saved", "persisted")` matching `media/research_persistence/service.py`). Rejects `skipped`, `failed`, `unpersisted`, `missing`, or `None` with non-retryable `TerminalJobError(PERSISTENCE_FAILED)` / `TerminalJobError(MISSING_SNAPSHOT_ID)`. Never relabels `id` or `research_id` as `snapshot_id`.
+- **2. Strict ready_to_lock Gating & Cross-Field Validations**:
+  - Code: `hermes_personal/product_video/handlers.py` (`MCPProductIntelligenceAdapter.lock_resource_pack`).
+  - Logic: Requires explicit non-empty `owner_user_id`, `resource_pack_id`, and `pack_status == "ready_to_lock"` (denies `needs_review`, `incomplete`, `rejected`, `built`, empty, and arbitrary statuses with non-retryable `NON_LOCKABLE_STATUS`). Validates returned `owner_user_id`, `resource_pack_id`, `snapshot_id`, `canonical_product_id`, `manifest_digest`, and `assets` against input pack. Fails closed when lock tool is absent in configured mode without synthesizing IDs.
+- **3. Explicit Fake Mode Compatibility**:
+  - Code: `hermes_personal/product_video/handlers.py` (`ProductVideoJobHandlers.resource_pack_job` & `lock_job`).
+  - Logic: Prerequisites for `snapshot_id` / `persistence_status` / `pack_status` are scoped strictly to `self.provider_mode == "configured"`, preserving unbroken operation for deterministic `ProductIntelligenceClient` in explicit fake mode.
+- **4. Comprehensive Local Evidence & Outbox Real MCP Decoding**:
+  - Tests: `tests/hermes_personal/product_video/test_pi_mcp_contract.py` & `tests/hermes_personal/workflows/test_product_video_outbox.py`.
+  - Logic: Added tests for `saved` persistence status, missing owner, non `ready_to_lock` statuses, contradictory snapshot/product ID mismatches, complete SQLite restart round-trip verifying assets/manifest/snapshot/product/variant, and explicit fake mode compatibility. Registered strict lock MCP tool in outbox real MCP tests.
 
 Files Changed:
 - `hermes_personal/product_video/handlers.py`
 - `tests/hermes_personal/product_video/test_pi_mcp_contract.py`
 - `tests/hermes_personal/workflows/test_product_video_outbox.py`
-- `docs/superpowers/plans/2026-08-28-hermes-personal-live-integration.md`
 
 Verification:
-- `uv run pytest tests/hermes_personal/product_video/test_pi_mcp_contract.py tests/hermes_personal/workflows/test_product_video_outbox.py::test_configured_mode_with_real_mcp_response_shapes_and_polling tests/hermes_personal/workflows/test_product_video_outbox.py::test_configured_mode_missing_resource_pack_tool_fails_closed_without_mock_assets -q`: 9 passed in 1.27s.
+- `uv run pytest tests/hermes_personal/product_video/test_pi_mcp_contract.py tests/hermes_personal/workflows/test_product_video_outbox.py::test_configured_mode_with_real_mcp_response_shapes_and_polling tests/hermes_personal/workflows/test_product_video_outbox.py::test_configured_mode_missing_resource_pack_tool_fails_closed_without_mock_assets tests/hermes_personal/workflows/test_product_video_outbox.py::test_e2e_http_operator_route_full_workflow_progression -q`: 11 passed in 1.69s.
 - `uv run ruff check hermes_personal/product_video/handlers.py tests/hermes_personal/product_video/test_pi_mcp_contract.py tests/hermes_personal/workflows/test_product_video_outbox.py`: All checks passed.
 - `git diff --check`: Clean.
 
-Commit: `42230d62b3`
+Commit: `8f6c622a0d`
 
 Distinction / Blockers Note:
-- Task 2 adapter contract mapping and offline fixtures are fully verified.
-- The located external server's hard-coded example assets/fixed IDs remain an unresolved Task 4 provider defect, not real provenance evidence.
+- Task 2 rework complete and verified with strict local contract fixtures and real SQLite workflow persistence.
+- External server fixed snap_001/prod_001 lock defect remains an open Task 4 external dependency.
 - Live MVP remains OPEN.
 
 Deferred Items:
@@ -148,6 +140,72 @@ Deferred Items:
 - Handoff completed: owner set to PLANNER; progress marked HANDED_OFF.
 
 ## Last Planner Review
+Iteration: 109
+
+Decision:
+REWORK
+
+Assessment:
+- Accept the research url/query and build snapshot_id/lock resource_pack_id
+  outgoing argument mapping. Task 2 is not yet accepted as a whole.
+- handlers.py:308/335 substitutes id/research_id for absent snapshot_id and
+  infers persisted from any ID. Build guards only deny three failure strings.
+  Located persistence service returns saved, skipped or failed; tests use an
+  invented persisted-only positive. Missing/unknown evidence can pass.
+- handlers.py:420/1037 denylist permits absent or arbitrary pack status.
+  Missing build/lock IDs raise RuntimeError and job catch-all marks retryable.
+  Lock result validates only optional owner/pack identity, copies contradictory
+  snapshot/product IDs (468-469), drops variant and accepts absent manifest.
+  The configured fallback (487) synthesizes a lock ID without provider locking.
+  These violate the original Task 2 requirements, not new hardening requests.
+- Common resource_pack_job/lock_job guards (990/1028) also affect fake mode.
+  Existing deterministic ProductIntelligenceClient research/build return no
+  snapshot_id/resource_pack_id, so fake progression is rejected by inspection.
+- Seven new tests plus two configured nodes miss these cases. Round-trip test
+  manually persists artifacts but does not verify assets/variant equality;
+  its fixture lock changes asset identity and uses a noncanonical digest.
+- Preserve the worker's uncommitted stricter outbox fixtures, but restore their
+  structuredContent coverage and use an explicit consistent lock fixture.
+
+Evidence:
+- Initial SHA256: A756FC5CC636D80DD2D2259975A7744D2E6CCC84B4F90154B02C747DA497830D.
+- Worker marker 106, implementation 42230d62b3577c4be71bda879759d20a6ac67a5f;
+  HEAD ec7ca3ca66. Reviewed committed handler/test diff and uncommitted outbox
+  test diff. No Planner tests/runtime/build/provider calls.
+- Worker report claims 9 passed in 1.27s; current scheduler transcript records
+  later 9 passed in 1.26s plus scoped lint clean after stricter test edits.
+  Passing subset does not cover the static counterexamples above.
+- Read-only external product_scout/mcp_server.py:320-425 confirms actual
+  signatures and unresolved fixed snap_001/prod_001 lock construction.
+  media/research_persistence/service.py:25-31 confirms skipped/failed/saved.
+- Run 212acf623b5e46e4b2e6cf9cc3d80863 exited 0 at
+  2026-08-28T16:14:37.4660529+00:00. PID 6588 and child 9300 absent; lock removed.
+  Worker explicitly left tests/hermes_personal/workflows/test_product_video_outbox.py
+  uncommitted. All unrelated user files retained.
+
+Scope Adjustment:
+Finish original Task 2 only. Add one named existing explicit-fake HTTP workflow
+test because the new common guard changes that path. Keep all other verification
+bounded; no external PI fix or live authorization. Task 3 follows acceptance.
+Task 4 provenance/VF and paid-approval gates remain open; MVP not complete.
+
+Reviewed Worker iteration: 106
+Reviewed code commit: 42230d62b3577c4be71bda879759d20a6ac67a5f
+Review timestamp: 2026-08-28T16:17:13.272Z (heartbeat trigger)
+Next Step:
+WORKER 107 repairs these contract/compatibility gaps and returns evidence.
+
+## History
+
+### Iteration 109 Planner
+2026-08-28T16:17:13.272Z: Reviewed Worker 106 / 42230d62b3 and retained
+uncommitted outbox fixture improvements after old worker/PID/lock clearance.
+REWORK for original Task 2 strict persistence/lock evidence and explicit-fake
+compatibility, not new hardening. Both owners WORKER, assignment Worker 107.
+Only prescribed focused offline tests plus one existing fake HTTP workflow node.
+No Planner tests/runtime/providers; live MVP remains open.
+
+### Archived Planner Review 108 - Retained
 Iteration: 108
 
 Decision:
@@ -195,8 +253,6 @@ Review timestamp: 2026-08-28T15:47:12.790Z (heartbeat trigger)
 Next Step:
 WORKER 106 implements Task 2 and returns evidence for review, then Task 3.
 Live MVP remains OPEN; paid operations still require separate approval/cap.
-
-## History
 
 ### Iteration 106 Worker
 WORKER completed Task 2 (commit `42230d62b3`): (1) aligned `MCPProductIntelligenceAdapter` parameter mapping (`pdp_url` -> `url`, `keywords` space-joined -> `query`, no unsupported keys to PI server; `build_resource_pack` forwards `snapshot_id` and optional `variant_id`; `lock_resource_pack` forwards `resource_pack_id` and `owner_user_id` or uses local asset locking fallback), (2) added structured fail-closed checks for missing/non-persisted snapshots and non-lockable pack states (`needs_review`, `incomplete`, `rejected`, `unknown`), (3) verified durable identifier round-trip through real SQLite workflow persistence across connection restart, (4) created `tests/hermes_personal/product_video/test_pi_mcp_contract.py` with strict signature fixtures, (5) verified with 9 tests passing in 1.27s, scoped ruff clean, and diff-check clean. Handed off to PLANNER.
