@@ -126,33 +126,66 @@ def test_worker_stops_on_fatal_persistence_error(tmp_path):
 
 
 def test_worker_main_uses_canonical_hermes_home_and_respects_explicit_db_path(tmp_path, monkeypatch):
-    """Test that worker.main resolves canonical hermes home and respects explicit --db-path."""
+    """Test that worker.main resolves canonical hermes home, isolates config/dotenv, and respects explicit --db-path."""
+    import os
     from pathlib import Path
+    import hermes_constants
     import hermes_personal.workflows.worker as worker_module
 
-    recorded_calls = []
+    recorded_dotenv_homes = []
+    recorded_config_calls = []
+    recorded_run_calls = []
+
+    def mock_load_dotenv(hermes_home=None):
+        recorded_dotenv_homes.append(hermes_home)
+
+    def mock_load_config():
+        recorded_config_calls.append(True)
+        return {}
 
     def mock_run_worker(db_path, poll_interval=1.0, stop_event=None, delivery_fn=None, provider_mode=None, **kwargs):
-        recorded_calls.append({
+        recorded_run_calls.append({
             "db_path": Path(db_path),
             "poll_interval": poll_interval,
             "provider_mode": provider_mode,
         })
         return 0
 
+    # Stub dotenv, config, and run_worker before any worker.main execution
+    monkeypatch.setattr("hermes_cli.env_loader.load_hermes_dotenv", mock_load_dotenv)
+    monkeypatch.setattr("hermes_cli.config.load_config", mock_load_config)
     monkeypatch.setattr(worker_module, "run_worker", mock_run_worker)
 
-    # 1. Explicit --db-path
-    explicit_db = tmp_path / "explicit_dir" / "my_worker.db"
-    exit_code1 = worker_module.main(["--db-path", str(explicit_db), "--provider-mode", "fake"])
-    assert exit_code1 == 0
-    assert len(recorded_calls) == 1
-    assert recorded_calls[0]["db_path"] == explicit_db
+    # 1. Unset HERMES_HOME -> delegates to canonical hermes_constants.get_hermes_home()
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    sentinel_home = tmp_path / "sentinel_worker_home"
+    get_home_calls = []
 
-    # 2. Unset db-path with HERMES_HOME set -> resolves to HERMES_HOME / hermes.db
-    fake_home = tmp_path / "worker_home"
-    monkeypatch.setenv("HERMES_HOME", str(fake_home))
-    exit_code2 = worker_module.main(["--provider-mode", "fake"])
-    assert exit_code2 == 0
-    assert len(recorded_calls) == 2
-    assert recorded_calls[1]["db_path"] == fake_home / "hermes.db"
+    def mock_get_hermes_home():
+        get_home_calls.append(True)
+        return sentinel_home
+
+    monkeypatch.setattr(hermes_constants, "get_hermes_home", mock_get_hermes_home)
+
+    exit_code_unset = worker_module.main(["--provider-mode", "fake"])
+    assert exit_code_unset == 0
+    assert len(get_home_calls) >= 1
+    assert recorded_dotenv_homes[-1] == sentinel_home
+    assert recorded_run_calls[-1]["db_path"] == sentinel_home / "hermes.db"
+
+    # 2. Explicit HERMES_HOME environment variable
+    env_home = tmp_path / "env_worker_home"
+    monkeypatch.setenv("HERMES_HOME", str(env_home))
+    monkeypatch.setattr(hermes_constants, "get_hermes_home", lambda: Path(os.environ["HERMES_HOME"]))
+
+    exit_code_env = worker_module.main(["--provider-mode", "fake"])
+    assert exit_code_env == 0
+    assert recorded_dotenv_homes[-1] == env_home
+    assert recorded_run_calls[-1]["db_path"] == env_home / "hermes.db"
+
+    # 3. Explicit --db-path takes precedence over home for SQLite connection
+    explicit_db = tmp_path / "explicit_dir" / "my_worker.db"
+    exit_code_explicit = worker_module.main(["--db-path", str(explicit_db), "--provider-mode", "fake"])
+    assert exit_code_explicit == 0
+    assert recorded_run_calls[-1]["db_path"] == explicit_db
+    assert recorded_dotenv_homes[-1] == env_home

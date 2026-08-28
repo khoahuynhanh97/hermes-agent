@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 import sqlite3
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -216,11 +219,95 @@ def test_gateway_healthz_compatibility_delegates_to_health_api_and_fails_503_in_
         assert healthz_res.json()["ready"] is True
 
 
-def test_gateway_main_bootstrap_passes_in_process_registry_and_resolves_canonical_home(tmp_path, monkeypatch):
-    """Test that gateway_server.main passes in-process registry in configured mode and resolves canonical home."""
+def test_gateway_main_configured_forwards_in_process_registry_and_validates_readiness(tmp_path, monkeypatch):
+    """Test that gateway_server.main forwards in-process registry in configured mode and verifies readiness through real factory."""
     import hermes_personal.runtime.gateway_server as gw_module
-    from hermes_constants import get_hermes_home
-    from tools.registry import registry
+
+    recorded_apps = []
+    captured_kwargs = []
+    orig_create = gw_module.create_gateway_application
+
+    def spy_create(*args, **kwargs):
+        captured_kwargs.append(kwargs)
+        return orig_create(*args, **kwargs)
+
+    def mock_uvicorn_run(app, host, port, log_level):
+        recorded_apps.append(app)
+
+    monkeypatch.setattr(gw_module, "create_gateway_application", spy_create)
+    monkeypatch.setattr("uvicorn.run", mock_uvicorn_run)
+    monkeypatch.setenv("HERMES_API_KEY", "bootstrap-test-key")
+
+    # 1. Configured mode with EMPTY isolated registry -> passes registry, fails readiness (503 on /health/ready and /healthz)
+    empty_registry = {}
+    monkeypatch.setattr("tools.registry.registry", empty_registry)
+    db_empty = tmp_path / "empty_reg.db"
+    exit_empty = gw_module.main(["--provider-mode", "configured", "--db-path", str(db_empty)])
+    assert exit_empty == 0
+    assert len(recorded_apps) == 1
+    assert captured_kwargs[-1]["tool_registry"] is empty_registry
+
+    with TestClient(recorded_apps[-1]) as client:
+        res_ready = client.get("/health/ready")
+        assert res_ready.status_code == 503
+        assert res_ready.json()["ready"] is False
+
+        res_healthz = client.get("/healthz")
+        assert res_healthz.status_code == 503
+        assert res_healthz.json()["ready"] is False
+
+    # 2. Configured mode with POPULATED isolated registry -> passes registry, passes readiness (200 on /health/ready and /healthz)
+    wires = [
+        "mcp__learning__create_candidate",
+        "mcp__learning__retrieve",
+        "mcp__product_intelligence__research_product",
+        "mcp__product_intelligence__build_resource_pack",
+        "mcp__product_intelligence__lock_resource_pack",
+        "mcp__video_factory__create_brief",
+        "mcp__video_factory__export",
+        "mcp__video_factory__render",
+        "mcp__video_factory__create_scene_plan",
+        "mcp__video_factory__create_storyboard",
+    ]
+    populated_registry = {
+        wire: {
+            "type": "function",
+            "function": {
+                "name": wire,
+                "description": f"Tool for {wire}",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+        for wire in wires
+    }
+    monkeypatch.setattr("tools.registry.registry", populated_registry)
+    db_pop = tmp_path / "pop_reg.db"
+    exit_pop = gw_module.main(["--provider-mode", "configured", "--db-path", str(db_pop)])
+    assert exit_pop == 0
+    assert len(recorded_apps) == 2
+    assert captured_kwargs[-1]["tool_registry"] is populated_registry
+
+    with TestClient(recorded_apps[-1]) as client:
+        res_ready = client.get("/health/ready")
+        assert res_ready.status_code == 200
+        assert res_ready.json()["ready"] is True
+
+        res_healthz = client.get("/healthz")
+        assert res_healthz.status_code == 200
+        assert res_healthz.json()["ready"] is True
+
+    # 3. Fake mode -> tool_registry is None
+    db_fake = tmp_path / "fake_mode.db"
+    exit_fake = gw_module.main(["--provider-mode", "fake", "--db-path", str(db_fake)])
+    assert exit_fake == 0
+    assert len(recorded_apps) == 3
+    assert captured_kwargs[-1]["tool_registry"] is None
+
+
+def test_gateway_main_resolves_canonical_get_hermes_home_when_env_unset(tmp_path, monkeypatch):
+    """Test that gateway_server.main resolves canonical get_hermes_home when HERMES_HOME is unset."""
+    import hermes_constants
+    import hermes_personal.runtime.gateway_server as gw_module
 
     recorded_apps = []
 
@@ -228,22 +315,36 @@ def test_gateway_main_bootstrap_passes_in_process_registry_and_resolves_canonica
         recorded_apps.append(app)
 
     monkeypatch.setattr("uvicorn.run", mock_uvicorn_run)
-    monkeypatch.setenv("HERMES_API_KEY", "bootstrap-test-key")
+    monkeypatch.setenv("HERMES_API_KEY", "bootstrap-home-key")
 
-    # Case A: configured mode with explicit --db-path
-    custom_db = tmp_path / "custom_dir" / "custom.db"
-    exit_code_a = gw_module.main(["--provider-mode", "configured", "--db-path", str(custom_db)])
-    assert exit_code_a == 0
-    assert len(recorded_apps) == 1
-    app_a = recorded_apps[0]
-    # Check that database connection was opened at custom_db
-    assert custom_db.exists()
+    # 1. Unset HERMES_HOME -> delegates to hermes_constants.get_hermes_home()
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    sentinel_home = tmp_path / "sentinel_gw_home"
+    get_home_calls = []
 
-    # Case B: fake mode with default home resolution
-    fake_home = tmp_path / "fake_home"
-    monkeypatch.setenv("HERMES_HOME", str(fake_home))
-    exit_code_b = gw_module.main(["--provider-mode", "fake"])
-    assert exit_code_b == 0
-    assert len(recorded_apps) == 2
-    default_db = fake_home / "hermes.db"
+    def mock_get_hermes_home():
+        get_home_calls.append(True)
+        return sentinel_home
+
+    monkeypatch.setattr(hermes_constants, "get_hermes_home", mock_get_hermes_home)
+
+    exit_unset = gw_module.main(["--provider-mode", "fake"])
+    assert exit_unset == 0
+    assert len(get_home_calls) >= 1
+    default_db = sentinel_home / "hermes.db"
     assert default_db.exists()
+
+    # 2. Explicit HERMES_HOME environment variable
+    env_home = tmp_path / "explicit_env_gw_home"
+    monkeypatch.setenv("HERMES_HOME", str(env_home))
+    # When HERMES_HOME is set, hermes_constants.get_hermes_home() returns Path(os.environ["HERMES_HOME"])
+    monkeypatch.setattr(hermes_constants, "get_hermes_home", lambda: Path(os.environ["HERMES_HOME"]))
+    exit_env = gw_module.main(["--provider-mode", "fake"])
+    assert exit_env == 0
+    assert (env_home / "hermes.db").exists()
+
+    # 3. Explicit --db-path overrides default home
+    explicit_db = tmp_path / "custom_dir" / "explicit_gw.db"
+    exit_explicit = gw_module.main(["--provider-mode", "fake", "--db-path", str(explicit_db)])
+    assert exit_explicit == 0
+    assert explicit_db.exists()
