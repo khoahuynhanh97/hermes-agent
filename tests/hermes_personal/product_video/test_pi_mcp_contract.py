@@ -54,7 +54,7 @@ class StrictPIMCPToolRegistry:
                 "error": None,
                 "research_id": f"res_{snap_id}",
                 "snapshot_id": snap_id,
-                "persistence_status": "persisted",
+                "persistence_status": "saved",  # exact media/research_persistence/service.py contract
                 "source_summary": {"attempted": 2, "usable": 2, "challenged": 0, "blocked": 0, "failed": 0},
                 "canonical_products": [
                     {
@@ -121,26 +121,27 @@ class StrictPIMCPToolRegistry:
                 raise TypeError(f"lock_resource_pack received unexpected arguments: {unexpected}")
 
             pack_id = payload.get("resource_pack_id")
-            owner_user_id = payload.get("owner_user_id", "system")
+            owner_user_id = payload.get("owner_user_id")
 
             if not pack_id or pack_id not in self.pack_store:
                 return {"status": "not_found", "resource_pack_id": pack_id}
 
+            snap_id = pack_id.removeprefix("rp_")
             lock_id = f"lock_{pack_id}"
             lock_res = {
                 "status": "locked",
                 "lock_id": lock_id,
                 "resource_pack_id": pack_id,
-                "snapshot_id": pack_id.removeprefix("rp_"),
-                "canonical_product_id": f"prod_{pack_id.removeprefix('rp_')}",
+                "snapshot_id": snap_id,
+                "canonical_product_id": f"prod_{snap_id}",
                 "owner_user_id": owner_user_id,
                 "version": 1,
-                "manifest_digest": f"sha256:digest_{pack_id}",
+                "manifest_digest": f"sha256:manifest_digest_{pack_id}",
                 "created_at": "2026-08-28T12:00:00Z",
                 "assets": [
                     {
-                        "asset_id": f"asset_{pack_id}_01",
-                        "local_path": f"/data/media/{pack_id}_01.jpg",
+                        "asset_id": f"asset_{snap_id}_01",
+                        "local_path": f"/data/media/{snap_id}_01.jpg",
                         "media_role": "original",
                         "source_url": "https://example.com/image.jpg",
                         "match_confidence": 0.98,
@@ -180,7 +181,7 @@ def test_pi_adapter_outgoing_parameter_mapping():
     assert "keywords" not in payload
     assert "pdp_url" not in payload
     assert research_res["snapshot_id"] == "snap_001"
-    assert research_res["persistence_status"] == "persisted"
+    assert research_res["persistence_status"] == "saved"
     assert research_res["product_name"] == "Drone 4K"
     assert research_res["pdp_url"] == "https://example.com/pdp/drone-4k"
 
@@ -197,6 +198,7 @@ def test_pi_adapter_outgoing_parameter_mapping():
     assert pack_res["resource_pack_id"] == "rp_snap_001"
     assert pack_res["pack_status"] == "ready_to_lock"
     assert pack_res["canonical_product_id"] == "prod_snap_001"
+    assert pack_res["variant_id"] == "var_v1"
 
     # 3. Lock pack mapping
     lock_res = adapter.lock_resource_pack(pack_res, owner_user_id="user_admin")
@@ -210,12 +212,16 @@ def test_pi_adapter_outgoing_parameter_mapping():
     assert "pack_dict" not in payload3
     assert lock_res["lock_id"] == "lock_rp_snap_001"
     assert lock_res["owner_user_id"] == "user_admin"
-    assert lock_res["manifest_digest"] == "sha256:digest_rp_snap_001"
+    assert lock_res["manifest_digest"] == "sha256:manifest_digest_rp_snap_001"
+    assert lock_res["snapshot_id"] == "snap_001"
+    assert lock_res["canonical_product_id"] == "prod_snap_001"
+    assert lock_res["variant_id"] == "var_v1"
     assert len(lock_res["assets"]) == 1
+    assert lock_res["assets"][0]["asset_id"] == "asset_snap_001_01"
 
 
-def test_build_resource_pack_missing_snapshot_fails_closed():
-    """Test that build_resource_pack fails closed without dispatching if snapshot_id is missing or non-persisted."""
+def test_build_resource_pack_missing_or_failed_snapshot_fails_closed():
+    """Test that build_resource_pack fails closed with TerminalJobError if snapshot_id is missing or non-persisted."""
     registry = StrictPIMCPToolRegistry()
     wire_tools = {
         "build_resource_pack": "mcp__product_intelligence__build_resource_pack",
@@ -223,13 +229,16 @@ def test_build_resource_pack_missing_snapshot_fails_closed():
     adapter = MCPProductIntelligenceAdapter(registry, wire_tools)
 
     # Missing snapshot_id
-    with pytest.raises(ValueError, match="missing or non-persisted"):
+    with pytest.raises(TerminalJobError) as exc1:
         adapter.build_resource_pack({"report": "{}"})
+    assert exc1.value.code == "MISSING_SNAPSHOT_ID"
     assert len(registry.dispatched_calls) == 0
 
-    # Failed persistence status
-    with pytest.raises(ValueError, match="missing or non-persisted"):
-        adapter.build_resource_pack({"snapshot_id": "snap_failed", "persistence_status": "failed"})
+    # Failed or skipped persistence status
+    for bad_status in ("failed", "unpersisted", "missing", "skipped", None):
+        with pytest.raises(TerminalJobError) as exc2:
+            adapter.build_resource_pack({"snapshot_id": "snap_bad", "persistence_status": bad_status})
+        assert exc2.value.code == "PERSISTENCE_FAILED"
     assert len(registry.dispatched_calls) == 0
 
 
@@ -242,26 +251,33 @@ def test_build_resource_pack_snapshot_not_found_raises_terminal_error():
     adapter = MCPProductIntelligenceAdapter(registry, wire_tools)
 
     with pytest.raises(TerminalJobError) as exc_info:
-        adapter.build_resource_pack({"snapshot_id": "snap_999", "persistence_status": "persisted"})
+        adapter.build_resource_pack({"snapshot_id": "snap_999", "persistence_status": "saved"})
     assert exc_info.value.code == "SNAPSHOT_NOT_FOUND"
 
 
-def test_lock_resource_pack_non_lockable_status_fails_closed():
-    """Test that lock_resource_pack fails closed if pack_status is needs_review, incomplete, or rejected."""
+def test_lock_resource_pack_non_lockable_status_and_missing_owner_fails_closed():
+    """Test that lock_resource_pack fails closed if pack_status is not ready_to_lock or owner is missing."""
     registry = StrictPIMCPToolRegistry()
     wire_tools = {
         "lock_resource_pack": "mcp__product_intelligence__lock_resource_pack",
     }
     adapter = MCPProductIntelligenceAdapter(registry, wire_tools)
 
-    for bad_status in ("needs_review", "incomplete", "rejected", "unknown"):
-        with pytest.raises(ValueError, match="non-lockable status"):
-            adapter.lock_resource_pack({"resource_pack_id": "rp_001", "pack_status": bad_status})
+    # Missing owner
+    with pytest.raises(TerminalJobError) as exc_owner:
+        adapter.lock_resource_pack({"resource_pack_id": "rp_001", "pack_status": "ready_to_lock"}, owner_user_id="")
+    assert exc_owner.value.code == "MISSING_OWNER"
+
+    # Non ready_to_lock statuses (denies needs_review, incomplete, rejected, built, empty, unknown)
+    for bad_status in ("needs_review", "incomplete", "rejected", "built", "", None, "unknown"):
+        with pytest.raises(TerminalJobError) as exc_status:
+            adapter.lock_resource_pack({"resource_pack_id": "rp_001", "pack_status": bad_status}, owner_user_id="user1")
+        assert exc_status.value.code == "NON_LOCKABLE_STATUS"
     assert len(registry.dispatched_calls) == 0
 
 
-def test_lock_resource_pack_owner_mismatch_raises_terminal_error():
-    """Test that provider returning different owner_user_id raises TerminalJobError with code OWNER_MISMATCH."""
+def test_lock_resource_pack_mismatches_raise_terminal_error():
+    """Test that contradictory owner, pack_id, snapshot_id, or product_id raises TerminalJobError."""
     registry = StrictPIMCPToolRegistry()
     # Seed a pack
     registry.pack_store["rp_test"] = {"resource_pack_id": "rp_test"}
@@ -270,23 +286,33 @@ def test_lock_resource_pack_owner_mismatch_raises_terminal_error():
     }
     adapter = MCPProductIntelligenceAdapter(registry, wire_tools)
 
-    # Monkeypatch dispatch to simulate mismatched owner
     orig_dispatch = registry.dispatch
 
-    def bad_dispatch(tool_name, payload):
+    # 1. Owner mismatch
+    def dispatch_owner_mismatch(tool_name, payload):
         res = orig_dispatch(tool_name, payload)
         res["owner_user_id"] = "different_user_attacker"
         return res
 
-    registry.dispatch = bad_dispatch  # type: ignore
-
-    with pytest.raises(TerminalJobError) as exc_info:
+    registry.dispatch = dispatch_owner_mismatch  # type: ignore
+    with pytest.raises(TerminalJobError) as exc1:
         adapter.lock_resource_pack({"resource_pack_id": "rp_test", "pack_status": "ready_to_lock"}, owner_user_id="legit_user")
-    assert exc_info.value.code == "OWNER_MISMATCH"
+    assert exc1.value.code == "OWNER_MISMATCH"
+
+    # 2. Snapshot mismatch
+    def dispatch_snap_mismatch(tool_name, payload):
+        res = orig_dispatch(tool_name, payload)
+        res["snapshot_id"] = "contradictory_snap_999"
+        return res
+
+    registry.dispatch = dispatch_snap_mismatch  # type: ignore
+    with pytest.raises(TerminalJobError) as exc2:
+        adapter.lock_resource_pack({"resource_pack_id": "rp_test", "pack_status": "ready_to_lock", "snapshot_id": "snap_orig"}, owner_user_id="system")
+    assert exc2.value.code == "SNAPSHOT_MISMATCH"
 
 
 def test_product_video_job_handlers_roundtrip_identifiers_through_sqlite(tmp_path):
-    """Test end-to-end round-trip of PI identifiers (snapshot_id, resource_pack_id, lock_id)
+    """Test end-to-end round-trip of PI identifiers (snapshot_id, resource_pack_id, lock_id, variant_id, assets, manifest)
     through ProductVideoJobHandlers and real SQLite workflow persistence.
     """
     db_file = tmp_path / "pi_contract_roundtrip.db"
@@ -326,7 +352,7 @@ def test_product_video_job_handlers_roundtrip_identifiers_through_sqlite(tmp_pat
     assert isinstance(res_out, JobSucceeded)
     research_art = res_out.artifact_ref
     assert research_art["snapshot_id"] == "snap_001"
-    assert research_art["persistence_status"] == "persisted"
+    assert research_art["persistence_status"] == "saved"
 
     # Persist research result and advance workflow to BUILDING_RESOURCE_PACK
     repo.commit_workflow(
@@ -362,8 +388,11 @@ def test_product_video_job_handlers_roundtrip_identifiers_through_sqlite(tmp_pat
     assert lock_art["lock_id"] == "lock_rp_snap_001"
     assert lock_art["resource_pack_id"] == "rp_snap_001"
     assert lock_art["snapshot_id"] == "snap_001"
+    assert lock_art["canonical_product_id"] == "prod_snap_001"
     assert lock_art["owner_user_id"] == "operator_user"
-    assert lock_art["manifest_digest"] == "sha256:digest_rp_snap_001"
+    assert lock_art["manifest_digest"] == "sha256:manifest_digest_rp_snap_001"
+    assert len(lock_art["assets"]) == 1
+    assert lock_art["assets"][0]["asset_id"] == "asset_snap_001_01"
 
     # Persist locked artifact
     repo.commit_workflow(
@@ -383,8 +412,10 @@ def test_product_video_job_handlers_roundtrip_identifiers_through_sqlite(tmp_pat
     assert loaded_wf["locked_pack"]["lock_id"] == "lock_rp_snap_001"
     assert loaded_wf["locked_pack"]["resource_pack_id"] == "rp_snap_001"
     assert loaded_wf["locked_pack"]["snapshot_id"] == "snap_001"
+    assert loaded_wf["locked_pack"]["canonical_product_id"] == "prod_snap_001"
     assert loaded_wf["locked_pack"]["owner_user_id"] == "operator_user"
-    assert loaded_wf["locked_pack"]["manifest_digest"] == "sha256:digest_rp_snap_001"
+    assert loaded_wf["locked_pack"]["manifest_digest"] == "sha256:manifest_digest_rp_snap_001"
+    assert loaded_wf["locked_pack"]["assets"][0]["asset_id"] == "asset_snap_001_01"
     conn2.close()
 
 
@@ -434,4 +465,55 @@ def test_handlers_missing_prerequisites_return_non_retryable_failed(tmp_path):
     assert fail_res2.retryable is False
     assert fail_res2.code == "NON_LOCKABLE_STATUS"
 
+    conn.close()
+
+
+def test_fake_mode_compatibility_retained(tmp_path):
+    """Test that explicit fake provider mode continues to progress without configured MCP prerequisites."""
+    from hermes_personal.integrations.product_intelligence.client import ProductIntelligenceClient
+    from hermes_personal.integrations.video_factory.client import VideoFactoryClient
+
+    db_file = tmp_path / "fake_mode.db"
+    conn = connect(db_file)
+    repo = WorkflowRepository(conn)
+
+    fake_pi = ProductIntelligenceClient()
+    fake_vf = VideoFactoryClient()
+
+    handlers = ProductVideoJobHandlers(
+        pi_client=fake_pi,
+        video_client=fake_vf,
+        workflow_repository=repo,
+        provider_mode="fake",
+    )
+
+    wf_id = "wf_fake_01"
+    repo.commit_workflow(
+        workflow_id=wf_id,
+        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RESEARCHING.value}),
+        events=[{"event_id": "e_init", "command_id": "c_init", "event_type": "WorkflowStarted", "timestamp": "2026-08-28T00:00:00Z", "payload": {}}],
+        expected_version=0,
+    )
+
+    ctx = JobContext(workflow_id=wf_id, job_id="job_fake_res", owner_user_id="user_fake")
+
+    # Research
+    res = handlers.research_job(ctx, product_name="Fake Drone", keywords=["camera"])
+    assert isinstance(res, JobSucceeded)
+
+    # Transition to BUILDING_RESOURCE_PACK
+    repo.commit_workflow(
+        workflow_id=wf_id,
+        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.BUILDING_RESOURCE_PACK.value, "research_result": res.artifact_ref}),
+        events=[{"event_id": "e_res", "command_id": "c_res", "event_type": "ResearchCompleted", "timestamp": "2026-08-28T00:01:00Z", "payload": {}}],
+        expected_version=1,
+    )
+
+    # Build pack with fake output (which has no snapshot_id/persistence_status)
+    res_pack = handlers.resource_pack_job(ctx, research_result=res.artifact_ref)
+    assert isinstance(res_pack, JobSucceeded)
+
+    # Lock pack with fake output
+    res_lock = handlers.lock_job(ctx, pack_dict=res_pack.artifact_ref)
+    assert isinstance(res_lock, JobSucceeded)
     conn.close()

@@ -1124,35 +1124,84 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
     # Tool 1: Research returning standard MCP CallToolResult content block
     def mcp_research_handler(args):
         called_tools.append(("research", args))
+        assert "keywords" not in args
+        assert "pdp_url" not in args
+        query = args.get("query", "")
+        assert isinstance(query, str)
+        assert "query" not in args or isinstance(query, str)
         return json.dumps({
             "content": [{
                 "type": "text",
                 "text": json.dumps({
                     "product_name": args.get("product_name"),
-                    "keywords": args.get("keywords") or (args.get("query", "").split() if args.get("query") else []),
+                    "query": query,
+                    "url": args.get("url"),
                     "report": json.dumps({"pdp_url": "https://example.com/pdp", "specs": "4K 60fps"}),
+                    "snapshot_id": "snap_ext_001",
+                    "persistence_status": "persisted",
+                    "canonical_product_id": "prod_ext_drone",
+                    "media_assets": [{"asset_id": "asset_ext_1", "local_path": "/data/media/ext_1.jpg", "match_status": "matched", "product_match_score": 0.9, "usage_policy": "approved"}],
                     "id": "ext_mcp_pi_001",
                 })
             }],
             "isError": False,
         })
 
-    # Tool 2: Resource pack builder
+    # Tool 2: Resource pack builder - strict signature contract
     def mcp_build_pack_handler(args):
         called_tools.append(("build_pack", args))
+        assert "research_result" not in args
+        assert "keywords" not in args
+        assert "pack_dict" not in args
+        assert args.get("snapshot_id") in {"snap_ext_001", "snap_failed"}
+        pack_id = f"rp_{args.get('snapshot_id')}"
+        payload = {
+            "status": "built",
+            "resource_pack_id": pack_id,
+            "pack_status": "ready_to_lock",
+            "canonical_product_id": "prod_ext_drone",
+            "variant_id": args.get("variant_id"),
+            "summary": "Strict contract resource pack",
+            "media_count": 1,
+            "claims": [{"text": "Strict identity verified", "status": "verified"}],
+            "restrictions": [],
+            "completeness": {"has_images": True, "has_specs": True},
+            "assets_mapping": {"asset_01": "/data/media/strict.jpg"},
+            "scene_plan": ["intro", "features", "outro"],
+        }
+        if args.get("snapshot_id") == "snap_failed":
+            return json.dumps({"status": "not_found", "snapshot_id": "snap_failed"})
+        return json.dumps(payload)
+
+    # Tool 3: Lock resource pack tool - strict signature contract
+    def mcp_lock_pack_handler(args):
+        called_tools.append(("lock_pack", args))
+        assert "pack_dict" not in args
+        assert "snapshot_id" not in args
+        assert args.get("resource_pack_id") == "rp_snap_ext_001"
+        assert args.get("owner_user_id") is not None
         return json.dumps({
             "structuredContent": {
                 "owner": "product_intelligence",
-                "schema": "product_resource_pack",
+                "schema": "product_resource_pack_locked",
                 "version": 1,
-                "summary": "Real Drone Resource Pack",
-                "assets_mapping": {"drone_img": "https://cdn.example.com/drone.jpg"},
+                "lock_id": "lock_rp_snap_ext_001",
+                "resource_pack_id": "rp_snap_ext_001",
+                "snapshot_id": "snap_ext_001",
+                "canonical_product_id": "prod_ext_drone",
+                "owner_user_id": args.get("owner_user_id"),
+                "manifest_digest": "sha256:ext_digest_001",
+                "created_at": "2026-08-28T12:00:00Z",
+                "status": "locked",
+                "summary": "Strict contract resource pack",
+                "assets": [{"asset_id": "asset_01", "local_path": "/data/media/strict.jpg"}],
+                "assets_mapping": {"asset_01": "/data/media/strict.jpg"},
                 "scene_plan": ["intro", "features", "outro"],
-                "resource_pack_id": "rp_real_999",
+                "id": "ext_lock_001",
             }
         })
 
-    # Tool 3: Creative brief
+    # Tool 4: Creative brief
     def mcp_brief_handler(args):
         called_tools.append(("brief", args))
         return json.dumps({
@@ -1165,7 +1214,7 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
             })
         })
 
-    # Tool 4: Scene plan
+    # Tool 5: Scene plan
     def mcp_scene_plan_handler(args):
         called_tools.append(("scene_plan", args))
         return json.dumps({
@@ -1179,7 +1228,7 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
             })
         })
 
-    # Tool 5: Storyboard
+    # Tool 6: Storyboard
     def mcp_storyboard_handler(args):
         called_tools.append(("storyboard", args))
         return json.dumps({
@@ -1192,7 +1241,7 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
             }
         })
 
-    # Tool 6: Render returning async pending job
+    # Tool 7: Render returning async pending job
     render_poll_count = 0
     def mcp_render_handler(args):
         called_tools.append(("render", args))
@@ -1203,7 +1252,7 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
             })
         })
 
-    # Tool 7: Polling tool for render status
+    # Tool 8: Polling tool for render status
     def mcp_poll_status_handler(args):
         nonlocal render_poll_count
         render_poll_count += 1
@@ -1217,7 +1266,7 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
             })
         })
 
-    # Tool 8: Export tool
+    # Tool 9: Export tool
     def mcp_export_handler(args):
         called_tools.append(("export", args))
         return json.dumps({
@@ -1229,6 +1278,7 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
 
     real_registry.register("mcp__product_intelligence__research_product", "mcp-pi", {}, mcp_research_handler)
     real_registry.register("mcp__product_intelligence__build_resource_pack", "mcp-pi", {}, mcp_build_pack_handler)
+    real_registry.register("mcp__product_intelligence__lock_resource_pack", "mcp-pi", {}, mcp_lock_pack_handler)
     real_registry.register("mcp__video_factory__create_brief", "mcp-vf", {}, mcp_brief_handler)
     real_registry.register("mcp__video_factory__create_scene_plan", "mcp-vf", {}, mcp_scene_plan_handler)
     real_registry.register("mcp__video_factory__create_storyboard", "mcp-vf", {}, mcp_storyboard_handler)
@@ -1271,7 +1321,7 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
 
     agg_brief, ver_brief = repo.get_workflow(wf_id)
     assert agg_brief["state"] == ProductVideoWorkflowState.AWAITING_BRIEF_APPROVAL.value
-    assert agg_brief["latest_artifact"]["product_id"] == "rp_real_999"
+    assert agg_brief["latest_artifact"]["product_id"] == "rp_snap_ext_001"
 
     # Step 3: approve AwaitingBriefApproval -> scene_plan -> AwaitingSceneApproval
     approve_and_advance_workflow(conn, agg_brief["pending_approval_id"], expected_version=ver_brief)
@@ -1336,13 +1386,26 @@ def test_configured_mode_missing_resource_pack_tool_fails_closed_without_mock_as
     wf_id = "wf_no_pack_01"
 
     # Research and video tools are registered, but build_resource_pack is missing
-    partial_registry = {
-        "mcp__product_intelligence__research_product": lambda p: {
-            "product_name": p.get("product_name"),
-            "keywords": p.get("keywords") or (p.get("query", "").split() if p.get("query") else []),
+    partial_calls = []
+
+    def strict_research_handler(args):
+        partial_calls.append(("research", args))
+        assert "keywords" not in args
+        assert "pdp_url" not in args
+        return {
+            "product_name": args.get("product_name"),
+            "query": args.get("query"),
+            "url": args.get("url"),
             "report": json.dumps({"pdp_url": "https://example.com"}),
-            "id": "ext_pi_111",
-        },
+            "snapshot_id": "snap_partial_001",
+            "persistence_status": "persisted",
+            "canonical_product_id": "prod_partial_001",
+            "media_assets": [{"asset_id": "asset_partial_1", "local_path": "/data/media/partial_1.jpg", "match_status": "matched", "product_match_score": 0.9, "usage_policy": "approved"}],
+            "id": "ext_pi_partial_001",
+        }
+
+    partial_registry = {
+        "mcp__product_intelligence__research_product": strict_research_handler,
         "mcp__video_factory__create_brief": lambda p: {"brief_id": "b1", "product_id": p.get("product_id")},
     }
 
