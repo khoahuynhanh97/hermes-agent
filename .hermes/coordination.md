@@ -4,7 +4,7 @@
 Implement the Hermes Upstream Gateway Rearchitecture program: converge Telegram, CLI, Web, and Omni natural-language ingress onto one canonical Hermes Agent Turn path; add stable capabilities, durable workflows, shared approvals/budgets, governed learning, and one-command runtime supervision while preserving legacy data and avoiding live paid-provider calls in verification.
 
 ## Overall Status
-IN_PROGRESS
+BLOCKED
 ## Current Phase
 Program Continuation - Personal Happy Path and Bounded Hardening
 
@@ -85,68 +85,29 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 Owner: PLANNER
 
 Objective:
-Worker Iteration 103: finish only the remaining Worker 102 readiness and HTTP
-413 contract defects, then complete the missing static MCP environment evidence.
-Baseline code a82541c511; report a61525d088. Do not redo accepted Iteration 96
-fixes, VF aliases, runbook 52810477cd or the bounded IP rate-limiter correction.
+Await the operator's intended real Video Factory MCP source/package or replacement
+server command. The bounded security/readiness rework is accepted; do not repeat it.
 
-Tasks:
-1. Read entire CURRENT coordination.md and applicable AGENTS.md. Preserve user
-   changes/untracked .agents/reports/, a.txt, b.txt, c.txt. Do not restore old
-   coordination from git. No independent actor may edit the same files.
-2. Fix configured readiness with an EXISTING unverified snapshot. Current
-   gateway_server.py:208-210 returns early on any active snapshot, including
-   fixture bindings seeded by fake mode or the prior production implementation.
-   Configured mode must verify required implementations against the supplied/
-   already-available registry using existing catalog contracts, or remain not
-   ready with a structured reason. Snapshot presence is not validation.
-   Never silently trust fake/stale bindings on fake->configured restart.
-   Do not launch/import MCP, fabricate health/digests, or delete user state.
-   Preserve explicit fake mode. Cover same-DB fake seed then configured restart
-   without tools (503), existing snapshot with absent required tools (503),
-   activation/reload failure diagnostics, and a valid supplied offline registry
-   positive path. Do not patch readiness to always fail as a substitute.
-3. Fix oversized no-Content-Length typed-JSON requests. PayloadTooLargeError is
-   a plain Exception; installed FastAPI routing.py:409 catches it while reading
-   a declared body and turns it into HTTP 400 before middleware can catch it.
-   Existing streaming test reads Request.body manually, so misses this path.
-   Keep bounded byte counting and early declared-length rejection. Preserve
-   HTTP 413 structured error on typed JSON and raw Request-body routes through
-   the actual middleware stack; avoid second response-start or swallowing a
-   partial response. Add focused no-length typed-JSON regression and direct
-   ASGI multi-chunk test proving rejection at the crossing chunk, no endpoint
-   side effect, and no reading all remaining chunks. Keep exact-limit success.
-4. Rate limiting is accepted for bounded single-machine IP fallback/token
-   rotation prevention. Do not build new auth middleware or distributed policy.
-   Per-owner key_func test is not evidence of production owner wiring; correct
-   report wording rather than claim that production authenticates per owner.
-5. Complete static-only MCP lookup in the ACTUAL configured interpreter
-   environment D:/work/hermes-agent/.venv, including site-packages metadata,
-   .pth/editable paths and any referenced module location. Last launcher tried
-   imports in hermes-upstream-rearchitecture/.venv instead; that failure does
-   not establish configured-environment absence. Read files only, redact
-   secrets, no Python/import/server launch/network/install/config changes.
-   Do not repeat broad source scans already recorded; report precise remaining
-   source/package question if unresolved. External repo inspection read-only.
-6. Verification is STRICTLY the two affected files:
-   tests/hermes_personal/application/test_security_middleware.py
-   tests/hermes_personal/runtime/test_startup_readiness_lifecycle.py
-   Use specific tests or these two files only, scoped lint on changed files,
-   git diff --check. Do not run application/runtime/workflows/product_video
-   directories, full suite, broad lint, builds, MCP imports or live providers.
-   Capture actual commands/results. Independent subagents only if useful with
-   disjoint ownership; one coordinator owns SSOT.
-7. Update only directly affected existing docs/claims if necessary. Report
-   changed files, evidence and scoped commits accurately; no full closure or
-   live/MVP claim from offline fixtures. Read full SSOT immediately before each
-   write, compare hash/owner/worker marker, abort on external change, patch
-   sections only and append History preserving this Planner Review.
-   Set both owners PLANNER only as the FINAL handoff edit, mark progress
-   HANDED_OFF and exit. Do not continue editing after handoff.
+Required next input:
+Provide the repository/package location supplying mcp_servers.video_factory.server,
+or identify the intended existing Video Factory MCP server and launch command.
+Configured literal module paths and checked editable/site-packages locations
+currently do not supply it. This is bounded filesystem evidence, not proof that
+no alternative server exists anywhere on the machine.
 
-Next phase after acceptance: selective safe MCP setup, not another hardening
-audit. Credentials/provider/spending authorization still required before live
-generation. PERSONAL_HAPPY_PATH_V1; advanced hardening deferred.
+After source is identified:
+1. Review actual PI/VF registration contracts and startup side effects statically.
+   Establish one explicit HERMES_HOME for config/dotenv/DB.
+2. Scope selective non-paid discovery with isolated state, timeout and cleanup;
+   do not blindly start all configured servers or import unknown modules.
+3. Confirm credentials locally through the secret mechanism, provider choice and
+   explicit paid authorization with spending cap before live generation/render/
+   export. Never ask for secret values in chat.
+4. Obtain real happy-path artifact and durability evidence before MVP_DONE.
+
+No worker dispatch is assigned while awaiting this input. Existing code and
+untracked files remain untouched. Advanced/distributed hardening stays deferred;
+MVP_DONE and PRODUCTION_HARDENED are not declared.
 
 ## Last Worker Report
 
@@ -199,60 +160,64 @@ Deferred Items:
 - Handoff completed: owner set to PLANNER; progress marked HANDED_OFF.
 
 ## Last Planner Review
-Iteration: 104
+Iteration: 105
 
 Decision:
-REWORK: complete two remaining contract defects and correct MCP evidence scope.
+BLOCKED: bounded Worker 103 rework accepted; real VF MCP source requires operator input.
 
 Assessment:
-- Worker 102/a82541c511 improves actual body byte counting, IP fallback against
-  bearer rotation and bounded bucket storage; the rate-limiter scope is accepted
-  for the personal single-process profile. No further rate-limiter expansion.
-- Configured readiness still returns early for any existing active snapshot
-  before checking provider mode or registry. Fake-mode/old synthetic bindings
-  survive restart and can again make configured readiness appear healthy with
-  no real tools. Empty-database negative test does not cover this condition.
-- Streaming error is a plain PayloadTooLargeError. Installed FastAPI catches
-  plain exceptions during typed body parsing as HTTP 400; current no-length
-  test only exercises manual Request.body. The requested 413 contract is not
-  covered for typed JSON requests. No runtime reproduction by Planner.
-- Per-owner limiter test injects a test-only key_func; do not claim actual
-  production owner wiring. IP fallback is sufficient for this scoped fix.
-- Claimed 332-test directory run and broad lint exceed the assignment. The
-  launcher additionally attempted MCP module imports, contrary to static-only
-  scope; imports failed in this checkout's venv, not the configured VF venv.
-  This does not prove no VF package in the configured environment.
-- Review at 16:55 deferred writing because PID 18836 remained active after
-  SSOT handoff. It now exited code 0 at 16:59:50Z and lock is gone; current
-  tracked files are clean. Progress still says STARTING, contradicting report
-  HANDED_OFF. Exit alone is not business completion evidence.
+- Accept 946ecf964a for the two reviewed personal-path defects: configured mode
+  validates via the supplied registry/catalog even when SQLite contains old fake
+  bindings; typed-JSON parser error responses after the size limit are suppressed
+  and replaced by the structured HTTP 413 response.
+- Added evidence covers fake-seeded same-DB configured startup without tools
+  (503), supplied offline registry success, typed-JSON 413 without endpoint
+  execution, and a direct ASGI crossing-chunk test that stops further reads.
+  Existing IP rate-limit/token-rotation correction remains accepted.
+- Acceptance is limited to the assigned personal path and available source/test
+  evidence. It is not proof of live tool health, every ASGI streaming scenario,
+  production per-owner auth, or complete hardening. No further hardening assigned.
+- Worker reports 16 focused tests and scoped lint passing; Planner did not rerun
+  tests. Do not elevate the report's "100% verified" wording to live acceptance.
+- The 17:10 review deferred a write because worker PID 12812 was still active
+  after handoff. It is no longer present in current Win32_Process results.
+  Its lock remains stale and progress still says STARTING; transcript last changed
+  at 2026-08-27T17:06:08Z. No exit outcome or restart is inferred from the stale
+  lock. No lock cleanup or extra worker launch performed by Planner.
+- Actual live MCP source remains unresolved. No new provider selection, secret
+  confirmation or paid spending permission has been supplied. Fixture success
+  cannot close live video automation. Repeated code/doc audits will not supply
+  the missing intended server location.
 
 Evidence:
-- Complete a82541c511 code/test diff reviewed in preceding bounded review.
-  Fresh source locations: gateway_server.py:208-210, middleware.py:13, :54-72.
-- Fresh test reads show only empty configured DB and manual-body streaming;
-  installed .venv/Lib/site-packages/fastapi/routing.py:373 and :409-412
-  establish the typed-body exception conversion.
-- CapabilityCatalogService.reload uses supplied/stored registry only and fails
-  if none; no MCP process discovery is implied by that method.
-- Git HEAD a61525d088 (report), code a82541c511; no pending tracked diff.
-  Original four untracked entries preserved.
-- Worker reported 12 focused tests passed plus 332 broad tests; Planner did not
-  run tests, Python, runtime, builds, imports or providers. Last launcher log
-  records failed import probes in hermes-upstream-rearchitecture/.venv.
+- Current SSOT hash/owner/report matches the prior Worker 103 handoff.
+- Git HEAD 4cd6aa408b (Worker report); code 946ecf964ae4136e15cf2e766647a7942acb2570.
+  Tracked working tree is clean; original .agents/reports/, a.txt, b.txt, c.txt
+  remain untracked and preserved.
+- Complete 946ecf964a source/test diff reviewed in preceding bounded review;
+  no subsequent tracked changes were observed.
+- Fresh read: D:/work/hermes-agent/.venv/Lib/site-packages/
+  __editable__.hermes_agent-1.0.0.pth points to D:/work/hermes-agent/src.
+  Neither src/mcp_servers/video_factory/server.py nor the checked site-packages
+  mcp_servers/video_factory package directories exist.
+- PI source was located at D:/work/Personal/Product-Intelligence/
+  product_scout/mcp_server.py in the earlier static inspection. No importability,
+  startup safety or real server schema compatibility is asserted from file presence.
+- No tests/Python/runtime/build/MCP imports/provider calls by this Planner turn.
 
 Scope Adjustment:
-Narrow rework to existing-snapshot readiness, HTTP 413 integration and missing
-configured-environment static evidence. Preserve accepted fixes; no new gaps.
+No new implementation. Three initial Iteration 96 fixes and the resumed bounded
+rate-limit/readiness/body-limit corrections remain accepted. Resolve operator-owned
+live setup input next; advanced production hardening remains deferred.
 
-Reviewed Worker iteration: 102 (Security Middleware & Configured Readiness Rework on 51f2d29767)
-Reviewed code commit: a82541c511ef4397a88b2a4a574bba3a4538cf98
-Review timestamp: 2026-08-27T17:00:06.467Z (heartbeat trigger)
-Initial coordination SHA256: 60990D869477724C3C3352D40006F8C900E47895B93E077F2CF6A6824FE17493
+Reviewed Worker iteration: 103 (HTTP 413 Typed ASGI Rejection, Snapshot Readiness & Static Environment Inspection on a82541c511)
+Reviewed code commit: 946ecf964ae4136e15cf2e766647a7942acb2570
+Review timestamp: 2026-08-28T14:10:41.290Z (heartbeat trigger)
+Initial coordination SHA256: E0FE4775E79D5050449B12F839F54B0A4EFFECD4D1CFB3EB2B98B7E3AEE97E1B
 
 Next Step:
-WORKER finishes bounded rework, then PLANNER reviews for real MCP setup phase.
-No MVP_DONE or PRODUCTION_HARDENED declaration.
+PLANNER waits for intended Video Factory MCP repository/package/launch command;
+resume scoped setup validation only after this input. No autonomous paid execution.
 
 ## History
 
@@ -647,3 +612,13 @@ rotation protection/bounded storage accepted; no extra hardening. Require only
 two affected test files and static metadata inspection in the actual configured
 VF environment; prior wrong-venv import failure is not absence proof. Preserve
 user files. Both owners WORKER; scheduler-only dispatch. Live MVP remains OPEN.
+
+### Iteration 105 Planner
+2026-08-28T14:10:41.290Z: Accepted bounded Worker 103/946ecf964a source/test
+evidence for configured old-snapshot rejection and typed-JSON HTTP 413. Prior
+rate-limiter correction remains accepted. Decision BLOCKED on intended real VF
+MCP package/repository/launch-command input; checked configured paths remain
+absent. PID 12812 is no longer present; stale lock/progress retained without
+inventing an exit outcome. No code/tests/runtime/provider calls or dispatch.
+Both owners PLANNER. Stop heartbeat while no useful autonomous action remains;
+live MVP OPEN and advanced production hardening deferred.
