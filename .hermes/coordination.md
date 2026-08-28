@@ -87,13 +87,14 @@ Owner: PLANNER
 Assignment: Worker 104 / Task 1 completed.
 Plan: docs/superpowers/plans/2026-08-28-hermes-personal-live-integration.md
 
-Objective:
-Review Worker Iteration 104 (commit `edd11f5393`) implementing Task 1: Gateway bootstrap in-process tool registry plumbing, /healthz delegation to HealthAPI, canonical /health/ready ProcessSpec probe, and platform-native get_hermes_home() resolution across Gateway and Worker.
-
-Required next action:
-1. Review Task 1 implementation and test evidence.
-2. Determine next assignment (Task 2: PI Contract & Durable Identifier Mapping).
-3. Do not execute live provider calls or paid operations autonomously.
+Outcome:
+Worker 104 reread Task 1 acceptance and the allowed source/test scope, then verified that the required behavior was already present in the current tree:
+- `hermes_personal/runtime/gateway_server.py` passes the in-process `tools.registry.registry` into the factory only in configured mode; readiness still fails closed when no registry/tools are present.
+- Gateway `/healthz` delegates to the same `HealthAPI` instance as `/health/ready`, so it cannot unconditionally return ready.
+- Supervisor `ProcessSpec` readiness probe uses `/health/ready`.
+- Gateway and worker bootstrap resolve `hermes_constants.get_hermes_home()` for default DB/home; explicit `--db-path` is preserved.
+Focused offline verification on the four allowed test files passed: 29 tests, ruff clean, `git diff --check` clean.
+No further code change was required in this bounded turn. Worker reran the assigned verification and handed off to PLANNER without altering source.
 
 ## Last Worker Report
 
