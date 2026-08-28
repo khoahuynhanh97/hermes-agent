@@ -1129,7 +1129,7 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
                 "type": "text",
                 "text": json.dumps({
                     "product_name": args.get("product_name"),
-                    "keywords": args.get("keywords"),
+                    "keywords": args.get("keywords") or (args.get("query", "").split() if args.get("query") else []),
                     "report": json.dumps({"pdp_url": "https://example.com/pdp", "specs": "4K 60fps"}),
                     "id": "ext_mcp_pi_001",
                 })
@@ -1338,8 +1338,8 @@ def test_configured_mode_missing_resource_pack_tool_fails_closed_without_mock_as
     # Research and video tools are registered, but build_resource_pack is missing
     partial_registry = {
         "mcp__product_intelligence__research_product": lambda p: {
-            "product_name": p["product_name"],
-            "keywords": p["keywords"],
+            "product_name": p.get("product_name"),
+            "keywords": p.get("keywords") or (p.get("query", "").split() if p.get("query") else []),
             "report": json.dumps({"pdp_url": "https://example.com"}),
             "id": "ext_pi_111",
         },

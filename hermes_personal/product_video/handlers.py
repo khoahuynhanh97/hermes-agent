@@ -276,13 +276,44 @@ class MCPProductIntelligenceAdapter:
         self.registry = registry
         self.wire_tools = wire_tools
 
-    def research(self, product_name: str, keywords: list[str], pdp_url: str | None = None, **kwargs: Any) -> dict[str, Any]:
+    def research(
+        self,
+        product_name: str,
+        keywords: list[str],
+        pdp_url: str | None = None,
+        workflow_id: str | None = None,
+        job_id: str | None = None,
+        idempotency_key: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         tool_name = self.wire_tools.get("research", "mcp__product_intelligence__research_product")
-        payload = {"product_name": product_name, "keywords": keywords}
+
+        # Deterministic space-join for query from keywords
+        query = " ".join(k.strip() for k in keywords if k and k.strip()) if keywords else None
+
+        # Mapped outgoing payload conforming strictly to located server signature:
+        # url from pdp_url, product_name, query from keywords
+        # Do NOT send unsupported 'keywords' or 'pdp_url' keys to the server
+        payload: dict[str, Any] = {}
+        if product_name:
+            payload["product_name"] = product_name
         if pdp_url:
-            payload["pdp_url"] = pdp_url
+            payload["url"] = pdp_url
+        if query:
+            payload["query"] = query
+
         raw = _dispatch_tool(self.registry, tool_name, payload)
 
+        # Extract snapshot_id and persistence_status
+        snapshot_id = raw.get("snapshot_id") or raw.get("id") or raw.get("research_id")
+        persistence_status = raw.get("persistence_status")
+        research_status = raw.get("status")
+
+        if research_status in ("failed", "error", "cancelled"):
+            err_msg = raw.get("error") or raw.get("reason") or f"Research failed with status '{research_status}'"
+            raise TerminalJobError(f"PI research operation failed: {err_msg}", code="PI_RESEARCH_FAILED")
+
+        # Serialized report text for report field
         report_data = raw.get("report") or raw
         if isinstance(report_data, dict):
             report_str = json.dumps(report_data)
@@ -300,41 +331,176 @@ class MCPProductIntelligenceAdapter:
             "keywords": keywords,
             "pdp_url": pdp_url,
             "report": report_str,
-            "external_provider_id": raw.get("id") or raw.get("external_id"),
+            "snapshot_id": snapshot_id,
+            "persistence_status": persistence_status or ("persisted" if snapshot_id else "unpersisted"),
+            "research_id": raw.get("research_id"),
+            "canonical_products": raw.get("canonical_products", []),
+            "media_assets": raw.get("media_assets", []),
+            "raw_result": raw,
+            "external_provider_id": raw.get("id") or raw.get("external_id") or snapshot_id,
         }
 
-    def build_resource_pack(self, research_result: dict, **kwargs: Any) -> dict[str, Any]:
+    def build_resource_pack(
+        self,
+        research_result: dict,
+        variant_id: str | None = None,
+        workflow_id: str | None = None,
+        job_id: str | None = None,
+        idempotency_key: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         tool_name = self.wire_tools.get("build_resource_pack")
-        if tool_name and tool_name in _get_tool_names_from_registry(self.registry):
-            raw = _dispatch_tool(self.registry, tool_name, {"research_result": research_result})
-            return raw
-        raise RuntimeError(
-            "MISSING_PROVIDER_CONFIG: Wire tool for 'product.resource_pack.build' is not registered in ToolRegistry. "
-            "Fails closed without generating mock assets in configured mode."
-        )
+        if not tool_name or tool_name not in _get_tool_names_from_registry(self.registry):
+            raise RuntimeError(
+                "MISSING_PROVIDER_CONFIG: Wire tool for 'product.resource_pack.build' is not registered in ToolRegistry. "
+                "Fails closed without generating mock assets in configured mode."
+            )
 
-    def lock_resource_pack(self, pack_dict: dict, owner_user_id: str | None = None, **kwargs: Any) -> dict[str, Any]:
+        # Validate snapshot_id prerequisite
+        snapshot_id = research_result.get("snapshot_id")
+        persistence_status = research_result.get("persistence_status")
+        if not snapshot_id or persistence_status in ("failed", "unpersisted", "missing"):
+            raise ValueError(
+                f"Cannot build resource pack: research snapshot is missing or non-persisted (snapshot_id={snapshot_id!r}, persistence_status={persistence_status!r})"
+            )
+
+        payload: dict[str, Any] = {"snapshot_id": str(snapshot_id)}
+        if variant_id:
+            payload["variant_id"] = str(variant_id)
+
+        raw = _dispatch_tool(self.registry, tool_name, payload)
+
+        status_val = raw.get("status")
+        if status_val == "not_found":
+            raise TerminalJobError(f"Resource pack build failed: snapshot '{snapshot_id}' not found by provider", code="SNAPSHOT_NOT_FOUND")
+        if status_val in ("failed", "error", "cancelled"):
+            err_msg = raw.get("error") or raw.get("reason") or f"status '{status_val}'"
+            raise TerminalJobError(f"Resource pack build failed: {err_msg}", code="PI_PACK_BUILD_FAILED")
+
+        pack_id = raw.get("resource_pack_id") or raw.get("id")
+        if not pack_id:
+            raise RuntimeError(f"Tool '{tool_name}' returned resource pack without resource_pack_id: {raw!r}")
+
+        pack_status = raw.get("pack_status") or raw.get("status") or "built"
+
+        return {
+            "owner": "product_intelligence",
+            "schema": "product_resource_pack",
+            "version": 1,
+            "resource_pack_id": str(pack_id),
+            "pack_status": str(pack_status),
+            "canonical_product_id": raw.get("canonical_product_id"),
+            "variant_id": raw.get("variant_id") or variant_id,
+            "snapshot_id": snapshot_id,
+            "summary": raw.get("summary", ""),
+            "media_count": raw.get("media_count", len(raw.get("assets", []) or raw.get("assets_mapping", []))),
+            "claims": raw.get("claims", []),
+            "restrictions": raw.get("restrictions", []),
+            "completeness": raw.get("completeness", {}),
+            "assets_mapping": raw.get("assets_mapping") or raw.get("assets", {}),
+            "scene_plan": raw.get("scene_plan", []),
+            "raw_result": raw,
+            "external_provider_id": raw.get("id") or raw.get("external_id") or pack_id,
+        }
+
+    def lock_resource_pack(
+        self,
+        pack_dict: dict,
+        owner_user_id: str | None = None,
+        workflow_id: str | None = None,
+        job_id: str | None = None,
+        idempotency_key: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        resource_pack_id = pack_dict.get("resource_pack_id")
+        if not resource_pack_id:
+            raise ValueError("Cannot lock resource pack: missing resource_pack_id in pack_dict")
+
+        pack_status = pack_dict.get("pack_status") or pack_dict.get("status")
+        if pack_status in ("needs_review", "incomplete", "rejected", "unknown"):
+            raise ValueError(f"Cannot lock resource pack with non-lockable status '{pack_status}': pack is not ready_to_lock")
+
+        effective_owner = str(owner_user_id or "system")
         tool_name = self.wire_tools.get("lock_resource_pack")
-        if tool_name and tool_name in _get_tool_names_from_registry(self.registry):
-            raw = _dispatch_tool(self.registry, tool_name, {"pack_dict": pack_dict, "owner_user_id": owner_user_id})
-            return raw
 
-        # Local provenance validation for real resource pack assets
+        if tool_name and tool_name in _get_tool_names_from_registry(self.registry):
+            payload = {
+                "resource_pack_id": str(resource_pack_id),
+                "owner_user_id": effective_owner,
+            }
+
+            raw = _dispatch_tool(self.registry, tool_name, payload)
+
+            status_val = raw.get("status")
+            if status_val == "not_found":
+                raise TerminalJobError(f"Resource pack lock failed: resource_pack '{resource_pack_id}' not found by provider", code="PACK_NOT_FOUND")
+            if status_val in ("failed", "error", "cancelled"):
+                err_msg = raw.get("error") or raw.get("reason") or f"status '{status_val}'"
+                raise TerminalJobError(f"Resource pack lock failed: {err_msg}", code="PI_PACK_LOCK_FAILED")
+
+            lock_id = raw.get("lock_id") or raw.get("id")
+            if not lock_id:
+                raise RuntimeError(f"Tool '{tool_name}' returned lock without lock_id: {raw!r}")
+
+            # Check owner / identity mismatch if returned
+            ret_owner = raw.get("owner_user_id")
+            if ret_owner and ret_owner != effective_owner:
+                raise TerminalJobError(
+                    f"Resource pack lock owner mismatch: requested '{effective_owner}', provider returned '{ret_owner}'",
+                    code="OWNER_MISMATCH",
+                )
+
+            ret_pack_id = raw.get("resource_pack_id")
+            if ret_pack_id and ret_pack_id != str(resource_pack_id):
+                raise TerminalJobError(
+                    f"Resource pack lock ID mismatch: requested '{resource_pack_id}', provider returned '{ret_pack_id}'",
+                    code="PACK_ID_MISMATCH",
+                )
+
+            assets = raw.get("assets") or raw.get("assets_mapping") or pack_dict.get("assets_mapping") or pack_dict.get("assets") or []
+
+            return {
+                "owner": "product_intelligence",
+                "schema": "product_resource_pack_locked",
+                "version": raw.get("version", 1),
+                "lock_id": str(lock_id),
+                "resource_pack_id": str(resource_pack_id),
+                "snapshot_id": raw.get("snapshot_id") or pack_dict.get("snapshot_id"),
+                "canonical_product_id": raw.get("canonical_product_id") or pack_dict.get("canonical_product_id"),
+                "owner_user_id": effective_owner,
+                "manifest_digest": raw.get("manifest_digest"),
+                "created_at": raw.get("created_at") or datetime.now(timezone.utc).isoformat(),
+                "status": "locked",
+                "summary": pack_dict.get("summary", ""),
+                "assets": assets,
+                "assets_mapping": assets if isinstance(assets, dict) else {a.get("asset_id", f"asset_{i}"): a.get("local_path", "") for i, a in enumerate(assets)},
+                "scene_plan": pack_dict.get("scene_plan", []),
+                "raw_result": raw,
+                "external_provider_id": raw.get("id") or raw.get("external_id") or lock_id,
+            }
+
+        # Local locking fallback when tool is not registered as a separate MCP endpoint
         assets = pack_dict.get("assets_mapping") or pack_dict.get("assets")
         if not assets:
             raise ValueError("Cannot lock empty resource pack: missing assets")
 
-        resource_pack_id = str(pack_dict.get("resource_pack_id") or f"rp_{hash(json.dumps(pack_dict, sort_keys=True)) & 0xffffffff}")
+        lock_id = f"lock_{resource_pack_id}"
         return {
             "owner": "product_intelligence",
             "schema": "product_resource_pack_locked",
             "version": 1,
-            "resource_pack_id": resource_pack_id,
+            "lock_id": lock_id,
+            "resource_pack_id": str(resource_pack_id),
+            "snapshot_id": pack_dict.get("snapshot_id"),
+            "canonical_product_id": pack_dict.get("canonical_product_id"),
+            "owner_user_id": effective_owner,
+            "manifest_digest": _compute_digest(assets),
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "status": "locked",
             "summary": pack_dict.get("summary", ""),
+            "assets": assets,
             "assets_mapping": assets if isinstance(assets, dict) else {a.get("asset_id", f"asset_{i}"): a.get("local_path", "") for i, a in enumerate(assets)},
             "scene_plan": pack_dict.get("scene_plan", []),
-            "owner_user_id": owner_user_id or "local-owner",
             "external_provider_id": pack_dict.get("external_provider_id") or pack_dict.get("id"),
         }
 
@@ -796,12 +962,16 @@ class ProductVideoJobHandlers:
                 idempotency_key=ctx.idempotency_key,
                 **extra_kwargs,
             )
-            if pdp_url:
+            if pdp_url and not result.get("pdp_url"):
                 result["pdp_url"] = pdp_url
             res = JobSucceeded(artifact_ref=result, next_command={"command": "build_resource_pack", "product_name": product_name})
             if cache_key:
                 self._idempotency_cache[cache_key] = res
             return res
+        except TerminalJobError as e:
+            return JobFailed(retryable=False, code=e.code, message=str(e))
+        except ValueError as e:
+            return JobFailed(retryable=False, code="INVALID_INPUT", message=str(e))
         except Exception as e:
             return JobFailed(retryable=True, code="PI_RESEARCH_FAILED", message=str(e))
 
@@ -815,6 +985,17 @@ class ProductVideoJobHandlers:
             return err
         if not research_result:
             return JobFailed(retryable=False, code="MISSING_INPUT_REF", message="research_result cannot be empty")
+
+        # Validate research snapshot persistence prerequisite before dispatch
+        snapshot_id = research_result.get("snapshot_id")
+        persistence_status = research_result.get("persistence_status")
+        if not snapshot_id or persistence_status in ("failed", "unpersisted", "missing"):
+            return JobFailed(
+                retryable=False,
+                code="PREREQUISITE_FAILED",
+                message=f"Missing or non-persisted research snapshot (snapshot_id={snapshot_id!r}, persistence_status={persistence_status!r})",
+            )
+
         try:
             result = self.pi_client.build_resource_pack(
                 research_result,
@@ -826,6 +1007,10 @@ class ProductVideoJobHandlers:
             if cache_key:
                 self._idempotency_cache[cache_key] = res
             return res
+        except TerminalJobError as e:
+            return JobFailed(retryable=False, code=e.code, message=str(e))
+        except ValueError as e:
+            return JobFailed(retryable=False, code="PREREQUISITE_FAILED", message=str(e))
         except Exception as e:
             return JobFailed(retryable=True, code="PI_PACK_FAILED", message=str(e))
 
@@ -839,6 +1024,23 @@ class ProductVideoJobHandlers:
             return err
         if not pack_dict:
             return JobFailed(retryable=False, code="MISSING_INPUT_REF", message="pack_dict cannot be empty")
+
+        resource_pack_id = pack_dict.get("resource_pack_id")
+        if not resource_pack_id:
+            return JobFailed(
+                retryable=False,
+                code="PREREQUISITE_FAILED",
+                message="Cannot lock resource pack: missing resource_pack_id in pack_dict",
+            )
+
+        pack_status = pack_dict.get("pack_status") or pack_dict.get("status")
+        if pack_status in ("needs_review", "incomplete", "rejected", "unknown"):
+            return JobFailed(
+                retryable=False,
+                code="NON_LOCKABLE_STATUS",
+                message=f"Cannot lock resource pack with non-lockable status '{pack_status}': pack is not ready_to_lock",
+            )
+
         try:
             result = self.pi_client.lock_resource_pack(
                 pack_dict,
@@ -851,6 +1053,10 @@ class ProductVideoJobHandlers:
             if cache_key:
                 self._idempotency_cache[cache_key] = res
             return res
+        except TerminalJobError as e:
+            return JobFailed(retryable=False, code=e.code, message=str(e))
+        except ValueError as e:
+            return JobFailed(retryable=False, code="PREREQUISITE_FAILED", message=str(e))
         except Exception as e:
             return JobFailed(retryable=True, code="PI_LOCK_FAILED", message=str(e))
 
