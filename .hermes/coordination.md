@@ -84,66 +84,60 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 ## Current Next Action
 Owner: PLANNER
 
-Assignment: Worker 104 / Task 1 completed.
+Assignment: Worker 105 / Task 1 test-only rework completed (commit `3dedccddeb` on `edd11f5393`).
 Plan: docs/superpowers/plans/2026-08-28-hermes-personal-live-integration.md
 
-Outcome:
-Worker 104 reread Task 1 acceptance and the allowed source/test scope, then verified that the required behavior was already present in the current tree:
-- `hermes_personal/runtime/gateway_server.py` passes the in-process `tools.registry.registry` into the factory only in configured mode; readiness still fails closed when no registry/tools are present.
-- Gateway `/healthz` delegates to the same `HealthAPI` instance as `/health/ready`, so it cannot unconditionally return ready.
-- Supervisor `ProcessSpec` readiness probe uses `/health/ready`.
-- Gateway and worker bootstrap resolve `hermes_constants.get_hermes_home()` for default DB/home; explicit `--db-path` is preserved.
-Focused offline verification on the four allowed test files passed: 29 tests, ruff clean, `git diff --check` clean.
-No further code change was required in this bounded turn. Worker reran the assigned verification and handed off to PLANNER without altering source.
+Objective:
+Review Worker Iteration 105 test improvements:
+1. Gateway configured main with isolated offline registry asserting forwarded tool_registry is the exact isolated object, and testing both 503 (empty) and 200 (populated wire tools) through real TestClient lifecycle.
+2. Canonical get_hermes_home delegation when HERMES_HOME is unset using recording sentinel path, distinct from Path.home()/.hermes, along with explicit HERMES_HOME and --db-path precedence.
+3. Worker dotenv and config isolation before any worker.main invocation, asserting recorded dotenv hermes_home equals canonical resolver result while explicit --db-path takes precedence for DB connection.
+
+Required next action:
+1. Review Task 1 test evidence and accept Task 1.
+2. Assign Task 2 (PI Contract and Durable Identifier Mapping).
+3. Do not execute live provider calls or paid operations autonomously.
 
 ## Last Worker Report
 
-Iteration: 104 (Task 1: Gateway Bootstrap Registry Plumbing, Readiness Equivalence & Canonical Home Consistency on 2a4c8e98b1)
+Iteration: 105 (Task 1 Focused Test Improvements: Registry Plumbing, Canonical Home & Dotenv Isolation on edd11f5393)
 Phase: Phase 7 Continuation - Personal Happy Path and Bounded Hardening
 
 Implemented:
-- **1. Gateway Main In-Process Registry Bootstrap Plumbing**:
-  - Code: `hermes_personal/runtime/gateway_server.py`.
-  - Logic: In `provider_mode="configured"`, `gateway_server.main()` passes `tools.registry.registry` into `create_gateway_application(tool_registry=...)`. If the in-process registry has no registered tools, configured mode continues to fail closed (HTTP 503 `NOT_READY`). Selective MCP discovery/registration is explicitly deferred to Task 4.
-- **2. Shared HealthAPI Instance for Canonical and Compatibility Readiness**:
-  - Code: `hermes_personal/runtime/gateway_server.py`.
-  - Logic: The `/healthz` route delegates to the exact same `HealthAPI` instance as `/health/ready`, returning matching status codes (503 in unconfigured mode, 200 in fake mode or when valid tools are supplied).
-- **3. Supervisor Gateway ProcessSpec Canonical Endpoint**:
-  - Code: `hermes_personal/runtime/processes.py`.
-  - Logic: Updated gateway readiness probe endpoint from `/healthz` to canonical `/health/ready`.
-- **4. Canonical Home Resolution Across Gateway & Worker**:
-  - Code: `hermes_personal/runtime/gateway_server.py` and `hermes_personal/workflows/worker.py`.
-  - Logic: Both use `from hermes_constants import get_hermes_home; home = get_hermes_home()` ensuring platform-native path resolution on Windows, respecting `HERMES_HOME` environment overrides, and preserving explicit `--db-path` precedence.
-- **5. Focused Offline Tests Added**:
-  - `tests/hermes_personal/runtime/test_startup_readiness_lifecycle.py`:
-    - `test_gateway_healthz_compatibility_delegates_to_health_api_and_fails_503_in_configured_mode_without_tools`
-    - `test_gateway_main_bootstrap_passes_in_process_registry_and_resolves_canonical_home`
-  - `tests/hermes_personal/runtime/test_processes.py`:
-    - `test_gateway_readiness_probe_uses_canonical_health_ready`
-  - `tests/hermes_personal/workflows/test_worker.py`:
-    - `test_worker_main_uses_canonical_hermes_home_and_respects_explicit_db_path`
+- **1. Gateway Configured Main Isolated Registry Forwarding & Readiness Verification**:
+  - Test: `tests/hermes_personal/runtime/test_startup_readiness_lifecycle.py` (`test_gateway_main_configured_forwards_in_process_registry_and_validates_readiness`).
+  - Logic:
+    - Patched `tools.registry.registry` with isolated dictionary and spied `create_gateway_application`.
+    - Proved `tool_registry` argument passed to factory IS the exact isolated registry object.
+    - Verified with `TestClient` lifecycle that empty isolated registry returns 503 on both `/health/ready` and `/healthz`, while populated isolated registry (with valid wire tools) returns 200 on both endpoints.
+    - Verified fake mode passes `tool_registry=None`.
+- **2. Canonical Default Home Delegation when HERMES_HOME is Unset**:
+  - Tests: `test_gateway_main_resolves_canonical_get_hermes_home_when_env_unset` in `test_startup_readiness_lifecycle.py` and `test_worker_main_uses_canonical_hermes_home_and_respects_explicit_db_path` in `test_worker.py`.
+  - Logic:
+    - Patched `hermes_constants.get_hermes_home` with recording mock returning a temp sentinel path distinct from `Path.home() / .hermes`.
+    - With `HERMES_HOME` deleted/unset, asserted Gateway and Worker `main()` invoke `get_hermes_home()` and derive default DB from the sentinel path without touching real user home.
+    - Asserted explicit `HERMES_HOME` environment override and explicit `--db-path` precedence.
+- **3. Worker Dotenv and Config Isolation**:
+  - Test: `tests/hermes_personal/workflows/test_worker.py` (`test_worker_main_uses_canonical_hermes_home_and_respects_explicit_db_path`).
+  - Logic:
+    - Isolated `load_hermes_dotenv`, `load_config`, and `run_worker` before any `worker.main` execution.
+    - Asserted `load_hermes_dotenv` received `sentinel_home` equal to canonical `get_hermes_home()`, while explicit `--db-path` passed directly to `run_worker`.
+    - No network, live providers, or external imports.
 
 Files Changed:
-- `hermes_personal/runtime/gateway_server.py`
-- `hermes_personal/runtime/processes.py`
-- `hermes_personal/workflows/worker.py`
 - `tests/hermes_personal/runtime/test_startup_readiness_lifecycle.py`
-- `tests/hermes_personal/runtime/test_processes.py`
 - `tests/hermes_personal/workflows/test_worker.py`
-- `docs/superpowers/plans/2026-08-28-hermes-personal-live-integration.md`
 
 Verification:
-- `uv run pytest tests/hermes_personal/runtime/test_startup_readiness_lifecycle.py tests/hermes_personal/runtime/test_gateway_server.py tests/hermes_personal/runtime/test_processes.py tests/hermes_personal/workflows/test_worker.py -q`: 29 passed in 3.01s.
-- `uv run ruff check hermes_personal/runtime/gateway_server.py hermes_personal/runtime/processes.py hermes_personal/workflows/worker.py tests/hermes_personal/runtime/test_startup_readiness_lifecycle.py tests/hermes_personal/runtime/test_gateway_server.py tests/hermes_personal/runtime/test_processes.py tests/hermes_personal/workflows/test_worker.py`: All checks passed.
+- `uv run pytest tests/hermes_personal/runtime/test_startup_readiness_lifecycle.py tests/hermes_personal/workflows/test_worker.py -q`: 12 passed in 2.21s.
+- `uv run pytest tests/hermes_personal/runtime/test_startup_readiness_lifecycle.py tests/hermes_personal/runtime/test_gateway_server.py tests/hermes_personal/runtime/test_processes.py tests/hermes_personal/workflows/test_worker.py -q`: 30 passed in 3.21s.
+- `uv run ruff check tests/hermes_personal/runtime/test_startup_readiness_lifecycle.py tests/hermes_personal/workflows/test_worker.py`: All checks passed.
 - `git diff --check`: Clean.
 
-Commit: `edd11f5393`
-
-Distinction Note:
-- Registry plumbing is wired into gateway bootstrap, but no live MCP tools are loaded at startup in this task. An empty production registry correctly remains NOT_READY (503). Actual selective MCP registration is gated on Task 4.
+Commit: `3dedccddeb`
 
 Remaining Issues / Blockers:
-- Task 2 (PI Contract and Durable Identifier Mapping) is the next roadmap item, awaiting Planner review and assignment.
+- Task 1 test evidence complete. Ready for Planner acceptance and Task 2 assignment.
 - Live MVP remains OPEN.
 
 Deferred Items:
@@ -151,6 +145,65 @@ Deferred Items:
 - Handoff completed: owner set to PLANNER; progress marked HANDED_OFF.
 
 ## Last Planner Review
+Iteration: 107
+
+Decision:
+REWORK
+
+Assessment:
+- Accept Task 1 source changes edd11f5393 by static review: in-process registry
+  forwarding, shared HealthAPI compatibility route, canonical ProcessSpec
+  readiness endpoint, and get_hermes_home delegation are present and scoped.
+- Request only the original acceptance evidence still missing from tests.
+  test_gateway_main_bootstrap_passes_in_process_registry_and_resolves_canonical_home
+  imports registry but never asserts it reaches the factory/catalog; it checks
+  only successful return, app count and DB file presence. Removing registry
+  forwarding would not falsify those assertions.
+- Gateway/worker home tests cover explicit DB or explicit HERMES_HOME only.
+  Neither exercises unset HERMES_HOME delegation, so the previous
+  Path.home()/.hermes fallback could still pass those home assertions.
+- Worker main test invokes real dotenv/config loaders in its first case before
+  setting a temporary home; isolate them and assert the dotenv home argument.
+- Existing 503/fake-200 equivalence and ProcessSpec tests remain accepted.
+  No new hardening or source rewrite; Task 2 follows after this evidence gate.
+
+Evidence:
+- Initial SHA256 FA0F4BFD6C9A786F8E551D1B5EB0CED4064790152E8C377217A70A7E471B4567.
+- Current HEAD 5ae93e505e; Worker marker 104, implementation edd11f5393.
+- Fresh source/test reads agree with the prior bounded diff review.
+- Worker report and transcript record 29 tests passing and scoped lint/diff clean;
+  Planner did not run tests, Python, runtime, build or provider calls.
+- Prior run d4217a51fe374d74945ecf24689789d3 exited code 0 at
+  2026-08-28T15:36:02.6599885+00:00. PID 3180 and OpenCode 11080 now absent;
+  lock removed. Earlier active-after-handoff guard no longer prevents dispatch.
+- Tracked working tree clean at review; user untracked files preserved.
+
+Scope Adjustment:
+Task 1 test-only repair in two files. Accepted runtime code, Iteration 96 fixes
+and body-limit/rate-limit fixes remain untouched. External PI/VF source, live
+discovery and paid cap gates remain deferred to their assigned roadmap tasks.
+
+Reviewed Worker iteration: 104
+Reviewed code commit: edd11f539340a92d56b6d35cfe170748e1065674
+Review timestamp: 2026-08-28T15:37:12.652Z (heartbeat trigger)
+Next Step:
+WORKER 105 supplies bootstrap registry identity/readiness and unset-home/dotenv
+isolation evidence, then returns to PLANNER. Live MVP remains OPEN.
+
+## History
+
+### Iteration 105 Worker
+WORKER completed Task 1 test-only rework (commit `3dedccddeb` on `edd11f5393`): (1) proved configured `gateway_server.main` passes the exact in-process tool registry object to the factory and validated 503 (empty registry) and 200 (populated wire tools) through real TestClient lifecycle, (2) verified canonical `hermes_constants.get_hermes_home()` delegation when `HERMES_HOME` is unset using recording sentinel path, preserving explicit `HERMES_HOME` and `--db-path` precedence, (3) isolated worker config and dotenv loaders before `worker.main` execution and proved dotenv received canonical home, (4) verified with 12 focused lifecycle/worker tests passing in 2.21s, 30 runtime/worker suite tests passing in 3.21s, scoped ruff clean, and diff-check clean. Handed off to PLANNER.
+
+### Iteration 107 Planner
+2026-08-28T15:37:12.652Z: Reviewed Worker 104 / edd11f5393 after verifying
+old launcher and OpenCode exited. Decision REWORK for two original Task 1
+test-evidence gaps plus test-home isolation. Source changes accepted by static
+review; no implementation rewrite. Both owners WORKER, assignment Worker 105;
+only two focused test files authorized. Existing reports/user files preserved.
+No tests/runtime/providers by Planner.
+
+### Archived Planner Review 106 - Retained
 Iteration: 106
 
 Decision:
@@ -188,8 +241,6 @@ No HA, multi-worker, multi-tenant or distributed hardening.
 Reviewed Worker marker: 103 / 946ecf964a (unchanged; this is a user kickoff).
 Next action: WORKER 104 implements Task 1 with focused offline verification,
 then hands off to PLANNER. MVP remains OPEN, not PRODUCTION_HARDENED.
-
-## History
 
 ### Iteration 106 Planner - User Plan and Handoff
 2026-08-28: User authorized a phase plan and worker handoff after the gap audit.
