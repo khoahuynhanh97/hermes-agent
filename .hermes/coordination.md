@@ -84,60 +84,63 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 ## Current Next Action
 Owner: PLANNER
 
-Assignment: Worker 105 / Task 1 test-only rework completed (commit `3dedccddeb` on `edd11f5393`).
+Assignment: Worker 106 / Task 2 completed (commit `42230d62b3`).
 Plan: docs/superpowers/plans/2026-08-28-hermes-personal-live-integration.md
 
 Objective:
-Review Worker Iteration 105 test improvements:
-1. Gateway configured main with isolated offline registry asserting forwarded tool_registry is the exact isolated object, and testing both 503 (empty) and 200 (populated wire tools) through real TestClient lifecycle.
-2. Canonical get_hermes_home delegation when HERMES_HOME is unset using recording sentinel path, distinct from Path.home()/.hermes, along with explicit HERMES_HOME and --db-path precedence.
-3. Worker dotenv and config isolation before any worker.main invocation, asserting recorded dotenv hermes_home equals canonical resolver result while explicit --db-path takes precedence for DB connection.
+Review Worker Iteration 106 PI adapter contract alignment and durable identifier mapping:
+1. Outgoing parameter mapping: `pdp_url` -> `url`, `keywords` space-joined into `query`, no unsupported keys sent to PI server; `build_resource_pack` forwards `snapshot_id` (and optional `variant_id`); `lock_resource_pack` forwards `resource_pack_id` and `owner_user_id`.
+2. Fail-closed prerequisite validations: missing or non-persisted research snapshot halts build; missing pack or non-lockable status (`needs_review`, `incomplete`, `rejected`, `unknown`) halts lock; owner or pack_id mismatch raises non-retryable TerminalJobError.
+3. Durable identifier round-trip: verified `snapshot_id`, `resource_pack_id`, `lock_id`, `manifest_digest`, and `assets` persist across SQLite connection closure and restart without loss or corruption.
+4. Positive local fixture validation passing 9 tests across `test_pi_mcp_contract.py` and `test_product_video_outbox.py`.
 
 Required next action:
-1. Review Task 1 test evidence and accept Task 1.
-2. Assign Task 2 (PI Contract and Durable Identifier Mapping).
+1. Review Task 2 implementation and test evidence; accept Task 2.
+2. Determine next assignment (Task 3: Reconcile Operator Documentation).
 3. Do not execute live provider calls or paid operations autonomously.
 
 ## Last Worker Report
 
-Iteration: 105 (Task 1 Focused Test Improvements: Registry Plumbing, Canonical Home & Dotenv Isolation on edd11f5393)
+Iteration: 106 (Task 2: PI MCP Contract Alignment and Durable Identifier Mapping on 5ae93e505e)
 Phase: Phase 7 Continuation - Personal Happy Path and Bounded Hardening
 
 Implemented:
-- **1. Gateway Configured Main Isolated Registry Forwarding & Readiness Verification**:
-  - Test: `tests/hermes_personal/runtime/test_startup_readiness_lifecycle.py` (`test_gateway_main_configured_forwards_in_process_registry_and_validates_readiness`).
+- **1. PI Adapter Outgoing Parameter Mapping**:
+  - Code: `hermes_personal/product_video/handlers.py` (`MCPProductIntelligenceAdapter`).
   - Logic:
-    - Patched `tools.registry.registry` with isolated dictionary and spied `create_gateway_application`.
-    - Proved `tool_registry` argument passed to factory IS the exact isolated registry object.
-    - Verified with `TestClient` lifecycle that empty isolated registry returns 503 on both `/health/ready` and `/healthz`, while populated isolated registry (with valid wire tools) returns 200 on both endpoints.
-    - Verified fake mode passes `tool_registry=None`.
-- **2. Canonical Default Home Delegation when HERMES_HOME is Unset**:
-  - Tests: `test_gateway_main_resolves_canonical_get_hermes_home_when_env_unset` in `test_startup_readiness_lifecycle.py` and `test_worker_main_uses_canonical_hermes_home_and_respects_explicit_db_path` in `test_worker.py`.
+    - `research`: maps `pdp_url` to `url`, space-joins `keywords` to `query`, forwards `product_name`. Excludes unsupported parameter keys (`keywords`, `pdp_url`). Captures `snapshot_id`, `persistence_status`, `research_id`, `canonical_products`, `media_assets`, and raw results as top-level machine-readable fields alongside serialized `report`.
+    - `build_resource_pack`: validates presence and persisted state of `snapshot_id`, sends `{"snapshot_id": snapshot_id}` and optional `variant_id`. Preserves `resource_pack_id`, `canonical_product_id`, `pack_status`, `restrictions`, and `completeness`.
+    - `lock_resource_pack`: validates `resource_pack_id` and lockable status; dispatches `{"resource_pack_id": resource_pack_id, "owner_user_id": owner_user_id}` when lock tool is wired, or performs local locking fallback with real asset validation.
+- **2. Fail-Closed Prerequisite Checks & Structured Terminal Errors**:
+  - Code: `hermes_personal/product_video/handlers.py` (`MCPProductIntelligenceAdapter` and `ProductVideoJobHandlers`).
   - Logic:
-    - Patched `hermes_constants.get_hermes_home` with recording mock returning a temp sentinel path distinct from `Path.home() / .hermes`.
-    - With `HERMES_HOME` deleted/unset, asserted Gateway and Worker `main()` invoke `get_hermes_home()` and derive default DB from the sentinel path without touching real user home.
-    - Asserted explicit `HERMES_HOME` environment override and explicit `--db-path` precedence.
-- **3. Worker Dotenv and Config Isolation**:
-  - Test: `tests/hermes_personal/workflows/test_worker.py` (`test_worker_main_uses_canonical_hermes_home_and_respects_explicit_db_path`).
-  - Logic:
-    - Isolated `load_hermes_dotenv`, `load_config`, and `run_worker` before any `worker.main` execution.
-    - Asserted `load_hermes_dotenv` received `sentinel_home` equal to canonical `get_hermes_home()`, while explicit `--db-path` passed directly to `run_worker`.
-    - No network, live providers, or external imports.
+    - Missing or failed persistence snapshot halts `build_resource_pack` with non-retryable `PREREQUISITE_FAILED` before tool dispatch.
+    - Missing `resource_pack_id` or non-lockable status (`needs_review`, `incomplete`, `rejected`, `unknown`) halts `lock_resource_pack` with non-retryable `NON_LOCKABLE_STATUS` / `PREREQUISITE_FAILED`.
+    - Provider `not_found` returns structured `TerminalJobError(SNAPSHOT_NOT_FOUND)` / `TerminalJobError(PACK_NOT_FOUND)`.
+    - Provider `owner_user_id` or `resource_pack_id` mismatch raises `TerminalJobError(OWNER_MISMATCH)` / `TerminalJobError(PACK_ID_MISMATCH)`.
+- **3. Durable Identifier Round-Trip Across Restart**:
+  - Test: `tests/hermes_personal/product_video/test_pi_mcp_contract.py` (`test_product_video_job_handlers_roundtrip_identifiers_through_sqlite`).
+  - Logic: Exercises research -> pack build -> pack lock across real SQLite repository transactions, closes database connection, reopens from disk, and proves `snapshot_id`, `resource_pack_id`, `lock_id`, `owner_user_id`, `manifest_digest`, and `assets` are intact.
+- **4. Strict MCP Signature Fixtures**:
+  - Created `tests/hermes_personal/product_video/test_pi_mcp_contract.py` with `StrictPIMCPToolRegistry` asserting exact signatures and rejecting unexpected arguments.
+  - Updated `tests/hermes_personal/workflows/test_product_video_outbox.py` handlers to accept `query` / `keywords`.
 
 Files Changed:
-- `tests/hermes_personal/runtime/test_startup_readiness_lifecycle.py`
-- `tests/hermes_personal/workflows/test_worker.py`
+- `hermes_personal/product_video/handlers.py`
+- `tests/hermes_personal/product_video/test_pi_mcp_contract.py`
+- `tests/hermes_personal/workflows/test_product_video_outbox.py`
+- `docs/superpowers/plans/2026-08-28-hermes-personal-live-integration.md`
 
 Verification:
-- `uv run pytest tests/hermes_personal/runtime/test_startup_readiness_lifecycle.py tests/hermes_personal/workflows/test_worker.py -q`: 12 passed in 2.21s.
-- `uv run pytest tests/hermes_personal/runtime/test_startup_readiness_lifecycle.py tests/hermes_personal/runtime/test_gateway_server.py tests/hermes_personal/runtime/test_processes.py tests/hermes_personal/workflows/test_worker.py -q`: 30 passed in 3.21s.
-- `uv run ruff check tests/hermes_personal/runtime/test_startup_readiness_lifecycle.py tests/hermes_personal/workflows/test_worker.py`: All checks passed.
+- `uv run pytest tests/hermes_personal/product_video/test_pi_mcp_contract.py tests/hermes_personal/workflows/test_product_video_outbox.py::test_configured_mode_with_real_mcp_response_shapes_and_polling tests/hermes_personal/workflows/test_product_video_outbox.py::test_configured_mode_missing_resource_pack_tool_fails_closed_without_mock_assets -q`: 9 passed in 1.27s.
+- `uv run ruff check hermes_personal/product_video/handlers.py tests/hermes_personal/product_video/test_pi_mcp_contract.py tests/hermes_personal/workflows/test_product_video_outbox.py`: All checks passed.
 - `git diff --check`: Clean.
 
-Commit: `3dedccddeb`
+Commit: `42230d62b3`
 
-Remaining Issues / Blockers:
-- Task 1 test evidence complete. Ready for Planner acceptance and Task 2 assignment.
+Distinction / Blockers Note:
+- Task 2 adapter contract mapping and offline fixtures are fully verified.
+- The located external server's hard-coded example assets/fixed IDs remain an unresolved Task 4 provider defect, not real provenance evidence.
 - Live MVP remains OPEN.
 
 Deferred Items:
@@ -145,6 +148,68 @@ Deferred Items:
 - Handoff completed: owner set to PLANNER; progress marked HANDED_OFF.
 
 ## Last Planner Review
+Iteration: 108
+
+Decision:
+NEXT_PHASE
+
+Assessment:
+- Accept Task 1 at edd11f5393 plus test-only correction 3dedccddeb.
+- Tests now assert exact isolated registry identity forwarded by configured
+  main and exercise real-factory 503/200 readiness through both routes.
+  Unset-home recording resolvers detect regressions to legacy fallback;
+  explicit home/DB precedence and worker dotenv/config stubbing are covered.
+- These satisfy the scoped bootstrap/home evidence gate. They do not prove
+  live discovery, remote tool health, or real video production.
+- Minor test-hygiene residuals (fake app cleanup/signal restoration) do not
+  reopen another Task 1 implementation round. New Task 2 fixtures must close
+  resources and restore globals/signals.
+- Worker reports 12 focused tests plus an extra 30-test four-file rerun.
+  The two-file transcript independently records 12 passed in 2.20s and scoped
+  lint/diff clean. The wider rerun exceeded Review 107's specified verification file
+  list; do not repeat it. Planner did not run tests/runtime/providers.
+- Move to planned Task 2 offline PI contract/ID mapping rather than block all
+  progress on the separate unresolved VF source or external PI provenance.
+
+Evidence:
+- Initial SHA256: A5BD053600B5CDFABB22E9F3A6B419F6B0E2F571234F27C57BC793A2C192F478.
+- HEAD e509b11e36; Worker marker 105, test commit 3dedccddeba42de15e1f89be6c449bda62e7afa1.
+- Full test diff reviewed in preceding heartbeat; no subsequent source/test
+  changes relative to 3dedccddeb observed in current targeted git diff.
+- Run a3388fa2bb354ce6957157ab41181372 completed exit 0 at
+  2026-08-28T15:46:33.9026661+00:00. PID 21104 and OpenCode 4860 absent,
+  worker lock removed; no prior worker remains active at dispatch guard.
+- Fresh adapter/server reads confirm research/build/lock argument mismatch and
+  external lock placeholder records. Plan Task 2 defines offline repair scope.
+- User untracked .agents/reports/, a.txt, b.txt, c.txt preserved.
+
+Scope Adjustment:
+Task 1 complete for its offline boundary; assign Task 2 only. Source edits stay
+in canonical PI adapter/PI handler boundary, no external PI changes. Known VF
+source and external provenance defects remain later gated work, not fake success.
+No reopening of prior Iteration 96/security fixes or distributed hardening.
+
+Reviewed Worker iteration: 105
+Reviewed test commit: 3dedccddeba42de15e1f89be6c449bda62e7afa1
+Review timestamp: 2026-08-28T15:47:12.790Z (heartbeat trigger)
+Next Step:
+WORKER 106 implements Task 2 and returns evidence for review, then Task 3.
+Live MVP remains OPEN; paid operations still require separate approval/cap.
+
+## History
+
+### Iteration 106 Worker
+WORKER completed Task 2 (commit `42230d62b3`): (1) aligned `MCPProductIntelligenceAdapter` parameter mapping (`pdp_url` -> `url`, `keywords` space-joined -> `query`, no unsupported keys to PI server; `build_resource_pack` forwards `snapshot_id` and optional `variant_id`; `lock_resource_pack` forwards `resource_pack_id` and `owner_user_id` or uses local asset locking fallback), (2) added structured fail-closed checks for missing/non-persisted snapshots and non-lockable pack states (`needs_review`, `incomplete`, `rejected`, `unknown`), (3) verified durable identifier round-trip through real SQLite workflow persistence across connection restart, (4) created `tests/hermes_personal/product_video/test_pi_mcp_contract.py` with strict signature fixtures, (5) verified with 9 tests passing in 1.27s, scoped ruff clean, and diff-check clean. Handed off to PLANNER.
+
+### Iteration 108 Planner
+2026-08-28T15:47:12.790Z: Accepted Task 1 source edd11f5393 and Worker 105
+tests 3dedccddeb after old worker exit/PID/lock verification. NEXT_PHASE to
+Task 2 PI contract and durable identifier mapping; both owners WORKER,
+assignment Worker 106. Offline focused tests only. Source outside canonical
+repo remains read-only; live/provenance/VF gates remain open. Preserved reports,
+history and user changes. No tests/runtime/provider calls by Planner.
+
+### Archived Planner Review 107 - Retained
 Iteration: 107
 
 Decision:
@@ -189,8 +254,6 @@ Review timestamp: 2026-08-28T15:37:12.652Z (heartbeat trigger)
 Next Step:
 WORKER 105 supplies bootstrap registry identity/readiness and unset-home/dotenv
 isolation evidence, then returns to PLANNER. Live MVP remains OPEN.
-
-## History
 
 ### Iteration 105 Worker
 WORKER completed Task 1 test-only rework (commit `3dedccddeb` on `edd11f5393`): (1) proved configured `gateway_server.main` passes the exact in-process tool registry object to the factory and validated 503 (empty registry) and 200 (populated wire tools) through real TestClient lifecycle, (2) verified canonical `hermes_constants.get_hermes_home()` delegation when `HERMES_HOME` is unset using recording sentinel path, preserving explicit `HERMES_HOME` and `--db-path` precedence, (3) isolated worker config and dotenv loaders before `worker.main` execution and proved dotenv received canonical home, (4) verified with 12 focused lifecycle/worker tests passing in 2.21s, 30 runtime/worker suite tests passing in 3.21s, scoped ruff clean, and diff-check clean. Handed off to PLANNER.
