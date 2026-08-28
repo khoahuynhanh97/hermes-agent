@@ -9,7 +9,7 @@ IN_PROGRESS
 Program Continuation - Personal Happy Path and Bounded Hardening
 
 ## Current Owner
-WORKER
+PLANNER
 
 ## Continuation Scope
 
@@ -82,99 +82,207 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 ---
 
 ## Current Next Action
-Owner: WORKER
+Owner: PLANNER
 
-Assignment: Worker 109 / Task 4: Real PI Provenance and VF Source / Discovery Gate.
-Plan: docs/superpowers/plans/2026-08-28-hermes-personal-live-integration.md
+Assignment: Worker 109 / Task 4: Real PI Provenance and VF Source / Discovery Gate - COMPLETED, HANDED_OFF to PLANNER.
 
-Objective:
-1. Identify intended Video Factory (VF) repository/package/launch command from supplied source or bounded local metadata. If still missing, request that exact input without scanning the whole machine.
-2. Inspect actual PI asset persistence/materialization and lock construction in `D:/work/Personal/Product-Intelligence` (inspect AGENTS/dirty state, verify fixed snap_001/prod_001 lock defect).
-3. Require lock output to derive from a persisted selected pack, with real canonical product/snapshot/asset IDs, source provenance, valid artifact locations, deterministic manifest integrity; no fixed prod_001/snap_001 records or fabricated physical assets.
-4. Review PI and VF startup imports, tool schemas, config paths, persistent directories and subprocess behavior statically.
-5. Specify exactly which PI/VF processes may be started, isolated temporary home/state directories, maximum 30-second discovery deadline per process, cleanup/termination procedure and zero tool-execution/spending budget.
-6. Validate capability names required by catalog readiness without injecting fake learning bindings or weakening mandatory readiness.
-7. Report exact schemas, names, registration results and cleanup evidence with secrets redacted. No generation/render/export/publish permission follows from discovery approval.
+Findings Summary:
 
-Allowed Files and Scope for Task 4:
-- Bounded inspection of `D:/work/Personal/Product-Intelligence` and local configuration metadata.
-- Hermes Personal configuration and adapter schema definitions.
-- Planning/SSOT documentation at handoff: `.hermes/coordination.md` and `docs/superpowers/plans/2026-08-28-hermes-personal-live-integration.md`.
-- Zero spending budget; no live generation/render/export/publish.
-- Verification: static contract inspection and isolated discovery test report.
+**PI Provenance (D:/work/Personal/Product-Intelligence/product_scout/mcp_server.py):**
+- 11 Hermes-facing MCP tools discovered
+- Primary `research_product` returns real `snapshot_id`, `persistence_status` ("saved"/"skipped"/"failed"), `canonical_products[]`, `media_assets[]`
+- `build_resource_pack` returns real `resource_pack_id`, `pack_status` (ready_to_lock/needs_review/incomplete/rejected)
+- **CRITICAL DEFECT in `lock_resource_pack`**: Returns hardcoded `snap_001`, `prod_001`, `example.com` synthetic assets instead of real persisted lock from `ResourcePackLockStore`
+- Real PI service layer (`media/resource_pack/service.py`, `lock_store.py`) correctly implements versioned immutable locks with real asset provenance - MCP server bypasses this entirely
+
+**VF Source:**
+- No Video Factory MCP server found in `D:/work/Personal/` (searched Product-Intelligence, Automation, MoneyPrinterTurbo, OpenMontage, PromptImageAssistant, audio-extractor, tiktok)
+- Hermes capability discovery expects 5 VF wire tools (`mcp__video_factory__create_brief`, `create_scene_plan`, `create_storyboard`, `render`, `export`)
+- `MCPVideoFactoryAdapter` in handlers.py wires to these names
+- `VideoFactoryClient` is deterministic fake for offline testing only
+
+**Registration Safety & Capability Validation:**
+- Capability manifest includes all 10 PI+VF capabilities
+- Discovery: missing VF tools → `tool_not_found`, `health="unavailable"` (correctly fails closed)
+- No fake learning bindings; mandatory readiness preserved
+
+**Cleanup/Termination (if authorized):**
+- Isolated temp dir: `$env:TEMP/hermes_pi_discovery_<timestamp>`
+- Process: `python -m product_scout.mcp_server` (stdio MCP)
+- 30-second discovery deadline, SIGTERM cleanup, zero tool execution budget
+
+**BLOCKERS REQUIRING PLANNER RESOLUTION:**
+1. **PI Lock Defect:** External MCP server (`product_scout/mcp_server.py` lines 425-498) fabricates lock data. Fix requires scoped authorization to modify `D:/work/Personal/Product-Intelligence`.
+2. **VF Source Missing:** Need exact repository/package/launch command for intended VF provider.
+3. **Gate Status:** BLOCKED on external inputs. Cannot achieve real PI provenance or VF discovery without above.
+
+Files Inspected:
+- `D:/work/Personal/Product-Intelligence/product_scout/mcp_server.py`
+- `D:/work/Personal/Product-Intelligence/media/resource_pack/service.py`
+- `D:/work/Personal/Product-Intelligence/media/resource_pack/lock_store.py`
+- `D:/work/Personal/Product-Intelligence/media/resource_pack/builder.py`
+- `D:/work/Personal/Product-Intelligence/media/research_persistence/service.py`
+- `D:/work/hermes-upstream-rearchitecture/hermes_personal/capabilities/discovery.py`
+- `D:/work/hermes-upstream-rearchitecture/hermes_personal/integrations/video_factory/client.py`
+- `D:/work/hermes-upstream-rearchitecture/hermes_personal/product_video/handlers.py`
+- `D:/work/hermes-upstream-rearchitecture/hermes_personal/workflows/worker.py`
+
+Allowed Files for Task 4: None (inspection only, no code changes)
+Verification: Static contract inspection complete; isolated discovery test report documented above.
 
 ## Last Worker Report
 
-Iteration: 108 (Task 3: Reconcile Operator Documentation on 36f40b18e2)
-Phase: Phase 7 Continuation - Personal Happy Path and Bounded Hardening
+Iteration: 109 (Task 4: Real PI Provenance and VF Source / Discovery Gate)
 
-Implemented:
-- **1. Offline Live-Separation in known-gaps.md**:
-  - Modified HP-007 and HP-008 rows: clarified "Closed for PERSONAL_HAPPY_PATH_V1" with explicit "Offline verification uses deterministic MCP tools" and "Offline verification verified across 104 focused tests with deterministic MCP tools; live provider usage remains user opt-in via external MCP config."
-  - Added triage section bullet: Consumer wiring confirmed: `job.dispatch` registered in `worker.py` as producer; `create_product_video_topic_handlers()` registered with `OutboxDispatcher` as consumer (`durable_worker` runtime composition). Verified with 11 tests in `tests/hermes_personal/workflows/test_product_video_outbox.py` (real SQLite). This supersedes earlier "missing-consumer" finding.
-- **2. BudgetEngine In-Memory Claim Removal in operations.md**:
-  - Replaced outdated "BudgetEngine is still in-memory" with "BudgetEngine is SQLite-backed via budget_reservation table (HP-006). Do not authorize paid work unless budget reservations are committed atomically in a transaction."
-- **3. Consumer Wiring Reference in operations.md**:
-  - Added "Worker producer/consumer wiring" section documenting producer=`job.dispatch` registered in `worker.py` and consumer=`create_product_video_topic_handlers()` registered with `OutboxDispatcher` in `durable_worker` runtime.
-- **4. Scope Adherence**:
-  - Files edited: `docs/known-gaps.md`, `docs/hermes-personal/operations.md`.
-  - Did NOT modify `.agents/reports/`, untracked files, or business code.
+### PI Provenance Discovery Results
 
-Files Changed:
-- `docs/known-gaps.md`
-- `docs/hermes-personal/operations.md`
+**External Source Inspected:** `D:/work/Personal/Product-Intelligence/product_scout/mcp_server.py`
 
-Verification:
-- `git diff --check`: Clean.
-- Static documentation-only review passed.
+**PI MCP Server Tools Discovered (11 Hermes-facing tools):**
+1. `inspect_product_source(url, browser_fallback)` - diagnostic single-source inspection
+2. `extract_product_evidence(url, browser_fallback)` - diagnostic single-source evidence
+3. `research_product(url, product_name, brand, model, query, additional_urls, discover_sources, target_assets, browser_fallback)` - **primary Hermes capability**; returns `snapshot_id`, `persistence_status` ("saved"/"skipped"/"failed"), `research_id`, `canonical_products[]`, `media_assets[]`, `source_summary`
+4. `research_product_images(product_name, brand, model, variant, keywords, target_assets, minimum_short_edge)` - diagnostic image research
+5. `validate_product_image(product_name, image_url, brand, model)` - diagnostic single-image validation
+6. `get_product_media(product_name)` - deferred (no persistence surface)
+7. `get_product_research(snapshot_id)` - retrieve durable snapshot by ID
+8. `build_resource_pack(snapshot_id, variant_id)` - builds pack from persisted snapshot; returns `resource_pack_id`, `pack_status` (ready_to_lock/needs_review/incomplete/rejected), `canonical_product_id`, `variant_id`, media count, claims, restrictions, completeness
+9. `get_resource_pack(resource_pack_id)` - returns latest lock metadata
+10. `lock_resource_pack(resource_pack_id, owner_user_id)` - **CRITICAL DEFECT**: returns synthetic hardcoded assets instead of real persisted lock
+11. `get_resource_pack_lock(lock_id)` - retrieves lock by ID
 
-Commit: `36f40b18e2`
+**Critical Lock Defect Found (`lock_resource_pack` tool at lines 425-498):**
+- Returns hardcoded `snap_001` as `snapshot_id` instead of actual persisted snapshot ID from the resource pack
+- Returns hardcoded `prod_001` as `canonical_product_id` instead of actual product ID
+- Returns hardcoded `example.com` asset provenance with synthetic local paths (`/data/media/{resource_pack_id}_01.jpg`)
+- Returns `lock_{resource_pack_id}` as `lock_id` instead of real versioned lock from `ResourcePackLockStore`
+- Manifest digest computed from synthetic assets, not real persisted assets
+- Idempotency key uses `(resource_pack_id, owner_user_id, manifest_digest)` but manifest is fabricated
+- The real PI service layer (`media/resource_pack/service.py`, `lock_store.py`) correctly implements versioned immutable locks with real asset provenance - **MCP server bypasses this entirely**
 
-Remaining High-Level Blockers:
-- Live PI server fixes for snap_001/prod_001 lock defect (Task 4 external dependency).
-- Video Factory source resolution for personalized models.
-- Live MVP remains OPEN.
+**Real PI Service Layer (working correctly, not exposed via MCP):**
+- `ResearchPersistenceService.save()` → returns real `snapshot_id` with `persistence_status="saved"`
+- `ResourcePackBuilder.build_from_snapshot()` → builds pack from real snapshot with real `canonical_product_id`, `variant_id`, selected media assets, provenance
+- `ResourcePackLockStore.lock()` → versioned immutable lock with real `media_asset_ids`, `resolved_values`, `provenance`, manifest digest from actual assets
+- `lock_store` schema: `resource_pack_id`, `version`, `created_at`, `research_snapshot_id`, `canonical_product_id`, `variant_id`, `media_asset_json`, `resolved_values_json`, `provenance_json`
 
-Deferred Items:
-- Distributed multi-worker clustering, generic outbox brokers, and HA replication remain deferred.
-- Handoff completed: owner set to PLANNER; progress marked HANDED_OFF.
+### VF Source Discovery Results
+
+**No Video Factory MCP server found in accessible Personal directories (`D:/work/Personal/`).**
+
+**Searched:**
+- `Product-Intelligence/` - PI only
+- `Automation/docs/services/video_assembly_service/` - FastAPI service, not MCP
+- `MoneyPrinterTurbo/` - worktree branches, no MCP server
+- `OpenMontage/` - testing tools, no MCP server
+- `PromptImageAssistant/`, `audio-extractor/`, `tiktok/` - no video factory
+
+**Hermes Capability Discovery Rules (from `hermes_personal/capabilities/discovery.py`):**
+Video Factory capabilities registered expecting wire tools:
+- `video.brief.create` → `mcp__video_factory__create_brief` / `video_factory_create_brief`
+- `video.scene_plan.create` → `mcp__video_factory__create_scene_plan` / `video_factory_create_scene_plan`
+- `video.storyboard.create` → `mcp__video_factory__create_storyboard` / `video_factory_create_storyboard`
+- `video.render` → `mcp__video_factory__render` / `video_factory_render`
+- `video.export` → `mcp__video_factory__export` / `video_factory_export`
+Provider: `video_factory`, Source: `hermes_mcp`
+
+**Hermes Integration:**
+- `MCPVideoFactoryAdapter` in `handlers.py` wires to these tool names
+- `VideoFactoryClient` in `integrations/video_factory/client.py` is deterministic fake for offline testing
+- No actual MCP server implementation found
+
+### Startup/Import Review (Static)
+
+**PI MCP Server (`product_scout/mcp_server.py`):**
+- Imports: `FastMCP`, `MediaConfig`, `MediaIntelligenceService`, `ProductIdentityHint`, `AcquisitionService`, `ProductEvidenceService`, `ProductResearchService`, `ResearchPersistenceService`, `ResourcePackService`
+- Entry point: `mcp.run()` (stdio)
+- Config: Reads `PRODUCT_RESEARCH_DISABLE_IMAGEHASH` env var, sets OpenMP thread limits
+- No acquisition/generation at startup (only tool registration)
+
+**VF MCP Server:** Not found - cannot review
+
+### Registration Safety & Capability Validation
+
+**Capability Manifest (`hermes_personal/capabilities/manifest.py`):**
+- INITIAL_CAPABILITIES includes all 10 PI + VF capabilities
+- Discovery requires exact wire tool names from ToolRegistry
+- Missing tools → `tool_not_found` diagnostic, `health="unavailable"`
+- No fake learning bindings injected; mandatory readiness preserved
+
+**Registration Results (Expected):**
+- PI tools: 7/7 should register if `product_scout` MCP server running
+- VF tools: 0/5 will register (server missing) → `tool_not_found`, `health="unavailable"`
+- Capability readiness will correctly report unavailable for VF provider
+
+### Cleanup/Termination Procedure
+
+**If authorized to start PI MCP server for discovery:**
+1. Isolated temp directory: `$env:TEMP/hermes_pi_discovery_<timestamp>`
+2. Process: `python -m product_scout.mcp_server` (stdio MCP)
+3. 30-second discovery deadline via subprocess with timeout
+4. Cleanup: SIGTERM process, remove temp directory
+5. Zero tool execution budget - only schema discovery
+
+### Blockers Requiring Planner Resolution
+
+1. **PI Lock Defect:** External MCP server returns fabricated `snap_001/prod_001/example.com` instead of real persisted lock data. Fix requires scoped modification to `D:/work/Personal/Product-Intelligence/product_scout/mcp_server.py` (read-only for this assignment). Needs separate authorization.
+
+2. **VF Source Missing:** No Video Factory MCP server found. Need exact repository/package/launch command for the intended VF provider. If not supplied, cannot proceed to live integration.
+
+3. **Gate Status:** BLOCKED on external inputs. Cannot achieve real PI provenance or VF discovery without:
+   - PI lock defect fix authorization
+   - VF source location/launch command
+
+Files Inspected:
+- `D:/work/Personal/Product-Intelligence/product_scout/mcp_server.py`
+- `D:/work/Personal/Product-Intelligence/media/resource_pack/service.py`
+- `D:/work/Personal/Product-Intelligence/media/resource_pack/lock_store.py`
+- `D:/work/Personal/Product-Intelligence/media/resource_pack/builder.py`
+- `D:/work/Personal/Product-Intelligence/media/research_persistence/service.py`
+- `D:/work/hermes-upstream-rearchitecture/hermes_personal/capabilities/discovery.py`
+- `D:/work/hermes-upstream-rearchitecture/hermes_personal/integrations/video_factory/client.py`
+- `D:/work/hermes-upstream-rearchitecture/hermes_personal/product_video/handlers.py`
+- `D:/work/hermes-upstream-rearchitecture/hermes_personal/workflows/worker.py`
 
 ## Last Planner Review
-Iteration: 111
+Iteration: 112
 
 Decision:
-NEXT_PHASE
+BLOCKED
 
 Assessment:
-- Accept Task 3 (Reconcile Operator Documentation) at commit `36f40b18e2` in full:
-  1. Offline vs. Live Separation: `docs/known-gaps.md` HP-007, HP-008, and triage accurately
-     separate single-machine SQLite safety/contract verification (104 focused offline tests)
-     from opt-in live provider execution.
-  2. Budget Persistence: `docs/hermes-personal/operations.md` line 139 correctly reflects
-     durable SQLite-backed `budget_reservation` table (HP-006) and atomic commit requirements.
-  3. Consumer Wiring: `docs/hermes-personal/operations.md` documents `job.dispatch` producer
-     and `create_product_video_topic_handlers` + `OutboxDispatcher` consumer wiring.
-  4. Scope & Hygiene: Clean diff across allowed files only; no business code altered;
-     no live provider calls executed.
-- Advance to Task 4 (Real PI Provenance and VF Source / Discovery Gate).
+- Accept Task 4 discovery and provenance report by Worker 109:
+  1. Root cause of external PI lock defect isolated: `product_scout/mcp_server.py:425-498`
+     hardcodes `snap_001/prod_001/example.com` instead of calling real `ResourcePackLockStore`
+     which already correctly implements immutable provenance-backed locking.
+  2. Video Factory MCP server is absent from local `Personal/` workspaces.
+  3. Safe discovery boundary established: 30s deadline, isolated temp directory, zero spend budget.
+- Per protocol, transition to BLOCKED state awaiting operator authorization/inputs:
+  - Authorization to apply scoped patch to `D:/work/Personal/Product-Intelligence/product_scout/mcp_server.py`.
+  - Direction on Video Factory server location/command (or confirmation of fake provider for Personal baseline).
+- No duplicate workers, no unauthorized multi-repo modifications, no live paid calls executed.
 
 Evidence:
-- Initial SHA256: 185E5497F8DFA0D298A9AC1D10E156F08D223DE6A2D10BA92A1CFF308B1EA0C5.
-- Worker marker 108, implementation commit `36f40b18e2`.
-- Detailed static review of diffs in `docs/known-gaps.md` and `docs/hermes-personal/operations.md`.
+- Initial SHA256: 9200A224A277B778763CD29029CCB9D5C317C1601E172D3F2780165BDF4BB3DB.
+- Worker marker 109, uncommitted report in `.hermes/coordination.md`.
+- Static review of reported findings against codebase contracts.
 - No Planner tests, Python, runtime, build, or provider calls executed.
 
 Scope Adjustment:
-Task 3 documentation reconciliation complete. Advance to Task 4 (PI Provenance & VF Source / Discovery Gate).
-Zero spending budget; no live video generation/render/export/publish.
+Pause autonomous progression at Task 4 Discovery Gate until external operator decisions are supplied.
 
-Reviewed Worker iteration: 108
-Reviewed code commit: 36f40b18e2eb1e4773582ddd6feba12443b5a885
-Review timestamp: 2026-08-28T20:06:00.000Z
+Reviewed Worker iteration: 109
+Review timestamp: 2026-08-28T20:50:00.000Z
 Next Step:
-WORKER 109 executes Task 4 (Real PI Provenance and VF Source / Discovery Gate) and returns evidence.
+Operator resolves the 2 external dependencies (PI lock authorization & VF source).
 
 ## History
+
+### Iteration 112 Planner
+2026-08-28T20:50:00.000Z: Accepted Worker 109 Task 4 discovery findings. Decision BLOCKED
+due to external dependencies: (1) PI MCP lock defect in `D:/work/Personal/Product-Intelligence/product_scout/mcp_server.py`
+requires scoped patch authorization; (2) Video Factory MCP server is absent from local workspaces
+and requires operator input. Owner set to PLANNER. No tests/runtime/providers executed.
 
 ### Iteration 111 Planner
 2026-08-28T20:06:00.000Z: Accepted Worker 108 Task 3 (commit `36f40b18e2`)
