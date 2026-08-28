@@ -132,13 +132,13 @@ Expected: assigned tests pass; lint/diff clean; zero actual MCP/provider calls. 
 | build_resource_pack | snapshot_id, optional variant_id only when selected | resource_pack_id, canonical_product_id, pack_status, restrictions/completeness |
 | lock_resource_pack | resource_pack_id, explicit owner_user_id | lock_id, resource_pack_id, version, manifest_digest and actual asset provenance |
 
-- [ ] Read exported server signatures as text/AST only; build strict signature fixtures locally without importing the external server. Fixtures must reject the old unexpected keywords and missing required IDs.
-- [ ] Write failing research -> build -> lock contract tests, including non-persisted research/missing snapshot_id, unknown resource pack, identity/owner mismatch and non-lockable pack state. Assert no downstream call when prerequisites fail.
-- [ ] Implement mapping in the existing PI adapter. Keep machine-readable snapshot_id outside serialized report text, and retain workflow/job provenance expected downstream. Use existing structured error handling; do not synthesize IDs or successful packs for missing provider data.
-- [ ] Carry exact resource-pack/lock identifiers through artifacts and restart serialization. Preserve the existing safe behavior for deliberately different custom adapters only through explicit contract selection, never speculative retry with alternative argument shapes after a possibly stateful tool call.
-- [ ] Confirm how actual assets/manifest are retrieved before accepting a locked result. Do not bless the located server's hard-coded example assets as additional evidence. If the genuine server contract cannot yet supply required artifacts, fail closed and report Task 4 dependency.
-- [ ] Run the new contract test file only, plus named existing outbox tests directly affected; specify node IDs in SSOT before widening verification. Scoped lint/diff-check and task-owned commit.
-- [ ] Hand off evidence and unresolved server-side provenance. Passing strict fixtures means adapter contract acceptance only, not live integration success.
+- [x] Read exported server signatures as text/AST only; build strict signature fixtures locally without importing the external server. Fixtures must reject the old unexpected keywords and missing required IDs.
+- [x] Write failing research -> build -> lock contract tests, including non-persisted research/missing snapshot_id, unknown resource pack, identity/owner mismatch and non-lockable pack state. Assert no downstream call when prerequisites fail.
+- [x] Implement mapping in the existing PI adapter. Keep machine-readable snapshot_id outside serialized report text, and retain workflow/job provenance expected downstream. Use existing structured error handling; do not synthesize IDs or successful packs for missing provider data.
+- [x] Carry exact resource-pack/lock identifiers through artifacts and restart serialization. Preserve the existing safe behavior for deliberately different custom adapters only through explicit contract selection, never speculative retry with alternative argument shapes after a possibly stateful tool call.
+- [x] Confirm how actual assets/manifest are retrieved before accepting a locked result. Do not bless the located server's hard-coded example assets as additional evidence. If the genuine server contract cannot yet supply required artifacts, fail closed and report Task 4 dependency.
+- [x] Run the new contract test file only, plus named existing outbox tests directly affected; specify node IDs in SSOT before widening verification. Scoped lint/diff-check and task-owned commit.
+- [x] Hand off evidence and unresolved server-side provenance. Passing strict fixtures means adapter contract acceptance only, not live integration success.
 
 ## Task 3: Reconcile Operator Documentation
 
