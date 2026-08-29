@@ -84,72 +84,85 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 ## Current Next Action
 Owner: PLANNER
 
-Assignment: Planner Review of Worker 115 / Task 4 PI self-contained persistence commit `112548d`.
+Assignment: Awaiting Planner Review of Worker 116 (Video Factory minimal port & Hermes compatibility layer).
 
 Target Goal:
-Verify that commit `112548d` makes the PI pack-to-lock implementation completely self-contained from committed source, including `resource_pack_locks` schema and `SQLiteResearchRepository` lock methods, while preserving all unrelated dirty files and passing all focused offline tests.
-
-Operator Authorization Boundary:
-- AUTHORIZED: Scoped modification and commit of `D:/work/Personal/Product-Intelligence/media/research_persistence/repository.py`, the previously authorized `product_scout/mcp_server.py`, and directly related focused tests in `D:/work/Personal/Product-Intelligence/tests/`.
-- FORBIDDEN: Do not modify or commit unrelated dirty changes in `media/config.py`, `media/research_persistence/service.py`, `media/resource_pack/service.py`, `tools/workspace_exporter/exporter.py`, or `uv.lock`. Preserve all existing functionality and contracts.
-- VIDEO FACTORY STATUS: Video Factory implementation exists on `main` branch (`src/hermes/mcp/video_factory/server.py`, `video_factory_service.py`, etc. with 17 canonical tools). The gap is porting/reusing existing implementation and adding a contract compatibility layer to match Hermes wire tools (`create_brief`, `create_scene_plan`, `create_storyboard`, `render`, `export`), NOT building from scratch. Task 4 executes the PI scoped fix; VF integration/shim reuse follows.
-
-Scope & Allowed Files:
-- `D:/work/Personal/Product-Intelligence/media/research_persistence/repository.py`
-- `D:/work/Personal/Product-Intelligence/product_scout/mcp_server.py`
-- Directly related focused test files in `D:/work/Personal/Product-Intelligence/tests/`.
+Verify that Worker 116 selectively ported the minimal Video Factory runtime from `main` to `src/hermes`, deduplicated and cleaned domain/service/repository code, exposed the 17 canonical tools plus 6 Hermes wire compatibility tools (`create_brief`, `create_scene_plan`, `create_storyboard`, `render`, `export`, `get_job_status`), ensured fail-closed behavior for unconfigured providers, and verified tests across domain, application, and MCP server layers.
 
 ## Last Worker Report
 
-Iteration: 115 (Task 4: PI Lock Persistence Self-Containment)
-Commit: `112548d` (in `D:/work/Personal/Product-Intelligence`)
+Iteration: 116 (Video Factory Source Provenance, Minimal Port & Hermes Wire Compatibility Contract)
+Commit: `ba4c8ee9e2` (in `D:/work/hermes-upstream-rearchitecture`)
 
-### Implementation Summary
+### Implementation & Provenance Summary
 
-1. **Committed Durable Lock Persistence Support in Repository:**
-   - In `media/research_persistence/repository.py`: Committed `resource_pack_locks` DDL table schema (`lock_id PRIMARY KEY`, `resource_pack_id`, `snapshot_id`, `canonical_product_id`, `owner_user_id`, `version`, `manifest_digest`, `created_at`, `lock_json`, and `UNIQUE(resource_pack_id, owner_user_id, manifest_digest)`).
-   - Committed methods: `save_lock(lock_payload)`, `get_lock(lock_id)`, and `get_lock_by_identity(resource_pack_id, owner_user_id, manifest_digest)` supporting atomic SQLite transactions, exact JSON retrieval, and idempotent replayed saves.
+1. **Selective Port & Clean Deduplication from `main`:**
+   - **`src/hermes/domain/video_factory.py`**: Clean port of domain models (`AssetReference`, `ResourceIdentity`, `ResourcePack`, `RawIdea`, `Claim`, `CreativeBrief`, `Scene`, `ScenePlan`, `FramePrompt`, `StoryboardFrame`, `Storyboard`, `VideoPrompt`, `GeneratedScene`, `TimelineClip`, `Timeline`, `HookVariant`, `ABVariantSet`, `VideoFactoryProject`) and domain lifecycle statuses. Deduplicated all duplicate functions from the original source.
+   - **`src/hermes/ports/video_factory_repository.py`**: Ported abstract repository interface `VideoFactoryRepository` (`create`, `get_owned`, `list_owned`, `save`).
+   - **`src/hermes/adapters/sqlite/video_factory_repository.py`**: Self-contained SQLite repository `SQLiteVideoFactoryRepository` with embedded DDL schema for `video_factory_projects`, atomic transactions, and JSON aggregate serialization/deserialization.
+   - **`src/hermes/application/video_factory_service.py`**: Ported application service `VideoFactoryService` orchestrating F1-F5 project lifecycle, approvals, validation, and safe offline path resolution without external dependencies.
+   - **`src/hermes/mcp/video_factory/server.py`**: FastMCP server registering the 17 canonical public MCP tools plus 6 Hermes wire compatibility tools (`create_brief`, `create_scene_plan`, `create_storyboard`, `render`, `export`, `get_job_status`).
+   - **`src/mcp_servers/video_factory/server.py`**: Shim module providing backward-compatible re-exports for `mcp_servers.video_factory.server`.
+   - **`.agents/reports/product-intelligence-to-video-factory-runtime-path.md`**: Design provenance documenting Product Intelligence to Video Factory runtime binding.
 
-2. **Automated Unit Tests Added:**
-   - In `tests/test_research_persistence.py`: Added `test_sqlite_research_repository_lock_persistence_and_idempotency` verifying DDL table creation, `save_lock`, exact round-trip retrieval by `lock_id`, exact query by identity tuple, and idempotency / non-existent lookups.
+2. **Hermes Wire Compatibility Layer & Fail-Closed Safety:**
+   - Exposed `create_brief`, `create_scene_plan`, `create_storyboard`, `render`, `export`, and `get_job_status` compatible with `MCPVideoFactoryAdapter`.
+   - `render` and `export` enforce fail-closed behavior when live providers are not configured (`PROVIDER_NOT_CONFIGURED`), returning structured error payloads and never fabricating synthetic success without real artifacts.
+   - Server startup performs zero live network calls, provider queries, acquisition, or spending.
 
-3. **Dirty File Preservation Statement:**
-   - Only `media/research_persistence/repository.py` and `tests/test_research_persistence.py` were staged and committed.
-   - All unrelated dirty files (`media/config.py`, `media/research_persistence/service.py`, `media/resource_pack/service.py`, `tools/workspace_exporter/exporter.py`, and `uv.lock`) remain intact and uncommitted.
-
-4. **Focused Verification Results:**
-   - `uv run pytest tests/test_research_persistence.py tests/test_resource_pack.py tests/test_mcp_surface.py -v` -> **53 passed** in 1.15s.
+3. **Focused Verification Results:**
+   - `uv run pytest tests/hermes/domain/test_video_factory.py tests/hermes/application/test_video_factory_service.py tests/mcp_servers/test_video_factory_server.py tests/hermes_personal/product_video/test_video_factory_client.py -v` -> **11 passed** in 1.51s.
+   - `uv run pytest tests/hermes tests/mcp_servers tests/hermes_personal -q` -> **672 passed, 40 warnings** in 62.62s.
    - `git diff --check` clean.
-   - Zero live provider calls, zero spend.
+   - Zero live provider calls, zero network spend.
 
-Files Changed in Commit `112548d`:
-- `D:/work/Personal/Product-Intelligence/media/research_persistence/repository.py`
-- `D:/work/Personal/Product-Intelligence/tests/test_research_persistence.py`
+Files Committed in `ba4c8ee9e2`:
+- `src/hermes/__init__.py`
+- `src/hermes/domain/__init__.py`, `src/hermes/domain/video_factory.py`
+- `src/hermes/ports/__init__.py`, `src/hermes/ports/video_factory_repository.py`
+- `src/hermes/adapters/__init__.py`, `src/hermes/adapters/sqlite/__init__.py`, `src/hermes/adapters/sqlite/video_factory_repository.py`
+- `src/hermes/application/__init__.py`, `src/hermes/application/video_factory_service.py`
+- `src/hermes/mcp/__init__.py`, `src/hermes/mcp/video_factory/__init__.py`, `src/hermes/mcp/video_factory/server.py`
+- `src/mcp_servers/__init__.py`, `src/mcp_servers/video_factory/__init__.py`, `src/mcp_servers/video_factory/server.py`
+- `tests/conftest.py`
+- `tests/hermes/__init__.py`, `tests/hermes/domain/__init__.py`, `tests/hermes/domain/test_video_factory.py`
+- `tests/hermes/application/__init__.py`, `tests/hermes/application/test_video_factory_service.py`
+- `tests/mcp_servers/__init__.py`, `tests/mcp_servers/test_video_factory_server.py`
+- `.agents/reports/product-intelligence-to-video-factory-runtime-path.md`
+
 
 ## Last Planner Review
-Iteration: 117
+Iteration: 118
 
 Decision:
-CONTINUE
+NEXT_PHASE
 
 Assessment:
-- Operator explicitly authorized modification and commit of `media/research_persistence/repository.py` plus focused tests while requiring every other dirty file to remain untouched.
-- This removes the Review 116 authorization blocker and permits one bounded Worker rework turn to make commit `5b62d9d` self-contained.
-- Task 4 remains open until Planner verifies the new commit includes the required repository schema/APIs without absorbing unrelated worktree changes. Video Factory reconciliation remains the next phase after PI acceptance.
+- Accept Worker 115 commit `112548d` with predecessor commits `3784d2d` and `5b62d9d` for the bounded PI provenance and durable pack-to-lock gate.
+- Commit `112548d` contains exactly the missing `resource_pack_locks` schema, `save_lock`, `get_lock`, and `get_lock_by_identity` production support plus its focused repository test. The previously uncommitted dependency is now part of committed source.
+- External status shows only the pre-existing unrelated dirty files and `uv.lock`; the authorized repository/test changes are committed. Worker reported 53 focused offline tests passing. Planner did not rerun tests.
+- Video Factory source is present on `main` and `codex/hermes-orchestrator-unification`; the current branch lacks the MCP server and its domain/service/repository dependencies. Proceed to bounded provenance and compatibility reconciliation, not a new implementation from scratch.
 
 Evidence:
-- SSOT SHA256 before authorization update `2A24A28889522BAF3E5619DE9626FA8AECFAC968616D45FFC4C97F8549B5FA5C`; owner PLANNER; Worker marker 114.
-- Stale worker lock is absent and prior PIDs `12320` / `21052` are absent, so no prior worker can mutate the external repo.
-- Operator authorization text: allow editing and committing `media/research_persistence/repository.py` with focused tests; preserve every other dirty file.
+- SSOT SHA256 at review start `384B491240A67D29B7F548959068A05AC364318C97DF3A6109D46407817CDD28`; owner PLANNER; Worker marker 115.
+- Worker lock is absent; old Worker 115 launcher has exited before this review/dispatch.
+- Static `git show 112548d` confirms only `media/research_persistence/repository.py` and `tests/test_research_persistence.py`, 109 inserted lines, with required DDL/APIs and round-trip/idempotency checks.
+- Static source tracing shows the minimal VF MCP dependency set on `main`: domain model, repository port, SQLite repository, application service, MCP package/server. Job projector and API route are not direct MCP imports.
 - Planner ran no tests, Python, runtime, build or provider calls.
 
 Scope Adjustment:
-Expand Task 4 only to the newly authorized repository persistence file and directly related tests. Keep unrelated external dirty files, Video Factory work, paid operations, broad verification, and production hardening out of this Worker turn.
+Close PI Task 4 remediation and move to VF source/contract reconciliation. Keep selective discovery, live providers, render/export execution, spending, API routes, job projection, and production hardening out of this turn.
 
 Next Step:
-Worker 115 commits a self-contained PI persistence patch and returns focused offline evidence for Planner review.
+Worker 116 selectively ports the minimal VF MCP runtime and implements/tests the fail-closed Hermes compatibility surface, then hands off for Planner review.
 
 ## History
+
+### Iteration 116 Worker
+2026-08-29T08:42:00.000Z: Completed Worker 116 (commit `ba4c8ee9e2`). Ported minimal Video Factory runtime (`domain/video_factory.py`, `ports/video_factory_repository.py`, `adapters/sqlite/video_factory_repository.py`, `application/video_factory_service.py`, `mcp/video_factory/server.py`, `mcp_servers/video_factory/server.py`), removing source duplication. Implemented the 17 canonical MCP tools and 6 Hermes wire compatibility tools (`create_brief`, `create_scene_plan`, `create_storyboard`, `render`, `export`, `get_job_status`) with fail-closed safety for unconfigured providers. Verified with 11 focused tests passing in 1.51s, 672 full personal tests passing in 62.62s, and clean git diff check. Handoff to PLANNER.
+
+### Iteration 118 Planner
+2026-08-29T08:30:28.356Z: Accepted Worker 115 commit `112548d` by static review; PI lock persistence is now self-contained and unrelated external dirty files remain preserved. Decision NEXT_PHASE. Assigned Worker 116 bounded Video Factory source provenance, minimal MCP runtime port, exact Hermes compatibility names, durable/fail-closed offline behavior, and focused tests. No live discovery/providers/spend or Planner tests/runtime.
 
 ### Iteration 115 Worker
 2026-08-29T08:24:00.000Z: Completed Task 4 PI self-contained persistence in `Product-Intelligence` (commit `112548d`). Committed `resource_pack_locks` schema and `SQLiteResearchRepository` lock methods (`save_lock`, `get_lock`, `get_lock_by_identity`). Added repository unit tests in `tests/test_research_persistence.py`. Verified with 53 passed tests across `test_research_persistence.py`, `test_resource_pack.py`, and `test_mcp_surface.py`. Preserved all unrelated dirty files (`media/config.py`, `media/research_persistence/service.py`, `media/resource_pack/service.py`, `tools/workspace_exporter/exporter.py`, `uv.lock`). Handoff to PLANNER.
