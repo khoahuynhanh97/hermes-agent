@@ -85,8 +85,8 @@ def test_create_brief_fails_closed_on_missing_fields(tmp_path, monkeypatch):
     assert "missing required fields" in out["error"]
 
 
-def test_create_brief_persists_canonical_input(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_VIDEO_FACTORY_DB_PATH", str(tmp_path / "wire_brief_ok.sqlite"))
+def test_create_brief_fails_closed_on_missing_project(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_VIDEO_FACTORY_DB_PATH", str(tmp_path / "wire_brief_no_proj.sqlite"))
     valid_cfg = {
         "objective": "Convert hot commuters",
         "target_audience": "Subway riders",
@@ -96,7 +96,49 @@ def test_create_brief_persists_canonical_input(tmp_path, monkeypatch):
         "cta": "Get 20% off today",
         "content_blocks": ["Hot commute dilemma", "Jisulife silent turbo", "Discount CTA"],
     }
-    out = server.create_brief("fan_fa55", valid_cfg)
+    out = server.create_brief("fan_fa55", valid_cfg, owner_user_id="user_1", project_id="nonexistent_proj")
+    assert out["ok"] is False
+    assert out["code"] == "PROJECT_NOT_FOUND"
+
+
+def test_create_brief_fails_closed_on_unlocked_resource_pack(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_VIDEO_FACTORY_DB_PATH", str(tmp_path / "wire_brief_unlocked.sqlite"))
+    server.video_project_create("user_1", "proj_unlocked")
+    valid_cfg = {
+        "objective": "Convert hot commuters",
+        "target_audience": "Subway riders",
+        "core_message": "Silent portable cooling",
+        "tone": "Direct",
+        "pace": "Brisk",
+        "cta": "Get 20% off today",
+        "content_blocks": ["Hot commute dilemma", "Jisulife silent turbo", "Discount CTA"],
+    }
+    out = server.create_brief("fan_fa55", valid_cfg, owner_user_id="user_1", project_id="proj_unlocked")
+    assert out["ok"] is False
+    assert out["code"] == "RESOURCE_PACK_LOCKED_REQUIRED"
+
+
+def test_create_brief_persists_canonical_input_with_locked_pack(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_VIDEO_FACTORY_DB_PATH", str(tmp_path / "wire_brief_ok.sqlite"))
+    server.video_project_create("user_1", "proj_01")
+    server.resource_pack_save("user_1", "proj_01", {
+        "id": "rp_01",
+        "product_references": [{"asset_id": "a1", "uri": "asset://fan.png"}],
+        "primary_product_asset_id": "a1",
+        "product_identity_description": "Desk fan",
+    })
+    server.resource_pack_lock("user_1", "proj_01", {"description": "Black desk fan"})
+
+    valid_cfg = {
+        "objective": "Convert hot commuters",
+        "target_audience": "Subway riders",
+        "core_message": "Silent portable cooling",
+        "tone": "Direct",
+        "pace": "Brisk",
+        "cta": "Get 20% off today",
+        "content_blocks": ["Hot commute dilemma", "Jisulife silent turbo", "Discount CTA"],
+    }
+    out = server.create_brief("fan_fa55", valid_cfg, owner_user_id="user_1", project_id="proj_01")
     assert out["ok"] is True
     assert out["brief_id"] == "brief_fan_fa55"
     assert out["objective"] == "Convert hot commuters"
@@ -111,22 +153,102 @@ def test_create_scene_plan_fails_closed_without_scenes(tmp_path, monkeypatch):
     assert "missing required caller-supplied scenes" in out["error"]
 
 
-def test_create_scene_plan_persists_canonical_scenes(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_VIDEO_FACTORY_DB_PATH", str(tmp_path / "wire_scene_ok.sqlite"))
+def test_create_scene_plan_fails_closed_without_brief_approval(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_VIDEO_FACTORY_DB_PATH", str(tmp_path / "wire_scene_unapproved.sqlite"))
+    server.video_project_create("owner_1", "proj_01")
+    server.resource_pack_save("owner_1", "proj_01", {
+        "id": "rp_01",
+        "product_references": [{"asset_id": "a1", "uri": "asset://fan.png"}],
+        "primary_product_asset_id": "a1",
+        "product_identity_description": "Desk fan",
+    })
+    server.resource_pack_lock("owner_1", "proj_01", {"description": "Black desk fan"})
     valid_cfg = {
         "objective": "Sales", "target_audience": "Riders", "core_message": "Cool",
         "tone": "Direct", "pace": "Fast", "cta": "Buy", "content_blocks": ["Intro"],
     }
-    brief_out = server.create_brief("fan_fa55", valid_cfg)
+    server.create_brief("fan_fa55", valid_cfg, owner_user_id="owner_1", project_id="proj_01")
+    # Do NOT approve brief
+    scenes = [{"scene_id": "s1", "order": 1, "title": "Hook", "objective": "Hook", "content": "Heat", "main_action": "Sweat", "duration_seconds": 3}]
+    scene_out = server.create_scene_plan({"project_id": "proj_01", "scenes": scenes}, owner_user_id="owner_1", project_id="proj_01")
+    assert scene_out["ok"] is False
+    assert scene_out["code"] == "BRIEF_APPROVAL_REQUIRED"
+
+
+def test_create_scene_plan_persists_canonical_scenes(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_VIDEO_FACTORY_DB_PATH", str(tmp_path / "wire_scene_ok.sqlite"))
+    server.video_project_create("owner_1", "proj_01")
+    server.resource_pack_save("owner_1", "proj_01", {
+        "id": "rp_01",
+        "product_references": [{"asset_id": "a1", "uri": "asset://fan.png"}],
+        "primary_product_asset_id": "a1",
+        "product_identity_description": "Desk fan",
+    })
+    server.resource_pack_lock("owner_1", "proj_01", {"description": "Black desk fan"})
+    valid_cfg = {
+        "objective": "Sales", "target_audience": "Riders", "core_message": "Cool",
+        "tone": "Direct", "pace": "Fast", "cta": "Buy", "content_blocks": ["Intro"],
+    }
+    brief_out = server.create_brief("fan_fa55", valid_cfg, owner_user_id="owner_1", project_id="proj_01")
+    server.creative_brief_approve("owner_1", "proj_01")
     scenes = [
         {"scene_id": "s1", "order": 1, "title": "Hook", "objective": "Hook", "content": "Heat", "main_action": "Sweat", "duration_seconds": 3},
         {"scene_id": "s2", "order": 2, "title": "Demo", "objective": "Demo", "content": "Fan", "main_action": "Cool", "duration_seconds": 5},
     ]
     brief_out["scenes"] = scenes
-    scene_out = server.create_scene_plan(brief_out)
+    scene_out = server.create_scene_plan(brief_out, owner_user_id="owner_1", project_id="proj_01")
     assert scene_out["ok"] is True
     assert len(scene_out["scenes"]) == 2
     assert scene_out["total_duration_seconds"] == 8
+
+
+def test_create_storyboard_fails_closed_without_scene_plan_approval(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_VIDEO_FACTORY_DB_PATH", str(tmp_path / "wire_sb_unapproved.sqlite"))
+    server.video_project_create("owner_1", "proj_01")
+    server.resource_pack_save("owner_1", "proj_01", {
+        "id": "rp_01",
+        "product_references": [{"asset_id": "a1", "uri": "asset://fan.png"}],
+        "primary_product_asset_id": "a1",
+        "product_identity_description": "Desk fan",
+    })
+    server.resource_pack_lock("owner_1", "proj_01", {"description": "Black desk fan"})
+    valid_cfg = {
+        "objective": "Sales", "target_audience": "Riders", "core_message": "Cool",
+        "tone": "Direct", "pace": "Fast", "cta": "Buy", "content_blocks": ["Intro"],
+    }
+    server.create_brief("fan_fa55", valid_cfg, owner_user_id="owner_1", project_id="proj_01")
+    server.creative_brief_approve("owner_1", "proj_01")
+    scenes = [{"scene_id": "s1", "order": 1, "title": "Hook", "objective": "Hook", "content": "Heat", "main_action": "Sweat", "duration_seconds": 3}]
+    server.create_scene_plan({"project_id": "proj_01", "scenes": scenes}, owner_user_id="owner_1", project_id="proj_01")
+    # Do NOT approve scene plan
+    sb_out = server.create_storyboard({"project_id": "proj_01"}, owner_user_id="owner_1", project_id="proj_01")
+    assert sb_out["ok"] is False
+    assert sb_out["code"] == "SCENE_PLAN_APPROVAL_REQUIRED"
+
+
+def test_create_storyboard_generates_from_approved_scene_plan(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_VIDEO_FACTORY_DB_PATH", str(tmp_path / "wire_sb_ok.sqlite"))
+    server.video_project_create("owner_1", "proj_01")
+    server.resource_pack_save("owner_1", "proj_01", {
+        "id": "rp_01",
+        "product_references": [{"asset_id": "a1", "uri": "asset://fan.png"}],
+        "primary_product_asset_id": "a1",
+        "product_identity_description": "Desk fan",
+    })
+    server.resource_pack_lock("owner_1", "proj_01", {"description": "Black desk fan"})
+    valid_cfg = {
+        "objective": "Sales", "target_audience": "Riders", "core_message": "Cool",
+        "tone": "Direct", "pace": "Fast", "cta": "Buy", "content_blocks": ["Intro"],
+    }
+    server.create_brief("fan_fa55", valid_cfg, owner_user_id="owner_1", project_id="proj_01")
+    server.creative_brief_approve("owner_1", "proj_01")
+    scenes = [{"scene_id": "s1", "order": 1, "title": "Hook", "objective": "Hook", "content": "Heat", "main_action": "Sweat", "duration_seconds": 3}]
+    server.create_scene_plan({"project_id": "proj_01", "scenes": scenes}, owner_user_id="owner_1", project_id="proj_01")
+    server.scene_plan_approve("owner_1", "proj_01")
+
+    sb_out = server.create_storyboard({"project_id": "proj_01"}, owner_user_id="owner_1", project_id="proj_01")
+    assert sb_out["ok"] is True
+    assert len(sb_out["frames"]) == 1
 
 
 def test_render_and_export_fail_closed_truthfully():

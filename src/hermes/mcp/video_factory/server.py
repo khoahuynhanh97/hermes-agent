@@ -257,9 +257,11 @@ def _timeline_clip(value: dict[str, Any]) -> TimelineClip:
     return TimelineClip(**data)
 
 
-def _timeline(value: dict[str, Any]) -> Timeline:
+def _timeline(value: dict[str, Any]) -> Timeline | None:
+    if not value or not value.get("clips"):
+        return None
     data = dict(value)
-    data["clips"] = tuple(_timeline_clip(item) for item in data.get("clips", []))
+    data["clips"] = tuple(_timeline_clip(item) for item in data["clips"])
     data["status"] = TimelineStatus(data.get("status", "draft"))
     return Timeline(**data)
 
@@ -423,15 +425,15 @@ def create_brief(
     """Hermes wire compatibility adapter for create_creative_brief.
 
     Validates and persists caller-supplied creative brief inputs into durable
-    VideoFactoryService state. Does not fabricate default marketing copy.
+    VideoFactoryService state. Requires an existing project with a locked Resource Pack.
+    Does not fabricate default marketing copy or synthetic resource pack provenance.
     """
     cfg = dict(brief_config or {})
     proj_id = project_id.strip() or f"proj_{product_id or 'default'}"
     srv = _service()
 
-    # Validate required canonical fields
     required = ("objective", "target_audience", "core_message", "tone", "pace", "cta", "content_blocks")
-    missing = [k for k in required if not cfg.get(k)]
+    missing = [k for k in required if not str(cfg.get(k, "")).strip()]
     if missing:
         return {
             "ok": False,
@@ -441,24 +443,25 @@ def create_brief(
         }
 
     try:
+        project = srv.get_project(owner_user_id, proj_id)
+    except ValueError:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": f"PROJECT_NOT_FOUND: Project '{proj_id}' does not exist for owner '{owner_user_id}'",
+            "code": "PROJECT_NOT_FOUND",
+        }
+
+    if not project.resource_pack or not project.resource_pack.locked_at:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": f"RESOURCE_PACK_LOCKED_REQUIRED: Project '{proj_id}' must have a locked Resource Pack before creating a creative brief",
+            "code": "RESOURCE_PACK_LOCKED_REQUIRED",
+        }
+
+    try:
         brief = _brief(cfg)
-        try:
-            project = srv.get_project(owner_user_id, proj_id)
-        except Exception:
-            project = srv.create_project(owner_user_id, proj_id)
-
-        if not project.resource_pack or not project.resource_pack.locked_at:
-            ref = AssetReference(asset_id=f"asset_{product_id or 'prod'}", uri=f"asset://products/{product_id or 'item'}.png")
-            pack = ResourcePack(
-                id=f"rp_{proj_id}",
-                owner_user_id=owner_user_id,
-                product_references=(ref,),
-                primary_product_asset_id=ref.asset_id,
-                product_identity_description=brief.core_message,
-            )
-            srv.save_resource_pack(owner_user_id, proj_id, pack)
-            srv.lock_resource_pack(owner_user_id, proj_id, ResourceIdentity(description=brief.core_message))
-
         saved_project = srv.save_creative_brief(owner_user_id, proj_id, brief)
         brief_id = cfg.get("brief_id") or f"brief_{product_id or proj_id}"
         return {
@@ -477,6 +480,13 @@ def create_brief(
             "content_blocks": list(brief.content_blocks),
             "project": _primitive(asdict(saved_project)),
         }
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": str(exc),
+            "code": "INVALID_INPUT",
+        }
     except Exception as exc:
         return {
             "ok": False,
@@ -494,7 +504,8 @@ def create_scene_plan(
 ) -> dict[str, Any]:
     """Hermes wire compatibility adapter for create_scene_plan.
 
-    Persists caller-supplied scenes. Does not invent synthetic 3-scene plans.
+    Persists caller-supplied scenes for a project with an approved Creative Brief.
+    Does not auto-approve brief/scene plan or invent synthetic scene plans.
     """
     b_data = dict(brief_result or {})
     proj_id = project_id.strip() or b_data.get("project_id", "") or f"proj_{b_data.get('product_id', 'default')}"
@@ -510,16 +521,34 @@ def create_scene_plan(
         }
 
     try:
-        scene_plan = _scene_plan({"scenes": scenes_data})
-        try:
-            proj = srv.get_project(owner_user_id, proj_id)
-            if proj.brief_approval != "approved":
-                srv.approve_creative_brief(owner_user_id, proj_id)
-        except Exception:
-            pass
+        project = srv.get_project(owner_user_id, proj_id)
+    except ValueError:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": f"PROJECT_NOT_FOUND: Project '{proj_id}' does not exist for owner '{owner_user_id}'",
+            "code": "PROJECT_NOT_FOUND",
+        }
 
+    if not project.creative_brief:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": f"CREATIVE_BRIEF_REQUIRED: Project '{proj_id}' must have a creative brief before creating a scene plan",
+            "code": "CREATIVE_BRIEF_REQUIRED",
+        }
+
+    if project.brief_approval != "approved":
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": f"BRIEF_APPROVAL_REQUIRED: Creative brief for project '{proj_id}' must be explicitly approved before creating scene plan",
+            "code": "BRIEF_APPROVAL_REQUIRED",
+        }
+
+    try:
+        scene_plan = _scene_plan({"scenes": scenes_data})
         saved_project = srv.save_scene_plan(owner_user_id, proj_id, scene_plan)
-        srv.approve_scene_plan(owner_user_id, proj_id)
         sp_id = f"scene_{proj_id}"
         return {
             "ok": True,
@@ -529,6 +558,13 @@ def create_scene_plan(
             "steps": [_primitive(asdict(s)) for s in scene_plan.scenes],
             "total_duration_seconds": scene_plan.total_duration_seconds,
             "project": _primitive(asdict(saved_project)),
+        }
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": str(exc),
+            "code": "INVALID_INPUT",
         }
     except Exception as exc:
         return {
@@ -547,12 +583,38 @@ def create_storyboard(
 ) -> dict[str, Any]:
     """Hermes wire compatibility adapter for create_storyboard.
 
-    Persists caller-supplied frames or derives frames from the approved
-    persisted scene plan. Does not fabricate unpersisted frames.
+    Persists caller-supplied frames or generates frames from an explicitly approved
+    Scene Plan. Does not auto-approve scene plans or fabricate unpersisted frames.
     """
     sp_data = dict(scene_plan_result or {})
     proj_id = project_id.strip() or sp_data.get("project_id", "") or "proj_default"
     srv = _service()
+
+    try:
+        project = srv.get_project(owner_user_id, proj_id)
+    except ValueError:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": f"PROJECT_NOT_FOUND: Project '{proj_id}' does not exist for owner '{owner_user_id}'",
+            "code": "PROJECT_NOT_FOUND",
+        }
+
+    if not project.scene_plan:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": f"SCENE_PLAN_REQUIRED: Project '{proj_id}' must have a scene plan before creating a storyboard",
+            "code": "SCENE_PLAN_REQUIRED",
+        }
+
+    if project.scene_plan_approval != "approved":
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": f"SCENE_PLAN_APPROVAL_REQUIRED: Scene plan for project '{proj_id}' must be explicitly approved before creating storyboard",
+            "code": "SCENE_PLAN_APPROVAL_REQUIRED",
+        }
 
     try:
         frames_data = sp_data.get("frames") or kwargs.get("frames")
@@ -560,16 +622,6 @@ def create_storyboard(
             sb = _storyboard({"storyboard_id": f"sb_{proj_id}", "project_id": proj_id, "frames": frames_data})
             saved_project = srv.save_storyboard(owner_user_id, proj_id, sb)
         else:
-            proj = srv.get_project(owner_user_id, proj_id)
-            if not proj.scene_plan:
-                return {
-                    "ok": False,
-                    "status": "failed",
-                    "error": "SCENE_PLAN_REQUIRED: No scene plan available to create storyboard",
-                    "code": "INVALID_INPUT",
-                }
-            if proj.scene_plan_approval != "approved":
-                srv.approve_scene_plan(owner_user_id, proj_id)
             storyboard_generate(owner_user_id, proj_id)
             saved_project = srv.get_project(owner_user_id, proj_id)
 
@@ -582,6 +634,13 @@ def create_storyboard(
             "frames": [_primitive(asdict(f)) for f in sb_frames],
             "scenes": [_primitive(asdict(f)) for f in sb_frames],
             "project": _primitive(asdict(saved_project)),
+        }
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": str(exc),
+            "code": "INVALID_INPUT",
         }
     except Exception as exc:
         return {
