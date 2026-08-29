@@ -92,7 +92,7 @@ Implement the operator-authorized scoped fix to connect `lock_resource_pack` in 
 Operator Authorization Boundary:
 - AUTHORIZED: Scoped modification to `D:/work/Personal/Product-Intelligence/product_scout/mcp_server.py` and focused tests in `D:/work/Personal/Product-Intelligence/tests/` to wire `lock_resource_pack` to `ResourcePackLockStore`.
 - FORBIDDEN: Do not modify any other files outside this scope; preserve all existing functionality and contracts.
-- VIDEO FACTORY STATUS: Live VF MCP server is absent from local environment; offline baseline happy path continues using deterministic fake provider (`VideoFactoryClient`).
+- VIDEO FACTORY STATUS: Video Factory implementation exists on `main` branch (`src/hermes/mcp/video_factory/server.py`, `video_factory_service.py`, etc. with 17 canonical tools). The gap is porting/reusing existing implementation and adding a contract compatibility layer to match Hermes wire tools (`create_brief`, `create_scene_plan`, `create_storyboard`, `render`, `export`), NOT building from scratch. Task 4 executes the PI scoped fix; VF integration/shim reuse follows.
 
 Scope & Allowed Files:
 - `D:/work/Personal/Product-Intelligence/product_scout/mcp_server.py`
@@ -254,7 +254,7 @@ Operator resolves the 2 external dependencies (PI lock authorization & VF source
 ## History
 
 ### Iteration 113 Planner
-2026-08-29T05:43:00.000Z: Operator granted scoped authorization to modify `D:/work/Personal/Product-Intelligence/product_scout/mcp_server.py` and focused tests to connect `lock_resource_pack` to `ResourcePackLockStore`. Video Factory recorded as absent, falling back to deterministic `VideoFactoryClient`. Assigned Task 4 Scoped Fix to Worker 113 with Current Owner set to WORKER.
+2026-08-29T05:43:00.000Z: Operator granted scoped authorization to modify `D:/work/Personal/Product-Intelligence/product_scout/mcp_server.py` and focused tests to connect `lock_resource_pack` to `ResourcePackLockStore`. Operator clarified Video Factory architecture gap: implementation already exists on `main` branch (`src/hermes/mcp/video_factory/`), so gap is port/reuse with a contract compatibility shim rather than building from scratch. Assigned Task 4 Scoped Fix to Worker 113 with Current Owner set to WORKER.
 
 ### Iteration 112 Planner
 2026-08-28T20:50:00.000Z: Accepted Worker 109 Task 4 discovery findings. Decision BLOCKED
