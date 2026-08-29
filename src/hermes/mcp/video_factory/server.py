@@ -420,7 +420,6 @@ def create_brief(
     brief_config: dict[str, Any] | None = None,
     owner_user_id: str = "default_user",
     project_id: str = "",
-    **kwargs: Any,
 ) -> dict[str, Any]:
     """Hermes wire compatibility adapter for create_creative_brief.
 
@@ -500,7 +499,7 @@ def create_scene_plan(
     brief_result: dict[str, Any] | None = None,
     owner_user_id: str = "default_user",
     project_id: str = "",
-    **kwargs: Any,
+    scenes: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Hermes wire compatibility adapter for create_scene_plan.
 
@@ -511,7 +510,7 @@ def create_scene_plan(
     proj_id = project_id.strip() or b_data.get("project_id", "") or f"proj_{b_data.get('product_id', 'default')}"
     srv = _service()
 
-    scenes_data = b_data.get("scenes") or b_data.get("steps") or kwargs.get("scenes")
+    scenes_data = scenes or b_data.get("scenes") or b_data.get("steps")
     if not scenes_data or not isinstance(scenes_data, (list, tuple)):
         return {
             "ok": False,
@@ -579,7 +578,7 @@ def create_storyboard(
     scene_plan_result: dict[str, Any] | None = None,
     owner_user_id: str = "default_user",
     project_id: str = "",
-    **kwargs: Any,
+    frames: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Hermes wire compatibility adapter for create_storyboard.
 
@@ -617,7 +616,7 @@ def create_storyboard(
         }
 
     try:
-        frames_data = sp_data.get("frames") or kwargs.get("frames")
+        frames_data = frames or sp_data.get("frames")
         if frames_data and isinstance(frames_data, (list, tuple)):
             sb = _storyboard({"storyboard_id": f"sb_{proj_id}", "project_id": proj_id, "frames": frames_data})
             saved_project = srv.save_storyboard(owner_user_id, proj_id, sb)
@@ -657,7 +656,6 @@ def render(
     idempotency_key: str | None = None,
     owner_user_id: str = "default_user",
     project_id: str = "",
-    **kwargs: Any,
 ) -> dict[str, Any]:
     """Hermes wire compatibility adapter for video rendering (truthful fail-closed)."""
     return {
@@ -674,7 +672,6 @@ def export(
     idempotency_key: str | None = None,
     owner_user_id: str = "default_user",
     project_id: str = "",
-    **kwargs: Any,
 ) -> dict[str, Any]:
     """Hermes wire compatibility adapter for video export (truthful fail-closed)."""
     return {
@@ -685,7 +682,7 @@ def export(
     }
 
 
-def get_job_status(job_id: str, **kwargs: Any) -> dict[str, Any]:
+def get_job_status(job_id: str) -> dict[str, Any]:
     """Hermes wire compatibility adapter for polling asynchronous video job status."""
     if not job_id or not str(job_id).strip():
         return {

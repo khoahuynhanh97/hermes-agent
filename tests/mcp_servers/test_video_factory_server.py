@@ -272,3 +272,30 @@ def test_get_job_status_fails_closed_for_unknown_jobs():
     out_empty = server.get_job_status("")
     assert out_empty["ok"] is False
     assert out_empty["code"] == "MISSING_JOB_ID"
+
+
+@pytest.mark.asyncio
+async def test_wire_compatibility_tool_schemas_and_parameters():
+    tools = await server.mcp.list_tools()
+    by_name = {t.name: t.model_dump(by_alias=True) for t in tools}
+
+    # Verify create_scene_plan schema exposes scenes and no required kwargs
+    sp_schema = by_name["create_scene_plan"].get("inputSchema", {})
+    assert "scenes" in sp_schema.get("properties", {})
+    assert "kwargs" not in sp_schema.get("required", [])
+
+    # Verify create_storyboard schema exposes frames and no required kwargs
+    sb_schema = by_name["create_storyboard"].get("inputSchema", {})
+    assert "frames" in sb_schema.get("properties", {})
+    assert "kwargs" not in sb_schema.get("required", [])
+
+    # Verify create_brief schema exposes product_id and brief_config
+    br_schema = by_name["create_brief"].get("inputSchema", {})
+    assert "product_id" in br_schema.get("properties", {})
+    assert "brief_config" in br_schema.get("properties", {})
+    assert "kwargs" not in br_schema.get("required", [])
+
+    # Verify get_job_status requires only job_id
+    job_schema = by_name["get_job_status"].get("inputSchema", {})
+    assert "job_id" in job_schema.get("required", [])
+    assert "kwargs" not in job_schema.get("required", [])
