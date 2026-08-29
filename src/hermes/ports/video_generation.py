@@ -1,4 +1,4 @@
-"""Port for specialized video generation capabilities."""
+"""Video generation port and provider-agnostic result contract."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -16,10 +16,6 @@ class VideoGenerationRequest:
     prompt: str
     duration_seconds: int
     reference_image_paths: tuple[str, ...] = ()
-    reference_video_path: str | None = None
-    width: int = 1280
-    height: int = 720
-    fps: int = 24
     aspect_ratio: str = "9:16"
     provider_options: dict[str, Any] = field(default_factory=dict)
 
@@ -29,7 +25,7 @@ class VideoGenerationResult:
     """Normalized result from video generation."""
 
     request_id: str
-    status: Literal["submitted", "running", "completed", "failed"]
+    status: Literal["submitted", "running", "completed", "failed"] = "failed"
     provider_operation_id: str | None = None
     video_path: str | None = None
     error_code: str = ""

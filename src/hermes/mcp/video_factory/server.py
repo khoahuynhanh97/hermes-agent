@@ -746,15 +746,18 @@ def render(
 
     # 3. Resolve reference image and prompt from storyboard frames / params
     first_frame = project.storyboard.frames[0]
-    prompt_text = params.get("prompt") or first_frame.prompt.prompt if first_frame.prompt else ""
+    prompt_text = params.get("prompt") or (
+        getattr(first_frame.prompt, "positive_prompt", "") or getattr(first_frame.prompt, "prompt", "")
+        if first_frame.prompt else ""
+    )
     if not prompt_text and project.creative_brief:
         prompt_text = project.creative_brief.core_message
 
     ref_images: list[str] = []
     if params.get("reference_image_paths"):
         ref_images.extend(params["reference_image_paths"])
-    elif first_frame.prompt and first_frame.prompt.reference_image_assets:
-        for ref in first_frame.prompt.reference_image_assets:
+    elif first_frame.prompt and getattr(first_frame.prompt, "reference_image_assets", None):
+        for ref in getattr(first_frame.prompt, "reference_image_assets", ()):
             if hasattr(ref, "uri") and ref.uri:
                 ref_images.append(str(ref.uri))
             elif isinstance(ref, dict) and ref.get("uri"):
