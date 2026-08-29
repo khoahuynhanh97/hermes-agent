@@ -84,70 +84,95 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 ## Current Next Action
 Owner: PLANNER
 
-Assignment: Awaiting Planner Review of Worker 118 (Real locked pack provenance and explicit HITL approval gates).
+Assignment: Awaiting Planner Review of Worker 119 (Bounded PI/VF startup-safety review and selective non-paid discovery gate).
 
 Target Goal:
-Verify that Worker 118 removed all synthetic Resource Pack creation/locking from `create_brief`, enforced explicit HITL approval requirements on `create_scene_plan` (requires approved Creative Brief) and `create_storyboard` (requires approved Scene Plan) without auto-approval, removed broad exception suppression, maintained fail-closed render/export/job status behavior, cleaned untracked files, and verified tests with clean offline evidence.
+Review the static startup-safety analysis and selective discovery evidence for `product_intelligence` (11 tools discovered) and `hermes_video_factory` (23 tools discovered: 17 canonical + 6 wire compatibility). Confirm tool schemas align with upstream wire contracts, zero paid/provider/business tool invocations occurred, isolated temporary environments were utilized and cleaned, and determine the next bounded step for end-to-end integration without fabricating readiness.
 
 ## Last Worker Report
 
-Iteration: 118 (Real Locked Pack Provenance & Explicit HITL Approval Gates)
-Commit: `549d14845e` (in `D:/work/hermes-upstream-rearchitecture`)
+Iteration: 119 (Bounded PI/VF Startup-Safety Review & Selective Non-Paid Discovery Gate)
+Commit: `549d14845e` (codebase unchanged; discovery evidence produced in temporary isolation)
 
-### Implementation Summary
+### 1. Static Startup-Safety Review
 
-1. **Real Locked Pack Provenance (`create_brief`):**
-   - Eliminated synthetic `AssetReference`, `ResourcePack`, `ResourceIdentity`, and `asset://products/...` construction.
-   - `create_brief` requires an existing project with an already locked Resource Pack; fails closed with structured `PROJECT_NOT_FOUND` or `RESOURCE_PACK_LOCKED_REQUIRED` error if missing.
+- **`product_intelligence` (`D:/work/Personal/Product-Intelligence/product_scout/mcp_server.py`):**
+  - **Launch Command:** `uv run --directory D:/work/Personal/Product-Intelligence python product_scout/mcp_server.py`
+  - **Import-Time Side Effects:** Sets single-threaded env limits (`OMP_NUM_THREADS="1"`), disables imagehash (`PRODUCT_RESEARCH_DISABLE_IMAGEHASH="true"`), prints diagnostic banner to stderr, registers 11 FastMCP tools. All backend services (`media.evidence`, `media.research`, `media.research_persistence`, etc.) are lazily imported inside tool functions. No database connections, disk mutations, or network calls occur at startup.
+  - **Environment Requirements:** `PRODUCT_RESEARCH_DATA_DIR` for isolated SQLite snapshot/lock storage.
+  - **Safety Gate:** Safe for isolated list-tools / schema introspection.
 
-2. **Explicit HITL Approval Enforcement & No Auto-Approval:**
-   - `create_scene_plan`: Requires existing project with an approved Creative Brief (`project.brief_approval == "approved"`). Fails closed with `BRIEF_APPROVAL_REQUIRED` if unapproved; does not automatically approve the brief or scene plan.
-   - `create_storyboard`: Requires existing project with an approved Scene Plan (`project.scene_plan_approval == "approved"`). Fails closed with `SCENE_PLAN_APPROVAL_REQUIRED` if unapproved; does not automatically approve the scene plan.
+- **`hermes_video_factory` (`src/hermes/mcp/video_factory/server.py`):**
+  - **Launch Command:** `uv run python src/hermes/mcp/video_factory/server.py` (with `PYTHONPATH=src;`)
+  - **Import-Time Side Effects:** Resolves default paths via `get_hermes_home()`, registers 17 canonical tools and 6 Hermes wire compatibility tools. Database access and workspace directories are initialized lazily upon tool invocation. No network or provider connections occur at startup.
+  - **Environment Requirements:** `HERMES_HOME` or `HERMES_VIDEO_FACTORY_DB_PATH` / `HERMES_VIDEO_FACTORY_WORKSPACE`.
+  - **Safety Gate:** Safe for isolated list-tools / schema introspection.
 
-3. **Structured Errors & Exception Handling:**
-   - Replaced broad exception swallowing with specific handling and structured error objects (`PROJECT_NOT_FOUND`, `RESOURCE_PACK_LOCKED_REQUIRED`, `BRIEF_APPROVAL_REQUIRED`, `SCENE_PLAN_APPROVAL_REQUIRED`, `INVALID_INPUT`, `PERSISTENCE_ERROR`).
+### 2. Selective Non-Paid Discovery Evidence
 
-4. **Working Tree Reconciliation:**
-   - Untracked `tests/mcp_servers/test_video_factory_contract.py` removed.
-   - All tests consolidated cleanly into `tests/mcp_servers/test_video_factory_server.py`.
-   - Preserved every unrelated file.
+Discovery executed in strictly isolated temporary environments with zero API keys / provider tokens and 10s process timeouts. Zero business, provider, render, export, or publish tools were invoked.
 
-5. **Focused Offline Verification Results:**
-   - `uv run pytest tests/hermes/domain/test_video_factory.py tests/hermes/application/test_video_factory_service.py tests/mcp_servers/test_video_factory_server.py tests/hermes_personal/product_video/test_video_factory_client.py -v` -> **21 passed** in 1.92s.
-   - `uv run ruff check src/hermes tests/hermes tests/mcp_servers` -> clean (All checks passed).
-   - `git diff --check` -> clean.
-   - Zero live provider calls, zero network spend.
+- **`product_intelligence` (11 Tools Discovered):**
+  1. `inspect_product_source` (params: `url`, `browser_fallback`)
+  2. `extract_product_evidence` (params: `url`, `browser_fallback`)
+  3. `research_product` (params: `url`, `product_name`, `brand`, `model`, `query`, `additional_urls`, `discover_sources`, `target_assets`, `browser_fallback`)
+  4. `research_product_images` (params: `product_name`, `brand`, `model`, `variant`, `keywords`, `target_assets`, `minimum_short_edge`)
+  5. `validate_product_image` (params: `product_name`, `image_url`, `brand`, `model`)
+  6. `get_product_media` (params: `product_name`)
+  7. `get_product_research` (params: `snapshot_id`) -> *Matches PI wire contract*
+  8. `build_resource_pack` (params: `snapshot_id`, `variant_id`) -> *Matches PI wire contract*
+  9. `get_resource_pack` (params: `resource_pack_id`) -> *Matches PI wire contract*
+  10. `lock_resource_pack` (params: `resource_pack_id`, `owner_user_id`) -> *Matches PI wire contract*
+  11. `get_resource_pack_lock` (params: `lock_id`) -> *Matches PI wire contract*
 
-Files Changed in Commit `549d14845e`:
-- `src/hermes/mcp/video_factory/server.py`
-- `tests/mcp_servers/test_video_factory_server.py`
+- **`hermes_video_factory` (23 Tools Discovered):**
+  - *17 Canonical Tools:* `video_project_create`, `video_project_get`, `resource_pack_save`, `resource_pack_get`, `resource_pack_lock`, `resource_pack_unlock`, `raw_idea_save`, `creative_brief_save`, `creative_brief_get`, `creative_brief_approve`, `scene_plan_save`, `scene_plan_get`, `scene_plan_approve`, `storyboard_generate`, `timeline_get`, `export_submit`, `video_factory_runtime_info`
+  - *6 Hermes Wire Compatibility Tools:*
+    1. `create_brief` (params: `product_id`, `brief_config`, `owner_user_id`, `project_id`)
+    2. `create_scene_plan` (params: `brief_result`, `owner_user_id`, `project_id`, `scenes`)
+    3. `create_storyboard` (params: `scene_plan_result`, `owner_user_id`, `project_id`, `frames`)
+    4. `render` (params: `storyboard_result`, `render_params`, `idempotency_key`, `owner_user_id`, `project_id`)
+    5. `export` (params: `render_result`, `export_params`, `idempotency_key`, `owner_user_id`, `project_id`)
+    6. `get_job_status` (params: `job_id`)
+
+### 3. Verification & Isolation Evidence
+- `uv run pytest tests/hermes tests/mcp_servers tests/hermes_personal/product_video/test_video_factory_client.py -q` -> **21 passed** in 2.00s.
+- `uv run ruff check src/hermes tests/hermes tests/mcp_servers` -> clean.
+- `git diff --check` -> clean.
+- All temporary discovery directories and processes reaped. Zero live network calls, zero provider spend.
 
 ## Last Planner Review
-Iteration: 120
+Iteration: 121
 
 Decision:
-REWORK
+NEXT_PHASE
 
 Assessment:
-- Accept Worker 117's removal of mock render/export success, job-id substring inference, default marketing copy, and synthetic fixed scene lists, plus the bounded source cleanup direction.
-- Reject final acceptance because `create_brief` still fabricates an `AssetReference`, locked `ResourcePack`, and `ResourceIdentity` with an `asset://products/...` URI whenever no real locked pack exists. This breaks PI provenance and can falsely satisfy the VF precondition.
-- `create_storyboard` still automatically approves an unapproved scene plan. The committed Worker 117 version also automatically approved the brief and scene plan in compatibility paths; current post-report edits remove part of that behavior but remain uncommitted and still retain storyboard auto-approval.
-- Relevant source/tests changed after commit and handoff, and the supposedly deleted contract test is untracked again. Therefore commit `91b5ccfccf`, the report, and current working tree are not a stable review unit.
+- Accept Worker 118 commit `549d14845e` for the bounded Video Factory compatibility rework.
+- `create_brief` now requires an existing project with a real locked Resource Pack and no longer creates synthetic assets, packs, identities, or provenance.
+- `create_scene_plan` and `create_storyboard` require explicit persisted approvals and no longer auto-approve HITL gates. Missing projects, prerequisites, and approvals fail closed with structured codes.
+- Render, export, and unknown job status remain fail-closed while durable provider/job integration is absent. The relevant tree is stable and clean after the launcher exited.
 
 Evidence:
-- SSOT SHA256 at review start `8E0F6876D0138D37CA3B65789290F78F3F8759C7A9D09B56331E7C14EAF27163`; owner PLANNER; Worker marker 117; worker lock absent before review.
-- Static review covered Worker 117 commit `91b5ccfccf`, current source, and current focused test diffs. The synthetic pack construction is at `create_brief`; automatic scene-plan approval remains at `create_storyboard`.
-- `git status --short` showed relevant post-report changes in `src/hermes/mcp/video_factory/server.py`, `tests/mcp_servers/test_video_factory_server.py`, and untracked `tests/mcp_servers/test_video_factory_contract.py`.
-- Worker reported 16 focused tests passing, scoped Ruff and diff-check. Planner did not rerun them.
+- SSOT SHA256 at review start `4F6B9FE799BCF2D0AA84C49177A8D704DEC3445858AF2482990721566B61E531`; owner PLANNER; Worker marker 118.
+- Static review covered commit `549d14845e`, its two-file diff, current compatibility source, focused behavior tests, and exact searches for synthetic asset URIs, auto-approval, and structured gate errors.
+- Worker reported 21 focused offline tests passing in 1.92s, scoped Ruff and clean diff-check. Planner did not rerun them.
+- Launcher PID `8960` and worker lock were absent before this review write and dispatch; `git status --short` was empty.
 - Planner ran no tests, Python, runtime, build or provider calls.
 
 Scope Adjustment:
-Keep the accepted bounded VF runtime and fail-closed render/job behavior. Require one narrow rework turn for real locked-pack provenance, explicit HITL approval gates, structured lookup errors, and a stable committed relevant tree. Do not start selective discovery or live/provider work yet.
+Offline PI provenance and bounded VF contract implementation are accepted. Advance only to static startup-safety review and, if safe, selective non-paid discovery. Live generation/render/export/publish remains unauthorized and MVP_DONE remains open.
 
 Next Step:
-Worker 118 completes the five-point Current Next Action, commits the bounded VF changes, and returns focused offline evidence with relevant status reconciled.
+Worker 119 executes the five-point controlled discovery gate and hands off evidence or an exact fail-closed blocker.
 
 ## History
+
+### Iteration 119 Worker
+2026-08-29T10:01:00.000Z: Completed Worker 119 (startup-safety review & selective discovery gate). Completed static startup-safety review for `product_scout/mcp_server.py` and `src/hermes/mcp/video_factory/server.py`. Executed safe selective non-paid discovery in isolated temporary environments: discovered 11 tools from `product_intelligence` and 23 tools from `hermes_video_factory` (17 canonical + 6 Hermes wire compatibility tools). Verified parameter schemas against wire contracts with zero business/provider/paid invocations. Verified 21 tests passing in 2.00s. Handoff to PLANNER.
+
+### Iteration 121 Planner
+2026-08-29T09:55:29.701Z: Accepted Worker 118 commit `549d14845e` by static review after the prior launcher and lock exited and the relevant tree became clean. Decision NEXT_PHASE. Assigned Worker 119 bounded PI/VF startup-safety review and selective non-paid discovery with isolated temporary state, strict timeout/cleanup, exact-server scope, and no business/provider/paid calls. Planner ran no tests/runtime/providers; live acceptance and MVP_DONE remain open.
 
 ### Iteration 118 Worker
 2026-08-29T09:41:00.000Z: Completed Worker 118 (commit `549d14845e`). Removed synthetic Resource Pack creation/locking from `create_brief` (now requires real locked pack). Enforced explicit HITL approvals on `create_scene_plan` (requires approved Creative Brief) and `create_storyboard` (requires approved Scene Plan) with zero auto-approvals. Replaced broad exception handling with structured errors (`PROJECT_NOT_FOUND`, `RESOURCE_PACK_LOCKED_REQUIRED`, `BRIEF_APPROVAL_REQUIRED`, `SCENE_PLAN_APPROVAL_REQUIRED`). Reconciled working tree and deleted untracked contract test. Verified with 21 focused offline tests passing in 1.92s, clean Ruff, and clean diff check. Handoff to PLANNER.
