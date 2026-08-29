@@ -251,27 +251,170 @@ def test_create_storyboard_generates_from_approved_scene_plan(tmp_path, monkeypa
     assert len(sb_out["frames"]) == 1
 
 
-def test_render_and_export_fail_closed_truthfully():
-    render_out = server.render({})
+def test_render_and_export_fail_closed_truthfully(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_VIDEO_FACTORY_DB_PATH", str(tmp_path / "factory.sqlite"))
+    monkeypatch.delenv("HERMES_VIDEO_FACTORY_PROVIDER", raising=False)
+    server.video_project_create("user_1", "proj_1")
+
+    render_out = server.render(owner_user_id="user_1", project_id="proj_1")
     assert render_out["ok"] is False
     assert render_out["status"] == "failed"
-    assert render_out["code"] == "VF_PROVIDER_UNAVAILABLE"
+    assert render_out["code"] == "STORYBOARD_REQUIRED"
 
     export_out = server.export({})
     assert export_out["ok"] is False
     assert export_out["status"] == "failed"
-    assert export_out["code"] == "VF_EXPORT_UNAVAILABLE"
+    assert export_out["code"] == "MISSING_RENDER_OUTPUT"
 
 
-def test_get_job_status_fails_closed_for_unknown_jobs():
-    out_comp = server.get_job_status("job_completed_123")
-    assert out_comp["ok"] is False
-    assert out_comp["status"] == "failed"
-    assert out_comp["code"] == "VF_JOB_NOT_FOUND"
-
+def test_get_job_status_fails_closed_when_unconfigured_or_missing_id():
     out_empty = server.get_job_status("")
     assert out_empty["ok"] is False
     assert out_empty["code"] == "MISSING_JOB_ID"
+
+    out_unconf = server.get_job_status("projects/p/locations/l/operations/op-1")
+    assert out_unconf["ok"] is False
+    assert out_unconf["status"] == "failed"
+    assert out_unconf["code"] == "VF_PROVIDER_UNAVAILABLE"
+
+
+def test_render_with_active_job_id_resumes_without_submitting():
+    """Providing active_job_id must immediately return pending for that job ID without provider submit."""
+    from unittest.mock import MagicMock
+
+    mock_prov = MagicMock()
+    out = server.render(
+        render_params={"active_job_id": "projects/test-p/locations/us-central1/operations/op-active-123"},
+        provider=mock_prov,
+    )
+    assert out["ok"] is True
+    assert out["status"] == "pending"
+    assert out["job_id"] == "projects/test-p/locations/us-central1/operations/op-active-123"
+    mock_prov.submit.assert_not_called()
+
+
+def test_render_submits_approved_storyboard_to_provider(tmp_path, monkeypatch):
+    """Render submits approved project storyboard to provider and returns operation ID as job_id."""
+    from unittest.mock import MagicMock
+    from hermes.ports.video_generation import VideoGenerationResult
+
+    db_path = tmp_path / "test_render.sqlite"
+    ws_path = tmp_path / "test_render_ws"
+    monkeypatch.setenv("HERMES_VIDEO_FACTORY_DB_PATH", str(db_path))
+    monkeypatch.setenv("HERMES_VIDEO_FACTORY_WORKSPACE", str(ws_path))
+
+    # Setup project + locked pack + approved brief + approved scene plan + storyboard + approved storyboard
+    server.video_project_create("user_r", "proj_r1")
+    server.resource_pack_save("user_r", "proj_r1", {
+        "id": "rp_r",
+        "product_references": [{"asset_id": "a1", "uri": "asset://fan.png"}],
+        "primary_product_asset_id": "a1",
+        "product_identity_description": "Desk fan",
+    })
+    server.resource_pack_lock("user_r", "proj_r1", {"description": "Black desk fan"})
+    server.creative_brief_save("user_r", "proj_r1", {
+        "objective": "Sales", "target_audience": "Office workers",
+        "core_message": "Quiet air", "tone": "Calm", "pace": "Medium",
+        "cta": "Buy now", "content_blocks": ["Intro"],
+    })
+    server.creative_brief_approve("user_r", "proj_r1")
+    server.scene_plan_save("user_r", "proj_r1", {"scenes": [{
+        "scene_id": "s1", "order": 1, "title": "Desk setup", "objective": "Show context",
+        "content": "Hot office desk", "main_action": "Power on fan", "duration_seconds": 4,
+    }]})
+    server.scene_plan_approve("user_r", "proj_r1")
+    server.storyboard_generate("user_r", "proj_r1")
+
+    # Approve storyboard in repository
+    srv = server._service()
+    srv.approve_storyboard("user_r", "proj_r1")
+
+    # Mock provider submit
+    mock_prov = MagicMock()
+    mock_prov.submit.return_value = VideoGenerationResult(
+        request_id="req-1",
+        status="submitted",
+        provider_operation_id="projects/test-proj/locations/us-central1/operations/op-sub-777",
+    )
+
+    out = server.render(
+        owner_user_id="user_r",
+        project_id="proj_r1",
+        render_params={"duration_seconds": 4, "aspect_ratio": "9:16"},
+        provider=mock_prov,
+    )
+    assert out["ok"] is True
+    assert out["status"] == "pending"
+    assert out["job_id"] == "projects/test-proj/locations/us-central1/operations/op-sub-777"
+    assert out["render_id"] == "render_op-sub-777"
+    mock_prov.submit.assert_called_once()
+
+
+def test_get_job_status_running_and_completed_with_real_mp4(tmp_path):
+    """get_job_status polls provider and returns truthful running/completed status with MP4 evidence."""
+    from unittest.mock import MagicMock
+    from hermes.ports.video_generation import VideoGenerationResult
+
+    mock_prov = MagicMock()
+
+    # 1. Running state
+    mock_prov.get_status.return_value = VideoGenerationResult(
+        request_id="op-1",
+        status="running",
+        provider_operation_id="op-1",
+    )
+    res_running = server.get_job_status("op-1", provider=mock_prov)
+    assert res_running["ok"] is True
+    assert res_running["status"] == "running"
+    assert res_running["job_id"] == "op-1"
+
+    # 2. Completed state with real MP4
+    mp4_file = tmp_path / "video_output.mp4"
+    mp4_file.write_bytes(b"\x00\x00\x00\x18ftypmp42realdata")
+    mock_prov.get_status.return_value = VideoGenerationResult(
+        request_id="op-1",
+        status="completed",
+        video_path=str(mp4_file),
+        provider_operation_id="projects/p/locations/l/operations/op-999",
+    )
+    res_completed = server.get_job_status("projects/p/locations/l/operations/op-999", provider=mock_prov)
+    assert res_completed["ok"] is True
+    assert res_completed["status"] == "completed"
+    assert res_completed["video_url"] == f"file://{mp4_file.resolve()}"
+    assert res_completed["render_id"] == "render_op-999"
+    assert res_completed["file_size"] > 0
+
+
+def test_deterministic_export_promotes_mp4_without_provider_call(tmp_path, monkeypatch):
+    """export promotes completed MP4 to workspace exports directory deterministically and idempotently."""
+    ws_path = tmp_path / "ws_export"
+    monkeypatch.setenv("HERMES_VIDEO_FACTORY_WORKSPACE", str(ws_path))
+
+    render_mp4 = tmp_path / "rendered_output.mp4"
+    render_mp4.write_bytes(b"\x00\x00\x00\x18ftypmp42videoexportdata")
+
+    rend_result = {
+        "status": "completed",
+        "video_url": f"file://{render_mp4.resolve()}",
+        "render_id": "render_123",
+        "project_id": "proj_export_1",
+    }
+
+    # First export
+    out1 = server.export(render_result=rend_result, project_id="proj_export_1")
+    assert out1["ok"] is True
+    assert out1["status"] == "completed"
+    assert "exports" in out1["final_video_url"]
+
+    exported_file = Path(str(out1["final_video_url"]).removeprefix("file://"))
+    assert exported_file.is_file()
+    assert exported_file.read_bytes() == render_mp4.read_bytes()
+
+    # Second export (idempotent replay)
+    out2 = server.export(render_result=rend_result, project_id="proj_export_1")
+    assert out2["ok"] is True
+    assert out2["final_video_url"] == out1["final_video_url"]
+    assert out2["file_size"] == out1["file_size"]
 
 
 @pytest.mark.asyncio

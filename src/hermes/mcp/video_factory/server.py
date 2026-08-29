@@ -650,19 +650,245 @@ def create_storyboard(
         }
 
 
+def _video_provider(
+    provider_override: Any | None = None,
+    output_dir: Path | str | None = None,
+) -> Any | None:
+    """Lazy provider constructor.
+
+    Never mints tokens or performs I/O at import time.
+    Returns None if provider is unconfigured or unavailable.
+    """
+    if provider_override is not None:
+        return provider_override
+
+    # Config / env resolution
+    provider_name = os.environ.get("HERMES_VIDEO_FACTORY_PROVIDER", "").strip().lower()
+    if not provider_name:
+        try:
+            from hermes_cli.config import load_config
+
+            cfg = load_config()
+            vf_cfg = cfg.get("video_factory") if isinstance(cfg, dict) else {}
+            if isinstance(vf_cfg, dict):
+                provider_name = str(vf_cfg.get("provider", "")).strip().lower()
+        except Exception:
+            provider_name = ""
+
+    # If google_vertex is configured or vertex credentials exist
+    if provider_name in ("google_vertex", "vertex", "vertex_ai"):
+        try:
+            from hermes.adapters.google.vertex_video_provider import VertexVideoProvider
+
+            ws = Path(output_dir) if output_dir else _workspace_path()
+            return VertexVideoProvider(output_dir=ws)
+        except Exception:
+            return None
+
+    return None
+
+
 def render(
     storyboard_result: dict[str, Any] | None = None,
     render_params: dict[str, Any] | None = None,
     idempotency_key: str | None = None,
     owner_user_id: str = "default_user",
     project_id: str = "",
+    provider: Any | None = None,
 ) -> dict[str, Any]:
-    """Hermes wire compatibility adapter for video rendering (truthful fail-closed)."""
+    """Hermes wire compatibility adapter for video rendering.
+
+    Validates approved project storyboard and reference image before submitting
+    to the configured video provider. Supports active_job_id for no-resubmit polling.
+    """
+    sb_data = dict(storyboard_result or {})
+    params = dict(render_params or {})
+    proj_id = project_id.strip() or sb_data.get("project_id", "") or "proj_default"
+
+    # 1. Check for active_job_id resume (no-resubmit guarantee)
+    active_job_id = params.get("active_job_id") or params.get("job_id")
+    if active_job_id:
+        return {
+            "ok": True,
+            "status": "pending",
+            "job_id": active_job_id,
+            "id": active_job_id,
+            "render_id": f"render_{active_job_id.rsplit('/', 1)[-1]}",
+        }
+
+    # 2. Validate project state & storyboard approval
+    srv = _service()
+    try:
+        project = srv.get_project(owner_user_id, proj_id)
+    except ValueError:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": f"PROJECT_NOT_FOUND: Project '{proj_id}' does not exist for owner '{owner_user_id}'",
+            "code": "PROJECT_NOT_FOUND",
+        }
+
+    if not project.storyboard or not project.storyboard.frames:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": f"STORYBOARD_REQUIRED: Project '{proj_id}' must have a valid storyboard before rendering",
+            "code": "STORYBOARD_REQUIRED",
+        }
+
+    if project.storyboard.approval_status != StoryboardApprovalStatus.APPROVED:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": f"STORYBOARD_APPROVAL_REQUIRED: Storyboard for project '{proj_id}' must be approved before rendering",
+            "code": "STORYBOARD_APPROVAL_REQUIRED",
+        }
+
+    # 3. Resolve reference image and prompt from storyboard frames / params
+    first_frame = project.storyboard.frames[0]
+    prompt_text = params.get("prompt") or first_frame.prompt.prompt if first_frame.prompt else ""
+    if not prompt_text and project.creative_brief:
+        prompt_text = project.creative_brief.core_message
+
+    ref_images: list[str] = []
+    if params.get("reference_image_paths"):
+        ref_images.extend(params["reference_image_paths"])
+    elif first_frame.prompt and first_frame.prompt.reference_image_assets:
+        for ref in first_frame.prompt.reference_image_assets:
+            if hasattr(ref, "uri") and ref.uri:
+                ref_images.append(str(ref.uri))
+            elif isinstance(ref, dict) and ref.get("uri"):
+                ref_images.append(str(ref["uri"]))
+            elif hasattr(ref, "path") and ref.path:
+                ref_images.append(str(ref.path))
+            elif isinstance(ref, dict) and ref.get("path"):
+                ref_images.append(str(ref["path"]))
+
+    # Also check project locked resource pack for asset file path
+    if not ref_images and project.resource_pack and project.resource_pack.product_references:
+        for prod_ref in project.resource_pack.product_references:
+            if hasattr(prod_ref, "uri") and prod_ref.uri:
+                ref_images.append(str(prod_ref.uri))
+            elif isinstance(prod_ref, dict) and prod_ref.get("uri"):
+                ref_images.append(str(prod_ref["uri"]))
+
+    # Validate reference image exists on disk if provided
+    valid_ref_images: list[str] = []
+    for img_p in ref_images:
+        cleaned = img_p.removeprefix("file://")
+        if Path(cleaned).is_file():
+            valid_ref_images.append(str(Path(cleaned).resolve()))
+
+    # 4. Resolve video provider
+    video_prov = _video_provider(provider_override=provider)
+    if video_prov is None:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": "PROVIDER_UNAVAILABLE: No live video render provider configured or active",
+            "code": "VF_PROVIDER_UNAVAILABLE",
+        }
+
+    # 5. Build request and submit
+    from hermes.ports.video_generation import VideoGenerationRequest
+
+    req_id = idempotency_key or f"render_{proj_id}_{first_frame.frame_id}"
+    duration = int(params.get("duration_seconds", 4))
+    if duration not in (4, 6, 8):
+        duration = 4
+    aspect_ratio = str(params.get("aspect_ratio", "9:16"))
+
+    req = VideoGenerationRequest(
+        request_id=req_id,
+        owner_user_id=owner_user_id,
+        project_id=proj_id,
+        scene_id=first_frame.scene_id,
+        prompt=prompt_text or "Cinematic product showcase video",
+        duration_seconds=duration,
+        aspect_ratio=aspect_ratio if aspect_ratio in ("9:16", "16:9") else "9:16",
+        reference_image_paths=tuple(valid_ref_images),
+        provider_options=params.get("provider_options") or {},
+    )
+
+    result = video_prov.submit(req)
+    if result.status == "submitted" and result.provider_operation_id:
+        return {
+            "ok": True,
+            "status": "pending",
+            "job_id": result.provider_operation_id,
+            "id": result.provider_operation_id,
+            "render_id": f"render_{result.provider_operation_id.rsplit('/', 1)[-1]}",
+        }
+
     return {
         "ok": False,
         "status": "failed",
-        "error": "PROVIDER_UNAVAILABLE: No live video render provider configured or active",
-        "code": "VF_PROVIDER_UNAVAILABLE",
+        "error": f"RENDER_SUBMIT_FAILED: {result.error_message or result.error_code}",
+        "code": result.error_code or "RENDER_SUBMIT_FAILED",
+    }
+
+
+def get_job_status(
+    job_id: str,
+    provider: Any | None = None,
+) -> dict[str, Any]:
+    """Hermes wire compatibility adapter for polling asynchronous video job status."""
+    if not job_id or not str(job_id).strip():
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": "MISSING_JOB_ID: job_id is required",
+            "code": "MISSING_JOB_ID",
+        }
+
+    video_prov = _video_provider(provider_override=provider)
+    if video_prov is None:
+        return {
+            "ok": False,
+            "status": "failed",
+            "job_id": job_id,
+            "error": "PROVIDER_UNAVAILABLE: No live video render provider configured or active",
+            "code": "VF_PROVIDER_UNAVAILABLE",
+        }
+
+    res = video_prov.get_status(job_id)
+    if res.status == "running":
+        return {
+            "ok": True,
+            "status": "running",
+            "job_id": job_id,
+            "id": job_id,
+        }
+
+    if res.status == "completed" and res.video_path:
+        video_p = Path(res.video_path)
+        if video_p.is_file() and video_p.stat().st_size > 0:
+            render_id = f"render_{job_id.rsplit('/', 1)[-1]}"
+            return {
+                "ok": True,
+                "status": "completed",
+                "job_id": job_id,
+                "id": render_id,
+                "render_id": render_id,
+                "video_url": f"file://{video_p.resolve()}",
+                "output_url": f"file://{video_p.resolve()}",
+                "file_path": str(video_p.resolve()),
+                "file_size": video_p.stat().st_size,
+            }
+        return {
+            "ok": False,
+            "status": "failed",
+            "job_id": job_id,
+            "error": "EMPTY_OUTPUT: Generated video file is missing or empty",
+            "code": "VF_EMPTY_OUTPUT",
+        }
+
+    return {
+        "ok": False,
+        "status": "failed",
+        "job_id": job_id,
+        "error": res.error_message or f"Operation failed with code {res.error_code}",
+        "code": res.error_code or "VF_JOB_FAILED",
     }
 
 
@@ -673,31 +899,80 @@ def export(
     owner_user_id: str = "default_user",
     project_id: str = "",
 ) -> dict[str, Any]:
-    """Hermes wire compatibility adapter for video export (truthful fail-closed)."""
-    return {
-        "ok": False,
-        "status": "failed",
-        "error": "PROVIDER_UNAVAILABLE: No live video export provider configured or active",
-        "code": "VF_EXPORT_UNAVAILABLE",
-    }
+    """Hermes wire compatibility adapter for deterministic local video export.
 
+    Promotes a completed, verified local MP4 from render output to workspace exports.
+    Performs zero provider calls and is strictly idempotent.
+    """
+    rend_data = dict(render_result or {})
+    params = dict(export_params or {})
+    proj_id = project_id.strip() or rend_data.get("project_id", "") or "proj_default"
 
-def get_job_status(job_id: str) -> dict[str, Any]:
-    """Hermes wire compatibility adapter for polling asynchronous video job status."""
-    if not job_id or not str(job_id).strip():
+    # Extract source video path from render result
+    raw_video_url = rend_data.get("video_url") or rend_data.get("output_url") or rend_data.get("file_path") or params.get("video_url")
+    if not raw_video_url:
         return {
             "ok": False,
             "status": "failed",
-            "error": "MISSING_JOB_ID: job_id is required",
-            "code": "MISSING_JOB_ID",
+            "error": "MISSING_RENDER_OUTPUT: render_result must contain video_url or file_path",
+            "code": "MISSING_RENDER_OUTPUT",
         }
 
+    src_path_str = str(raw_video_url).removeprefix("file://")
+    src_path = Path(src_path_str).resolve()
+
+    if not src_path.is_file() or src_path.stat().st_size == 0:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": f"FILE_NOT_FOUND: Source video file does not exist or is empty: {src_path}",
+            "code": "FILE_NOT_FOUND",
+        }
+
+    if src_path.suffix.lower() != ".mp4":
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": f"INVALID_FORMAT: Video file must be an .mp4 file, got '{src_path.suffix}'",
+            "code": "INVALID_FORMAT",
+        }
+
+    # Verify workspace containment or promote to workspace exports directory
+    ws_root = _workspace_path().resolve()
+    export_dir = (ws_root / "exports").resolve()
+    export_dir.mkdir(parents=True, exist_ok=True)
+
+    dest_filename = f"export_{proj_id}_{src_path.name}"
+    dest_path = (export_dir / dest_filename).resolve()
+
+    # Verify destination containment
+    try:
+        dest_path.relative_to(ws_root)
+    except ValueError:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": "PATH_TRAVERSAL: Export path escapes workspace directory",
+            "code": "PATH_TRAVERSAL",
+        }
+
+    # Idempotent copy / link
+    if dest_path != src_path:
+        import shutil
+        shutil.copy2(src_path, dest_path)
+
+    export_id = idempotency_key or f"export_{proj_id}_{src_path.stem}"
+    final_url = f"file://{dest_path.resolve()}"
     return {
-        "ok": False,
-        "status": "failed",
-        "job_id": job_id,
-        "error": f"JOB_NOT_FOUND: Job {job_id} not found in durable storage",
-        "code": "VF_JOB_NOT_FOUND",
+        "ok": True,
+        "status": "completed",
+        "export_id": export_id,
+        "id": export_id,
+        "final_video_url": final_url,
+        "video_url": final_url,
+        "output_url": final_url,
+        "file_path": str(dest_path.resolve()),
+        "file_size": dest_path.stat().st_size,
     }
 
 
