@@ -1,0 +1,1 @@
+"""Hermes SQLite adapters package."""
