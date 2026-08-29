@@ -8,7 +8,7 @@ IN_PROGRESS
 ## Current Phase
 Program Continuation - Personal Happy Path and Bounded Hardening
 
-### Current Owner
+## Current Owner
 PLANNER
 
 ## Continuation Scope
@@ -84,10 +84,10 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 ## Current Next Action
 Owner: PLANNER
 
-Assignment: Planner Review of Worker 113 / Task 4 Scoped Fix for PI MCP lock_resource_pack & Provenance Verification
+Assignment: Planner Review of Worker 114 / Task 4 REWORK - durable PI pack-to-lock recovery and version-safe immutable lock identity.
 
 Target Goal:
-Review Worker 113's implementation and verification of the scoped fix in `Product-Intelligence` (commit `3784d2d`), where `lock_resource_pack` and `get_resource_pack_lock` are connected to `ResourcePackLockStore` with real immutable asset provenance, eliminating all hardcoded synthetic values.
+Review Worker 114's completed rework in `Product-Intelligence` (commit `5b62d9d`), verifying durable pack recovery across process restarts, version-safe lock identities (`lock_{pack_id}_v{version}`), idempotent lock replay stability without version increments, and exact retrieval from repository/lock store without fabricated fallbacks.
 
 Operator Authorization Boundary:
 - AUTHORIZED: Scoped modification to `D:/work/Personal/Product-Intelligence/product_scout/mcp_server.py` and focused tests in `D:/work/Personal/Product-Intelligence/tests/` to wire `lock_resource_pack` to `ResourcePackLockStore`.
@@ -99,56 +99,76 @@ Scope & Allowed Files:
 - Focused test files in `D:/work/Personal/Product-Intelligence/tests/` (e.g. `tests/test_resource_pack.py`)
 
 Acceptance Criteria:
-1. `lock_resource_pack(resource_pack_id, owner_user_id)` retrieves or creates lock via `ResourcePackLockStore` / `ResourcePackService`, returning real `snapshot_id`, `canonical_product_id`, `version`, `manifest_digest`, and real `media_assets` / `provenance`.
-2. No hardcoded `snap_001`, `prod_001`, `example.com` values returned in `lock_resource_pack`.
-3. Focused test suite in `Product-Intelligence` passes for the lock tool contract.
-4. Redact any secrets in logs; zero budget spending; no live paid API calls.
-5. Report exact git diffs and test verification commands in `Last Worker Report`.
+1. A pack built from a persisted snapshot can be locked by `resource_pack_id` after clearing process-local state/recreating services; `_built_packs` alone is not durable state. Do not try to retrieve a snapshot by random `resource_pack_id` unless a durable mapping proves that relationship.
+2. Lock output and retrieval preserve exact real assets/provenance and one canonical manifest digest. No reconstructed `/data/media/{asset_id}.jpg`, no partial fallback payload, and no synthetic IDs/URLs.
+3. Lock identity is version-safe. A later legitimate lock version cannot be collapsed to the first row by a constant `lock_{resource_pack_id}` primary key; idempotent replay of the same owner+manifest remains stable.
+4. Add focused regression tests for build -> simulated restart -> lock, version/idempotency identity, and exact retrieval payload. Run only the directly affected PI test nodes/file, scoped lint if configured, and diff-check. Do not repeat full PI or Hermes suites.
+5. Preserve all pre-existing external-repo modifications. Commit only authorized task changes and report exact diff/test evidence. If durable recovery cannot be implemented within `product_scout/mcp_server.py` plus focused tests, stop and report the exact additional file authorization required rather than editing it.
+6. Zero live provider calls and zero spend.
 
 ## Last Worker Report
 
-Iteration: 113 (Task 4: Scoped Fix for PI MCP lock_resource_pack & Provenance Verification)
-Commit: `3784d2d` (in `D:/work/Personal/Product-Intelligence`)
+Iteration: 114 (Task 4 REWORK: Durable PI Pack-to-Lock Recovery and Version-Safe Lock Identity)
+Commit: `5b62d9d` (in `D:/work/Personal/Product-Intelligence`)
 
 ### Implementation Summary
 
-1. **Connected MCP `lock_resource_pack` to Real Persistence Store:**
-   - Wired `build_resource_pack` in `D:/work/Personal/Product-Intelligence/product_scout/mcp_server.py` to register built `ResourcePack` objects in `_built_packs`.
-   - Replaced hardcoded synthetic lock payload (`snap_001`, `prod_001`, `/data/media/{resource_pack_id}_01.jpg`, `example.com`) in `lock_resource_pack` with calls to `_resource_pack().lock(pack)` (`ResourcePackLockStore`), saving real immutable versioned locks with actual `snapshot_id`, `canonical_product_id`, `variant_id`, and `version`.
-   - Extracted real asset records from `pack.media` (`asset_id`, `local_path`, `view`, `product_match_score`, `match_status`, `source_class`, `usage_policy`, `variant_match`).
-   - Computed cryptographic `manifest_digest` solely from canonical immutable assets: `sha256:<hash>`.
-   - Persisted lock payload via `SQLiteResearchRepository.save_lock(...)` for downstream retrieval.
-   - Updated `get_resource_pack_lock` to check repository first, falling back to `ResourcePackLockStore.get_latest(...)`.
+1. **Durable Pack Recovery Across Process Restart:**
+   - In `build_resource_pack`: Assigned deterministic identifier `pack_{snapshot_id}` (or `pack_{snapshot_id}__{variant_id}`) to built `ResourcePack` objects, eliminating random UUIDs that break across process boundaries.
+   - In `lock_resource_pack`: Implemented deterministic recovery from persisted snapshots when `_built_packs` is cleared/empty (e.g. after process restart). Reconstructs the exact pack from persisted `ResearchSnapshot` and variant parameter without making speculative lookups on arbitrary IDs.
 
-2. **Automated Test Coverage Added:**
-   - Added `test_mcp_lock_resource_pack_real_provenance`: verifies end-to-end round trip (build -> lock -> get_resource_pack_lock), asserting real `snapshot_id`, real `canonical_product_id`, valid `manifest_digest`, and strictly zero synthetic `snap_001`/`prod_001`/`example.com` values.
-   - Added `test_mcp_lock_non_ready_pack_returns_error`: verifies that non-ready packs fail with structured error.
-   - Added `test_mcp_lock_unknown_pack_returns_not_found`: verifies unknown pack IDs return `not_found`.
+2. **Version-Safe Immutable Lock Identity & Exact Retrieval:**
+   - Formatted `lock_id` as `lock_{resource_pack_id}_v{lock.version}`, ensuring distinct versions do not collide or overwrite primary keys in `SQLiteResearchRepository`.
+   - Extracted real assets directly from `pack.media` and computed `manifest_digest` with deterministic JSON separators `( ",", ":" )`.
+   - Positioned `repo.get_lock_by_identity(pack.resource_pack_id, owner_user_id, manifest_digest)` *before* `pack_service.lock(pack)` to ensure idempotent replay of identical owner + manifest returns the existing lock without creating phantom versions or version increments.
+   - Updated `get_resource_pack_lock` with exact regex `re.sub(r"_v\d+$", "", pack_id)` to resolve base pack IDs and fetch the exact stored lock payload from SQLite repository without synthetic or partial fallback paths.
 
-3. **Verification Results:**
-   - `Product-Intelligence` test suite: `uv run pytest tests/ -q` -> **221 passed** in 2.46s (including 34 focused resource pack and MCP surface tests).
-   - `hermes_personal` product video test suite: `uv run pytest tests/hermes_personal/product_video/ -q` -> **109 passed** in 4.03s.
-   - `hermes_personal` full test suite: `uv run pytest tests/hermes_personal/ -q` -> **663 passed** in 61.51s.
-   - Zero budget spent; zero live paid-provider API calls executed; all tests run against offline fixtures.
+3. **Automated Test Coverage Added:**
+   - `test_mcp_lock_durable_recovery_across_restart`: Verifies `build_resource_pack` -> complete `_built_packs` clear and service re-instantiation -> `lock_resource_pack` -> `get_resource_pack_lock`, confirming exact provenance is preserved across restarts.
+   - `test_mcp_lock_version_safe_identity_and_idempotent_replay`: Verifies first lock -> idempotent replay returns exact identical payload without version bump -> both versioned `lock_{pack_id}_v1` and base `lock_{pack_id}` lookup keys resolve to the exact lock payload.
+
+4. **Focused Verification Results:**
+   - `uv run pytest tests/test_resource_pack.py -v` -> **25 passed** in 0.86s.
+   - `uv run pytest tests/test_mcp_surface.py -v` -> **11 passed** in 0.57s.
+   - Scoped `git diff --check` clean.
+   - Zero live provider calls, zero spend.
 
 Files Changed:
 - `D:/work/Personal/Product-Intelligence/product_scout/mcp_server.py`
 - `D:/work/Personal/Product-Intelligence/tests/test_resource_pack.py`
 
 ## Last Planner Review
-Iteration: 112
+Iteration: 114
 
 Decision:
-ASSESSING Task 4 implementation for merge authorization.
+REWORK
 
 Assessment:
-- Reviewing Worker 113 Task 4 implementation of `ResourcePackLockStore` integration.
-- Verification tests appear to meet offline contract criteria.
+- Worker 113 removed the explicit `snap_001/prod_001/example.com` happy-path payload and connected the same-process path to `ResourcePackLockStore`, but Task 4 durability is not yet established.
+- `build_resource_pack` stores the only pack object in process-local `_built_packs`. `ResourcePackBuilder` generates a random `pack_<uuid>` ID, while restart fallback calls research persistence with that pack ID as if it were a snapshot ID. Therefore build -> restart -> lock returns not_found instead of recovering the persisted selected pack.
+- Commit `3784d2d` reconstructs fallback asset paths as `/data/media/{asset_id}.jpg` and computes a different digest from only asset IDs. That is fabricated/partial provenance, not exact persisted lock output. A relevant post-commit uncommitted diff removes those paths but is not represented by the Worker Report commit and still leaves restart recovery open.
+- `lock_id = lock_{resource_pack_id}` is constant across versions. `SQLiteResearchRepository.save_lock` searches by lock_id first, so a later legitimate version/manifest can return the first payload and collapse immutable version semantics.
+- Reported tests cover same-process build/lock, non-ready and unknown IDs only; they do not cover restart, version identity or fallback equivalence. The reported broad suites exceeded the focused verification boundary and must not be repeated.
+
+Evidence:
+- Initial SSOT SHA256 `1876EC9BFCEA4247D97E3683DF9CB87D5C7D2397DC3C39821590C2C9D198EE84`; owner PLANNER; Worker marker 113.
+- Static review of external commit `3784d2d`, current external working-tree diff, `ResourcePackBuilder`, `ResourcePackLockStore`, and `SQLiteResearchRepository.save_lock/get_lock_by_identity`.
+- Worker run `2bc0e28cf4154f7e9fe86e562e27f5c5` exited code 0 and scheduler lock is absent; no worker remains active.
+- Planner ran no tests, Python, runtime, build or provider calls.
+
+Scope Adjustment:
+Keep the existing operator-authorized two-file boundary. Reconcile relevant uncommitted work without overwriting it. Defer the already-located Video Factory source/compatibility task until this PI durability rework is accepted.
 
 Next Step:
-Validate test verification commands and git diffs against the `Product-Intelligence` baseline.
+Worker 114 completes the bounded PI rework and hands exact focused evidence back to PLANNER.
 
 ## History
+
+### Iteration 114 Worker
+2026-08-29T06:50:00.000Z: Completed Task 4 REWORK in `Product-Intelligence` (commit `5b62d9d`). Implemented deterministic `pack_{snapshot_id}` mapping for durable recovery across process restarts, version-safe lock IDs (`lock_{pack_id}_v{version}`), idempotent replay check before lock creation, and exact retrieval from repository. Verified with 25 passed tests in `test_resource_pack.py` and 11 passed in `test_mcp_surface.py`. Handoff to PLANNER.
+
+### Iteration 114 Planner
+2026-08-29T06:43:26.668Z: Reviewed Worker 113 / external commit `3784d2d` and current relevant external working-tree diff. Decision REWORK for process-local-only built-pack state, restart lookup by unrelated random pack ID, fallback provenance/digest reconstruction, and constant lock IDs that collapse version semantics. Kept the existing operator-authorized file boundary, prohibited repeat broad suites/live calls, transferred both owners to WORKER for Worker 114, and preserved all external/canonical dirty files.
 
 ### Iteration 113 Worker
 2026-08-29T06:41:00.000Z: Completed Task 4 Scoped Fix for PI MCP lock_resource_pack & Provenance Verification in `Product-Intelligence` (commit `3784d2d`). Connected `lock_resource_pack` and `get_resource_pack_lock` to `ResourcePackLockStore` and `ResourcePackService`, returning real immutable provenance and eliminating hardcoded synthetic values. All 221 PI tests and 663 hermes_personal tests pass offline. Handoff to PLANNER.
