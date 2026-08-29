@@ -3,6 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
+from pathlib import Path
+
+SRC_ROOT = Path(__file__).resolve().parents[2] / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
 import pytest
 
 from hermes.mcp.video_factory import server
@@ -12,7 +19,6 @@ def test_all_canonical_and_wire_tools_registered():
     tools = asyncio.run(server.mcp.list_tools())
     tool_names = {t.name for t in tools}
 
-    # 17 Canonical tools
     canonical_expected = {
         "video_project_create", "video_project_get", "resource_pack_save",
         "resource_pack_get", "resource_pack_lock", "resource_pack_unlock",
@@ -23,7 +29,6 @@ def test_all_canonical_and_wire_tools_registered():
     }
     assert canonical_expected.issubset(tool_names)
 
-    # 6 Hermes wire tools compatibility names
     wire_expected = {
         "create_brief", "create_scene_plan", "create_storyboard",
         "render", "export", "get_job_status",
@@ -72,48 +77,76 @@ def test_canonical_mcp_workflow_and_sqlite_persistence(tmp_path, monkeypatch):
     assert len(sb_res["project"]["storyboard"]["frames"]) == 1
 
 
-def test_hermes_wire_tools_compatibility_layer(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_VIDEO_FACTORY_DB_PATH", str(tmp_path / "wire_test.sqlite"))
+def test_create_brief_fails_closed_on_missing_fields(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_VIDEO_FACTORY_DB_PATH", str(tmp_path / "wire_brief.sqlite"))
+    out = server.create_brief("fan_fa55", {"angle": "Silent Turbo"})
+    assert out["ok"] is False
+    assert out["code"] == "INVALID_INPUT"
+    assert "missing required fields" in out["error"]
 
-    # 1. create_brief
-    brief_out = server.create_brief("fan_fa55", {"angle": "Silent Turbo Power", "script": "Stay cool at work"})
-    assert brief_out["ok"] is True
-    assert brief_out["brief_id"] is not None
-    assert brief_out["product_id"] == "fan_fa55"
-    assert brief_out["core_message"] == "Stay cool at work"
 
-    # 2. create_scene_plan
+def test_create_brief_persists_canonical_input(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_VIDEO_FACTORY_DB_PATH", str(tmp_path / "wire_brief_ok.sqlite"))
+    valid_cfg = {
+        "objective": "Convert hot commuters",
+        "target_audience": "Subway riders",
+        "core_message": "Silent portable cooling",
+        "tone": "Direct",
+        "pace": "Brisk",
+        "cta": "Get 20% off today",
+        "content_blocks": ["Hot commute dilemma", "Jisulife silent turbo", "Discount CTA"],
+    }
+    out = server.create_brief("fan_fa55", valid_cfg)
+    assert out["ok"] is True
+    assert out["brief_id"] == "brief_fan_fa55"
+    assert out["objective"] == "Convert hot commuters"
+    assert out["project"]["creative_brief"]["objective"] == "Convert hot commuters"
+
+
+def test_create_scene_plan_fails_closed_without_scenes(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_VIDEO_FACTORY_DB_PATH", str(tmp_path / "wire_scene.sqlite"))
+    out = server.create_scene_plan({"project_id": "proj_01"})
+    assert out["ok"] is False
+    assert out["code"] == "INVALID_INPUT"
+    assert "missing required caller-supplied scenes" in out["error"]
+
+
+def test_create_scene_plan_persists_canonical_scenes(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_VIDEO_FACTORY_DB_PATH", str(tmp_path / "wire_scene_ok.sqlite"))
+    valid_cfg = {
+        "objective": "Sales", "target_audience": "Riders", "core_message": "Cool",
+        "tone": "Direct", "pace": "Fast", "cta": "Buy", "content_blocks": ["Intro"],
+    }
+    brief_out = server.create_brief("fan_fa55", valid_cfg)
+    scenes = [
+        {"scene_id": "s1", "order": 1, "title": "Hook", "objective": "Hook", "content": "Heat", "main_action": "Sweat", "duration_seconds": 3},
+        {"scene_id": "s2", "order": 2, "title": "Demo", "objective": "Demo", "content": "Fan", "main_action": "Cool", "duration_seconds": 5},
+    ]
+    brief_out["scenes"] = scenes
     scene_out = server.create_scene_plan(brief_out)
     assert scene_out["ok"] is True
-    assert len(scene_out["scenes"]) == 3
-    assert scene_out["scenes"][0]["duration_seconds"] > 0
+    assert len(scene_out["scenes"]) == 2
+    assert scene_out["total_duration_seconds"] == 8
 
-    # 3. create_storyboard
-    sb_out = server.create_storyboard(scene_out)
-    assert sb_out["ok"] is True
-    assert len(sb_out["frames"]) == 3
 
-    # 4. render (fail-closed offline when no provider configured)
-    render_fail = server.render(sb_out)
-    assert render_fail["status"] == "failed"
-    assert "PROVIDER_NOT_CONFIGURED" in render_fail["error"]
+def test_render_and_export_fail_closed_truthfully():
+    render_out = server.render({})
+    assert render_out["ok"] is False
+    assert render_out["status"] == "failed"
+    assert render_out["code"] == "VF_PROVIDER_UNAVAILABLE"
 
-    # 5. render (pre-computed / mock asset path)
-    render_ok = server.render(sb_out, render_params={"mock_video_url": "asset://videos/output.mp4"})
-    assert render_ok["status"] == "completed"
-    assert render_ok["video_url"] == "asset://videos/output.mp4"
+    export_out = server.export({})
+    assert export_out["ok"] is False
+    assert export_out["status"] == "failed"
+    assert export_out["code"] == "VF_EXPORT_UNAVAILABLE"
 
-    # 6. export (fail-closed offline when no provider configured)
-    export_fail = server.export(render_ok)
-    assert export_fail["status"] == "failed"
-    assert "PROVIDER_NOT_CONFIGURED" in export_fail["error"]
 
-    # 7. export (pre-computed / mock asset path)
-    export_ok = server.export(render_ok, export_params={"mock_export_url": "asset://exports/final.mp4"})
-    assert export_ok["status"] == "completed"
-    assert export_ok["export_url"] == "asset://exports/final.mp4"
+def test_get_job_status_fails_closed_for_unknown_jobs():
+    out_comp = server.get_job_status("job_completed_123")
+    assert out_comp["ok"] is False
+    assert out_comp["status"] == "failed"
+    assert out_comp["code"] == "VF_JOB_NOT_FOUND"
 
-    # 8. get_job_status
-    status_done = server.get_job_status("job_completed_123")
-    assert status_done["status"] == "completed"
-    assert status_done["video_url"] == "asset://videos/job_completed_123.mp4"
+    out_empty = server.get_job_status("")
+    assert out_empty["ok"] is False
+    assert out_empty["code"] == "MISSING_JOB_ID"

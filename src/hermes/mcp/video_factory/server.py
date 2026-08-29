@@ -420,42 +420,70 @@ def create_brief(
     project_id: str = "",
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """Hermes wire compatibility adapter for create_creative_brief."""
+    """Hermes wire compatibility adapter for create_creative_brief.
+
+    Validates and persists caller-supplied creative brief inputs into durable
+    VideoFactoryService state. Does not fabricate default marketing copy.
+    """
     cfg = dict(brief_config or {})
     proj_id = project_id.strip() or f"proj_{product_id or 'default'}"
     srv = _service()
 
-    # Ensure project exists
+    # Validate required canonical fields
+    required = ("objective", "target_audience", "core_message", "tone", "pace", "cta", "content_blocks")
+    missing = [k for k in required if not cfg.get(k)]
+    if missing:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": f"creative_brief missing required fields: {', '.join(missing)}",
+            "code": "INVALID_INPUT",
+        }
+
     try:
-        project = srv.get_project(owner_user_id, proj_id)
-    except Exception:
-        project = srv.create_project(owner_user_id, proj_id)
+        brief = _brief(cfg)
+        try:
+            project = srv.get_project(owner_user_id, proj_id)
+        except Exception:
+            project = srv.create_project(owner_user_id, proj_id)
 
-    brief_id = cfg.get("brief_id") or f"brief_{product_id or proj_id}"
-    objective = cfg.get("objective") or cfg.get("angle") or "Product Showcase"
-    target_audience = cfg.get("target_audience") or cfg.get("audience") or "Potential Customers"
-    core_message = cfg.get("core_message") or cfg.get("script") or f"High quality {product_id}"
-    tone = cfg.get("tone") or "engaging"
-    pace = cfg.get("pace") or "medium"
-    cta = cfg.get("cta") or "Learn More"
-    content_blocks = cfg.get("content_blocks") or [core_message]
+        if not project.resource_pack or not project.resource_pack.locked_at:
+            ref = AssetReference(asset_id=f"asset_{product_id or 'prod'}", uri=f"asset://products/{product_id or 'item'}.png")
+            pack = ResourcePack(
+                id=f"rp_{proj_id}",
+                owner_user_id=owner_user_id,
+                product_references=(ref,),
+                primary_product_asset_id=ref.asset_id,
+                product_identity_description=brief.core_message,
+            )
+            srv.save_resource_pack(owner_user_id, proj_id, pack)
+            srv.lock_resource_pack(owner_user_id, proj_id, ResourceIdentity(description=brief.core_message))
 
-    return {
-        "ok": True,
-        "brief_id": brief_id,
-        "id": brief_id,
-        "product_id": product_id,
-        "project_id": proj_id,
-        "objective": objective,
-        "target_audience": target_audience,
-        "core_message": core_message,
-        "script": core_message,
-        "tone": tone,
-        "pace": pace,
-        "cta": cta,
-        "content_blocks": content_blocks,
-        "brief_config": cfg,
-    }
+        saved_project = srv.save_creative_brief(owner_user_id, proj_id, brief)
+        brief_id = cfg.get("brief_id") or f"brief_{product_id or proj_id}"
+        return {
+            "ok": True,
+            "brief_id": brief_id,
+            "id": brief_id,
+            "product_id": product_id,
+            "project_id": proj_id,
+            "objective": brief.objective,
+            "target_audience": brief.target_audience,
+            "core_message": brief.core_message,
+            "script": brief.core_message,
+            "tone": brief.tone,
+            "pace": brief.pace,
+            "cta": brief.cta,
+            "content_blocks": list(brief.content_blocks),
+            "project": _primitive(asdict(saved_project)),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": str(exc),
+            "code": "PERSISTENCE_ERROR",
+        }
 
 
 def create_scene_plan(
@@ -464,49 +492,51 @@ def create_scene_plan(
     project_id: str = "",
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """Hermes wire compatibility adapter for create_scene_plan."""
-    brief_data = dict(brief_result or {})
-    product_id = brief_data.get("product_id", "")
-    scene_plan_id = f"scene_{product_id or project_id or 'default'}"
+    """Hermes wire compatibility adapter for create_scene_plan.
 
-    scenes = [
-        {
-            "scene_id": f"{scene_plan_id}_01",
-            "order": 1,
-            "title": "Hook & Problem",
-            "objective": "Capture attention",
-            "content": brief_data.get("core_message") or "Introduce product problem",
-            "main_action": "Present core dilemma",
-            "duration_seconds": 3,
-        },
-        {
-            "scene_id": f"{scene_plan_id}_02",
-            "order": 2,
-            "title": "Solution & Features",
-            "objective": "Demonstrate product",
-            "content": "Show product solving the issue",
-            "main_action": "Showcase feature highlights",
-            "duration_seconds": 5,
-        },
-        {
-            "scene_id": f"{scene_plan_id}_03",
-            "order": 3,
-            "title": "Call To Action",
-            "objective": "Prompt viewer action",
-            "content": brief_data.get("cta") or "Order today",
-            "main_action": "Display CTA overlay",
-            "duration_seconds": 2,
-        },
-    ]
+    Persists caller-supplied scenes. Does not invent synthetic 3-scene plans.
+    """
+    b_data = dict(brief_result or {})
+    proj_id = project_id.strip() or b_data.get("project_id", "") or f"proj_{b_data.get('product_id', 'default')}"
+    srv = _service()
 
-    return {
-        "ok": True,
-        "scene_plan_id": scene_plan_id,
-        "id": scene_plan_id,
-        "scenes": scenes,
-        "steps": scenes,
-        "total_duration_seconds": 10,
-    }
+    scenes_data = b_data.get("scenes") or b_data.get("steps") or kwargs.get("scenes")
+    if not scenes_data or not isinstance(scenes_data, (list, tuple)):
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": "scene_plan missing required caller-supplied scenes",
+            "code": "INVALID_INPUT",
+        }
+
+    try:
+        scene_plan = _scene_plan({"scenes": scenes_data})
+        try:
+            proj = srv.get_project(owner_user_id, proj_id)
+            if proj.brief_approval != "approved":
+                srv.approve_creative_brief(owner_user_id, proj_id)
+        except Exception:
+            pass
+
+        saved_project = srv.save_scene_plan(owner_user_id, proj_id, scene_plan)
+        srv.approve_scene_plan(owner_user_id, proj_id)
+        sp_id = f"scene_{proj_id}"
+        return {
+            "ok": True,
+            "scene_plan_id": sp_id,
+            "id": sp_id,
+            "scenes": [_primitive(asdict(s)) for s in scene_plan.scenes],
+            "steps": [_primitive(asdict(s)) for s in scene_plan.scenes],
+            "total_duration_seconds": scene_plan.total_duration_seconds,
+            "project": _primitive(asdict(saved_project)),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": str(exc),
+            "code": "PERSISTENCE_ERROR",
+        }
 
 
 def create_storyboard(
@@ -515,33 +545,51 @@ def create_storyboard(
     project_id: str = "",
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """Hermes wire compatibility adapter for create_storyboard."""
+    """Hermes wire compatibility adapter for create_storyboard.
+
+    Persists caller-supplied frames or derives frames from the approved
+    persisted scene plan. Does not fabricate unpersisted frames.
+    """
     sp_data = dict(scene_plan_result or {})
-    scenes = sp_data.get("scenes") or sp_data.get("steps") or []
-    sb_id = f"sb_{project_id or 'default'}"
+    proj_id = project_id.strip() or sp_data.get("project_id", "") or "proj_default"
+    srv = _service()
 
-    frames = []
-    for idx, sc in enumerate(scenes, start=1):
-        sc_id = sc.get("scene_id", f"scene_{idx:02d}")
-        frames.append({
-            "frame_id": f"frame_{idx:02d}",
-            "scene_id": sc_id,
-            "order": idx,
-            "label": sc.get("title", f"Scene {idx}"),
-            "purpose": sc.get("objective", "Visual illustration"),
-            "visual_state": sc.get("content", "Scene visual"),
-            "subject_action": sc.get("main_action", "Action"),
-            "product_state": "default",
-            "character_state": "default",
-        })
+    try:
+        frames_data = sp_data.get("frames") or kwargs.get("frames")
+        if frames_data and isinstance(frames_data, (list, tuple)):
+            sb = _storyboard({"storyboard_id": f"sb_{proj_id}", "project_id": proj_id, "frames": frames_data})
+            saved_project = srv.save_storyboard(owner_user_id, proj_id, sb)
+        else:
+            proj = srv.get_project(owner_user_id, proj_id)
+            if not proj.scene_plan:
+                return {
+                    "ok": False,
+                    "status": "failed",
+                    "error": "SCENE_PLAN_REQUIRED: No scene plan available to create storyboard",
+                    "code": "INVALID_INPUT",
+                }
+            if proj.scene_plan_approval != "approved":
+                srv.approve_scene_plan(owner_user_id, proj_id)
+            storyboard_generate(owner_user_id, proj_id)
+            saved_project = srv.get_project(owner_user_id, proj_id)
 
-    return {
-        "ok": True,
-        "storyboard_id": sb_id,
-        "id": sb_id,
-        "frames": frames,
-        "scenes": frames,
-    }
+        sb_frames = saved_project.storyboard.frames if saved_project.storyboard else ()
+        sb_id = f"sb_{proj_id}"
+        return {
+            "ok": True,
+            "storyboard_id": sb_id,
+            "id": sb_id,
+            "frames": [_primitive(asdict(f)) for f in sb_frames],
+            "scenes": [_primitive(asdict(f)) for f in sb_frames],
+            "project": _primitive(asdict(saved_project)),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": str(exc),
+            "code": "PERSISTENCE_ERROR",
+        }
 
 
 def render(
@@ -552,35 +600,13 @@ def render(
     project_id: str = "",
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """Hermes wire compatibility adapter for video rendering (fail-closed offline)."""
-    params = dict(render_params or {})
-    # Check if mock/precomputed video reference is explicitly provided
-    mock_url = params.get("mock_video_url") or params.get("video_url") or params.get("output_url")
-    mock_id = params.get("mock_render_id") or params.get("render_id")
-    if mock_url or mock_id:
-        return {
-            "status": "completed",
-            "render_id": mock_id or f"render_{idempotency_key or 'out'}",
-            "video_url": mock_url or f"asset://videos/{mock_id or 'render_out.mp4'}",
-            "job_id": None,
-        }
-
-    # If provider is configured for asynchronous jobs
-    active_job_id = params.get("active_job_id") or kwargs.get("active_job_id")
-    if active_job_id:
-        return {"status": "pending", "job_id": active_job_id}
-
-    # Fail closed for unconfigured live rendering without fabricating synthetic success
-    provider = params.get("provider") or os.environ.get("HERMES_VIDEO_PROVIDER", "").strip()
-    if not provider:
-        return {
-            "status": "failed",
-            "error": "PROVIDER_NOT_CONFIGURED: No live video render provider configured",
-            "code": "VF_PROVIDER_UNAVAILABLE",
-        }
-
-    job_id = f"job_render_{idempotency_key or os.urandom(4).hex()}"
-    return {"status": "pending", "job_id": job_id}
+    """Hermes wire compatibility adapter for video rendering (truthful fail-closed)."""
+    return {
+        "ok": False,
+        "status": "failed",
+        "error": "PROVIDER_UNAVAILABLE: No live video render provider configured or active",
+        "code": "VF_PROVIDER_UNAVAILABLE",
+    }
 
 
 def export(
@@ -591,61 +617,31 @@ def export(
     project_id: str = "",
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """Hermes wire compatibility adapter for video export (fail-closed offline)."""
-    params = dict(export_params or {})
-    r_res = dict(render_result or {})
-    mock_url = params.get("mock_export_url") or params.get("export_url")
-    mock_id = params.get("mock_export_id") or params.get("export_id")
-    if mock_url or mock_id:
-        return {
-            "status": "completed",
-            "export_id": mock_id or f"export_{idempotency_key or 'out'}",
-            "export_url": mock_url or f"asset://exports/{mock_id or 'export_out.mp4'}",
-            "job_id": None,
-        }
-
-    active_job_id = params.get("active_job_id") or kwargs.get("active_job_id")
-    if active_job_id:
-        return {"status": "pending", "job_id": active_job_id}
-
-    provider = params.get("provider") or os.environ.get("HERMES_EXPORT_PROVIDER", "").strip()
-    if not provider:
-        return {
-            "status": "failed",
-            "error": "PROVIDER_NOT_CONFIGURED: No live video export provider configured",
-            "code": "VF_EXPORT_UNAVAILABLE",
-        }
-
-    job_id = f"job_export_{idempotency_key or os.urandom(4).hex()}"
-    return {"status": "pending", "job_id": job_id}
+    """Hermes wire compatibility adapter for video export (truthful fail-closed)."""
+    return {
+        "ok": False,
+        "status": "failed",
+        "error": "PROVIDER_UNAVAILABLE: No live video export provider configured or active",
+        "code": "VF_EXPORT_UNAVAILABLE",
+    }
 
 
 def get_job_status(job_id: str, **kwargs: Any) -> dict[str, Any]:
     """Hermes wire compatibility adapter for polling asynchronous video job status."""
     if not job_id or not str(job_id).strip():
-        return {"status": "failed", "error": "MISSING_JOB_ID", "code": "MISSING_JOB_ID"}
-
-    # In safe offline mode, jobs return deterministic fail-closed or completion status
-    if "completed" in job_id or "success" in job_id:
         return {
-            "status": "completed",
-            "job_id": job_id,
-            "video_url": f"asset://videos/{job_id}.mp4",
-            "export_url": f"asset://exports/{job_id}.mp4",
-        }
-    if "failed" in job_id or "error" in job_id:
-        return {
+            "ok": False,
             "status": "failed",
-            "job_id": job_id,
-            "error": f"Job {job_id} failed permanently",
-            "code": "VF_JOB_FAILED",
+            "error": "MISSING_JOB_ID: job_id is required",
+            "code": "MISSING_JOB_ID",
         }
 
     return {
+        "ok": False,
         "status": "failed",
         "job_id": job_id,
-        "error": f"Job {job_id} provider unreachable in offline test environment",
-        "code": "VF_PROVIDER_UNREACHABLE",
+        "error": f"JOB_NOT_FOUND: Job {job_id} not found in durable storage",
+        "code": "VF_JOB_NOT_FOUND",
     }
 
 
