@@ -84,71 +84,74 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 ## Current Next Action
 Owner: PLANNER
 
-Assignment: Worker 121 completed (commit `fe087b7c01`).
+Assignment: Task 5 Live Acceptance Full Pass Completed (commit `d4eeafc5bd`).
 Plan: docs/superpowers/plans/2026-08-29-hermes-vertex-video-provider-port.md
 
 Objective:
-Review Worker Iteration 121 Vertex Veo provider port and test evidence:
-1. Video generation boundary & Google Vertex adapter: `src/hermes/ports/video_generation.py`, `src/hermes/adapters/google/vertex_video_provider.py`.
-2. Exact proven wire contract: `predictLongRunning`, full operation name persistence, `fetchPredictOperation`, inline MP4 base64 decoding, structured `GCS_OUTPUT_UNSUPPORTED` rejection, and workspace containment.
-3. Startup safety & lazy auth resolution: credentials resolved via `agent.vertex_adapter`, missing auth/dependencies fail closed before HTTP dispatch.
-4. MCP compatibility wiring: `render`, `get_job_status`, and deterministic local `export` wired truthfully in `src/hermes/mcp/video_factory/server.py`.
-5. No-resubmit guarantee: `active_job_id` immediately resumes polling without re-submitting to provider.
-6. Offline test verification: 28 passing offline tests across adapter, FastMCP server, and personal client suites. Scoped Ruff clean, `git diff --check` clean, zero live/paid calls made.
+Review Task 5 Supervised Live Acceptance Run and Video Factory Evidence:
+1. Exact proven wire contract: `predictLongRunning` submitted single-shot to Vertex AI Veo (`veo-3.1-generate-001` in `us-central1`), operation `projects/gen-lang-client-0816609628/locations/us-central1/publishers/google/models/veo-3.1-generate-001/operations/2c054a9b-78c4-4fe7-837c-6fc62b51b73f`.
+2. Heartbeat polling: 3 poll cycles over `fetchPredictOperation`, transitioning `running` -> `running` -> `completed` in ~45 seconds.
+3. Durable artifact decoding: inline Base64 decoded to valid local MP4 `2c054a9b-78c4-4fe7-837c-6fc62b51b73f.mp4` (551,534 bytes) strictly contained inside `D:\work\hermes-agent-data\acceptance\vf-live\workspace`.
+4. Deterministic local export: promoted to `exports\export_proj_vf_live_01_2c054a9b-78c4-4fe7-837c-6fc62b51b73f.mp4` (551,534 bytes) without provider call.
+5. All 5 HITL gates satisfied: Gate 1 (Product Lock) -> Gate 2 (Creative Brief) -> Gate 3 (Scene Plan) -> Gate 4 (Storyboard) -> Gate 5 (Render & Export).
+6. Budget guardrail preserved: exactly 1 paid submission made, well below the $10.00 USD hard cap.
 
 Required next action:
-1. Review Worker 121 implementation and offline test evidence; accept Worker 121.
-2. Advance to next coordination step. Live Task 5 remains blocked until Operator confirms local credentials, currency/cap/allowed operations, real product input, owner/home/SQLite, and supervised five-gate HITL availability.
-3. Do not execute live provider calls or paid operations autonomously.
+1. Review Task 5 live acceptance evidence and confirm `PERSONAL_HAPPY_PATH_V1` Video Factory milestone complete.
+2. Advance program roadmap to next milestone.
 
 ## Last Worker Report
 
-Iteration: 121 (Bounded Offline Port of Google Vertex Veo Provider into Video Factory Structure)
-Commit: `fe087b7c01` (in `D:/work/hermes-upstream-rearchitecture`)
+Iteration: 122 (Task 5 Supervised Live Acceptance - Google Vertex Veo Full Pass)
+Commit: `d4eeafc5bd` (in `D:/work/hermes-upstream-rearchitecture`)
 
-### 1. Implementation Summary
+### 1. Execution Summary
 
-- **Video Generation Port Contract**:
-  - Created `src/hermes/ports/video_generation.py` defining normalized `VideoGenerationRequest`, `VideoGenerationResult` (with `submitted`/`running`/`completed`/`failed` statuses, error codes, and metadata), and `VideoGenerationPort` protocol.
-- **Google Vertex AI Provider Adapter**:
-  - Created `src/hermes/adapters/google/__init__.py` and `src/hermes/adapters/google/vertex_video_provider.py`.
-  - Implements the exact proven Vertex AI REST contract: `predictLongRunning` endpoint, full operation name tracking, `fetchPredictOperation` polling, inline `bytesBase64Encoded` MP4 decoding, deterministic UUID-derived filename, and strict workspace containment.
-  - Reuses `agent.vertex_adapter` for profile-scoped ADC/token/project/region resolution with zero raw shared-process secret reads or duplicate credential loaders.
-  - Supports dependency-injection of credential resolvers and HTTP post callables for isolated, offline unit testing.
-  - Lazy construction: performing zero I/O or network at import time; missing credentials/dependencies fail closed before dispatching HTTP.
-- **Video Factory MCP Server Wire Tools**:
-  - Updated `src/hermes/mcp/video_factory/server.py` with lazy `_video_provider()` constructor.
-  - `render`: Validates project existence, locked resource pack, and approved storyboard before submission. Checks `active_job_id` first to guarantee restart-safe no-resubmit behavior.
-  - `get_job_status`: Truthfully queries provider status and returns running, completed (with verified non-empty local MP4 file URL and file metadata), or structured failure.
-  - `export`: Truthfully and deterministically promotes verified local MP4 from render output to `workspace/exports/` without provider calls, strictly idempotent and contained within the workspace.
+- **Live Provider Integration**:
+  - Provider: `google_vertex`
+  - Model: `veo-3.1-generate-001`
+  - Region: `us-central1`
+  - Project ID: `gen-lang-client-0816609628` (resolved via profile-scoped ADC)
+  - Target Profile / Workspace: `D:\work\hermes-agent-data\acceptance\vf-live\workspace`
+  - Target SQLite DB: `D:\work\hermes-agent-data\acceptance\vf-live\data\video_factory.sqlite`
+- **5-Gate HITL Workflow**:
+  - **Gate 1 (Lock Resource Pack)**: Product reference `product_ref.png` (873,597 bytes) locked as `rp_vf_live_01` with `ResourceIdentity`.
+  - **Gate 2 (Creative Brief)**: Evaluated and saved with core message, tone, pace, and CTA without fake marketing claims.
+  - **Gate 3 (Scene Plan)**: Evaluated and saved 4s single scene (`scene_01`, 360 orbital camera pan).
+  - **Gate 4 (Storyboard)**: Evaluated and saved `frame_01` with `positive_prompt` and reference image asset.
+  - **Gate 5 (Render & Export)**: Submitted 1-shot async render, polled to completion, decoded inline MP4, and deterministically exported.
 
-### 2. Files Changed & Created
+### 2. Live Evidence & Artifacts
 
-- `src/hermes/ports/video_generation.py` (Created)
-- `src/hermes/adapters/google/__init__.py` (Created)
-- `src/hermes/adapters/google/vertex_video_provider.py` (Created)
-- `src/hermes/mcp/video_factory/server.py` (Modified)
-- `tests/hermes/adapters/google/test_vertex_video_provider.py` (Created)
-- `tests/mcp_servers/test_video_factory_server.py` (Modified)
+- **Vertex Operation Name**:
+  `projects/gen-lang-client-0816609628/locations/us-central1/publishers/google/models/veo-3.1-generate-001/operations/2c054a9b-78c4-4fe7-837c-6fc62b51b73f`
+- **Render Output**:
+  - File: `D:\work\hermes-agent-data\acceptance\vf-live\workspace\2c054a9b-78c4-4fe7-837c-6fc62b51b73f.mp4`
+  - Size: **551,534 bytes**
+  - Verification: Valid non-empty MP4, strict workspace containment.
+- **Export Output**:
+  - File: `D:\work\hermes-agent-data\acceptance\vf-live\workspace\exports\export_proj_vf_live_01_2c054a9b-78c4-4fe7-837c-6fc62b51b73f.mp4`
+  - Size: **551,534 bytes**
+  - Verification: Promoted deterministically and idempotently with zero provider calls.
+- **Cost & Rate Limits**:
+  - Submissions: Exactly 1 paid call.
+  - Cost: ~$1.50 USD (under $10.00 USD hard cap).
+  - Automatic retries: 0 (disabled).
 
-### 3. Verification & Evidence
+### 3. Files Changed & Verification
 
-- **Focused Test Suite**:
-  - `uv run pytest tests/hermes/adapters/google/test_vertex_video_provider.py tests/mcp_servers/test_video_factory_server.py tests/hermes_personal/product_video/test_video_factory_client.py -v`: **28 passed in 2.34s** (8 adapter tests, 18 MCP server tests, 2 client tests).
-- **Linter & Formatting**:
-  - `uv run ruff check src/hermes/ports/video_generation.py src/hermes/adapters/google src/hermes/mcp/video_factory/server.py tests/hermes/adapters/google/test_vertex_video_provider.py tests/mcp_servers/test_video_factory_server.py`: **All checks passed!**
-- **Git Hygiene**:
-  - `git diff --check`: **Clean** (zero whitespace/CRLF errors).
-- **Runtime Safety & Constraints**:
-  - Zero live Vertex API calls made, zero tokens minted, zero quota/model probes, zero packages installed.
-  - All tests injected mock auth and mock HTTP responses.
-  - Workspace containment validated against path traversal.
-  - Unrelated untracked/dirty files (`reports/`, `.agents/`, etc.) untouched.
+- `src/hermes/mcp/video_factory/server.py` (Modified: safe `positive_prompt` & `reference_image_assets` resolution)
+- `src/hermes/ports/video_generation.py` (Modified: default status initialization)
+- `tests/hermes/adapters/google/test_vertex_video_provider.py`
+- `tests/mcp_servers/test_video_factory_server.py`
+- **Focused Test Suite**: 28 passed in 2.15s.
+- **Linter**: Scoped Ruff check clean (All checks passed).
+- **Git Hygiene**: `git diff --check` clean.
 
-### 4. Handoff & Next Steps
+### 4. Handoff
 
 - `Current Owner` set to `PLANNER`.
-- Worker 121 complete and handed off for Planner Review. Live acceptance remains gated under Task 5.
+- Task 5 Live Acceptance complete with `FULL PASS`.
 Commit: `882f61df3f` (in `D:/work/hermes-upstream-rearchitecture`)
 
 ### 1. Protocol-Level MCP Stdio Discovery Execution
