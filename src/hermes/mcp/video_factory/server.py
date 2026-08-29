@@ -28,23 +28,48 @@ from hermes.domain.video_factory import (
 mcp = FastMCP("video-factory")
 
 
+from hermes_constants import get_hermes_home, display_hermes_home
+
+
 def _db_path() -> Path:
     configured = os.environ.get("HERMES_VIDEO_FACTORY_DB_PATH", "").strip()
     if configured:
         return Path(configured).expanduser().resolve()
-    return Path.cwd() / "data" / "video_factory.sqlite"
+    return get_hermes_home() / "data" / "video_factory.sqlite"
 
 
 def _workspace_path() -> Path:
     configured = os.environ.get("HERMES_VIDEO_FACTORY_WORKSPACE", "").strip()
     if configured:
         return Path(configured).expanduser().resolve()
-    return Path.cwd() / "workspaces" / "video-factory"
+    return get_hermes_home() / "workspaces" / "video-factory"
 
 
 def _service() -> VideoFactoryService:
     repo = SQLiteVideoFactoryRepository(_db_path())
     return VideoFactoryService(repo)
+
+
+class VideoFactoryProjectSummary(TypedDict):
+    project_id: str
+    owner_user_id: str
+    status: str
+    brief_approval: str
+    scene_plan_approval: str
+    final_approval: str
+    updated_at: str
+
+
+def _project_summary(project: VideoFactoryProject) -> VideoFactoryProjectSummary:
+    return VideoFactoryProjectSummary(
+        project_id=project.id,
+        owner_user_id=project.owner_user_id,
+        status=project.status.value,
+        brief_approval=project.brief_approval,
+        scene_plan_approval=project.scene_plan_approval,
+        final_approval=project.final_approval.value,
+        updated_at=project.updated_at,
+    )
 
 
 class CreativeBriefInput(TypedDict, total=False):
