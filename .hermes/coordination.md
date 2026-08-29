@@ -84,14 +84,71 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 ## Current Next Action
 Owner: PLANNER
 
-Assignment: Awaiting Planner Review of Worker 120 (Protocol-level MCP stdio schema discovery and clean VF wire schemas).
+Assignment: Worker 121 completed (commit `fe087b7c01`).
+Plan: docs/superpowers/plans/2026-08-29-hermes-vertex-video-provider-port.md
 
-Target Goal:
-Review the protocol-level MCP stdio discovery evidence and wire schemas for `hermes_video_factory` and `product_intelligence`. Verify that all wire tools (`create_brief`, `create_scene_plan`, `create_storyboard`, `render`, `export`, `get_job_status` for VF, and `get_product_research`, `build_resource_pack`, `get_resource_pack`, `lock_resource_pack`, `get_resource_pack_lock` for PI) expose clean typed schemas with explicit top-level fields (including `scenes` and `frames`), without synthetic required `kwargs`, across real stdio client sessions in isolated environments.
+Objective:
+Review Worker Iteration 121 Vertex Veo provider port and test evidence:
+1. Video generation boundary & Google Vertex adapter: `src/hermes/ports/video_generation.py`, `src/hermes/adapters/google/vertex_video_provider.py`.
+2. Exact proven wire contract: `predictLongRunning`, full operation name persistence, `fetchPredictOperation`, inline MP4 base64 decoding, structured `GCS_OUTPUT_UNSUPPORTED` rejection, and workspace containment.
+3. Startup safety & lazy auth resolution: credentials resolved via `agent.vertex_adapter`, missing auth/dependencies fail closed before HTTP dispatch.
+4. MCP compatibility wiring: `render`, `get_job_status`, and deterministic local `export` wired truthfully in `src/hermes/mcp/video_factory/server.py`.
+5. No-resubmit guarantee: `active_job_id` immediately resumes polling without re-submitting to provider.
+6. Offline test verification: 28 passing offline tests across adapter, FastMCP server, and personal client suites. Scoped Ruff clean, `git diff --check` clean, zero live/paid calls made.
+
+Required next action:
+1. Review Worker 121 implementation and offline test evidence; accept Worker 121.
+2. Advance to next coordination step. Live Task 5 remains blocked until Operator confirms local credentials, currency/cap/allowed operations, real product input, owner/home/SQLite, and supervised five-gate HITL availability.
+3. Do not execute live provider calls or paid operations autonomously.
 
 ## Last Worker Report
 
-Iteration: 120 (Protocol-Level MCP Stdio Discovery & Clean VF Wire Schemas)
+Iteration: 121 (Bounded Offline Port of Google Vertex Veo Provider into Video Factory Structure)
+Commit: `fe087b7c01` (in `D:/work/hermes-upstream-rearchitecture`)
+
+### 1. Implementation Summary
+
+- **Video Generation Port Contract**:
+  - Created `src/hermes/ports/video_generation.py` defining normalized `VideoGenerationRequest`, `VideoGenerationResult` (with `submitted`/`running`/`completed`/`failed` statuses, error codes, and metadata), and `VideoGenerationPort` protocol.
+- **Google Vertex AI Provider Adapter**:
+  - Created `src/hermes/adapters/google/__init__.py` and `src/hermes/adapters/google/vertex_video_provider.py`.
+  - Implements the exact proven Vertex AI REST contract: `predictLongRunning` endpoint, full operation name tracking, `fetchPredictOperation` polling, inline `bytesBase64Encoded` MP4 decoding, deterministic UUID-derived filename, and strict workspace containment.
+  - Reuses `agent.vertex_adapter` for profile-scoped ADC/token/project/region resolution with zero raw shared-process secret reads or duplicate credential loaders.
+  - Supports dependency-injection of credential resolvers and HTTP post callables for isolated, offline unit testing.
+  - Lazy construction: performing zero I/O or network at import time; missing credentials/dependencies fail closed before dispatching HTTP.
+- **Video Factory MCP Server Wire Tools**:
+  - Updated `src/hermes/mcp/video_factory/server.py` with lazy `_video_provider()` constructor.
+  - `render`: Validates project existence, locked resource pack, and approved storyboard before submission. Checks `active_job_id` first to guarantee restart-safe no-resubmit behavior.
+  - `get_job_status`: Truthfully queries provider status and returns running, completed (with verified non-empty local MP4 file URL and file metadata), or structured failure.
+  - `export`: Truthfully and deterministically promotes verified local MP4 from render output to `workspace/exports/` without provider calls, strictly idempotent and contained within the workspace.
+
+### 2. Files Changed & Created
+
+- `src/hermes/ports/video_generation.py` (Created)
+- `src/hermes/adapters/google/__init__.py` (Created)
+- `src/hermes/adapters/google/vertex_video_provider.py` (Created)
+- `src/hermes/mcp/video_factory/server.py` (Modified)
+- `tests/hermes/adapters/google/test_vertex_video_provider.py` (Created)
+- `tests/mcp_servers/test_video_factory_server.py` (Modified)
+
+### 3. Verification & Evidence
+
+- **Focused Test Suite**:
+  - `uv run pytest tests/hermes/adapters/google/test_vertex_video_provider.py tests/mcp_servers/test_video_factory_server.py tests/hermes_personal/product_video/test_video_factory_client.py -v`: **28 passed in 2.34s** (8 adapter tests, 18 MCP server tests, 2 client tests).
+- **Linter & Formatting**:
+  - `uv run ruff check src/hermes/ports/video_generation.py src/hermes/adapters/google src/hermes/mcp/video_factory/server.py tests/hermes/adapters/google/test_vertex_video_provider.py tests/mcp_servers/test_video_factory_server.py`: **All checks passed!**
+- **Git Hygiene**:
+  - `git diff --check`: **Clean** (zero whitespace/CRLF errors).
+- **Runtime Safety & Constraints**:
+  - Zero live Vertex API calls made, zero tokens minted, zero quota/model probes, zero packages installed.
+  - All tests injected mock auth and mock HTTP responses.
+  - Workspace containment validated against path traversal.
+  - Unrelated untracked/dirty files (`reports/`, `.agents/`, etc.) untouched.
+
+### 4. Handoff & Next Steps
+
+- `Current Owner` set to `PLANNER`.
+- Worker 121 complete and handed off for Planner Review. Live acceptance remains gated under Task 5.
 Commit: `882f61df3f` (in `D:/work/hermes-upstream-rearchitecture`)
 
 ### 1. Protocol-Level MCP Stdio Discovery Execution
@@ -144,32 +201,66 @@ Files Changed in Commit `882f61df3f`:
 - `tests/mcp_servers/test_video_factory_server.py`
 
 ## Last Planner Review
-Iteration: 122
+Iteration: 125
 
 Decision:
-REWORK
+CONTINUE
 
 Assessment:
-- Accept the bounded static startup-safety finding and tool-name discovery: PI exposes 11 tools and local VF exposes 23 tools without invoking business/provider operations.
-- Reject the claim that actual wire schemas were verified. The transcript's VF `tools/list` objects were serialized with the wrong attribute names and every reported `inputSchema`/`outputSchema` was `{}` or `None`; the final parameter lists were inferred from source/function signatures rather than proven over the MCP protocol.
-- PI discovery also used direct in-process import/listing rather than a real stdio MCP client session. This does not prove that the launch command, protocol handshake, and schemas work together as configured.
-- In particular, `create_scene_plan` and `create_storyboard` receive `scenes`/`frames` through `**kwargs`; protocol-level schema evidence is required to prove clients can send those top-level fields.
+- Operator confirmed the intended implementation direction: Google Vertex AI is the canonical provider path, with the previously live-tested implementation used only as refactoring reference and `D:/work/hermes-upstream-rearchitecture` as the sole writable code target.
+- Static Git provenance review found commit `d975d948c6` in shared repository history. Its reports record a real `google_vertex` / `veo-3.1-generate-001` run in `us-central1`, full Vertex operation-name persistence, a non-empty 4-second MP4, and a canonical Video Factory E2E reaching `ready_to_publish` without publishing.
+- The later commit `f19a1494d4` changed a default to `veo-3.1-fast-generate-001` for cost routing, but that is not the strongest live acceptance evidence. Worker 121 must first port the exact proven standard model contract; cost-tier changes remain separate.
+- Current source already contains durable upstream polling/checkpoint/budget behavior in `hermes_personal/product_video/handlers.py`; the missing piece is the provider capability behind the fail-closed VF wire tools. A new workflow or job system would be duplication.
+- This authorization is implementation/offline-test only. It does not authorize credential reads beyond injected tests, token minting, provider/model probing, paid generation, browser automation, live export or publish.
 
 Evidence:
-- SSOT SHA256 at review start `B0F3B7EBADCE166BED48E78942FAD6D9D40F1FA64888E3E42193E1CFBF5AF9E4`; owner PLANNER; Worker marker 119.
-- Static review covered Worker 119 report and transcript. Transcript lines for VF show `inputSchema: {}` followed by `in None` for all 23 tools, while the report nevertheless claims parameter-schema alignment.
-- Transcript shows PI and VF were inspected by importing server modules and calling FastMCP `list_tools()` in-process; no protocol-level stdio `ClientSession.initialize/tools/list` evidence was recorded.
-- Worker reported 21 focused tests, scoped Ruff, clean diff-check, zero provider calls/spend. Planner did not rerun them.
-- Launcher PID `2080` and worker lock were absent and `git status --short` was empty before this review write and dispatch.
-- Planner ran no tests, Python, runtime, build or provider calls.
+- SSOT pre-write SHA256 `DC36C39E286ED39F8B3B8023BA4E5A1DE495D5AB713AAFEBA5501354DF208EE6`; owner PLANNER; Worker marker 120; Planner marker 124.
+- `D:/work/hermes-upstream-rearchitecture` is a linked worktree on branch `codex/hermes-upstream-rearchitecture`; `D:/work/hermes-agent` is a different dirty worktree sharing the same Git object database. No file in the reference worktree was modified.
+- Worker lock absent and no prior worker/launcher process active before assignment.
+- Static review covered current VF domain/service/MCP wire tools, existing product-video polling/checkpoint/budget code, `agent.vertex_adapter`, and legacy commit files/reports. Planner ran no tests, Python, runtime, build, discovery, token mint or provider call.
 
 Scope Adjustment:
-Keep Worker 118 VF behavior accepted. Rework only protocol-level schema evidence and, only if proven necessary, the smallest local VF compatibility-schema fix. Live/business/provider calls remain unauthorized.
+Treat provider/source/model selection as satisfied for a bounded offline integration turn. Keep the remaining live-acceptance inputs blocked and separate. Port/refactor only the smallest Vertex capability into current `src/hermes` structure; do not merge/cherry-pick legacy work or mutate `D:/work/hermes-agent`.
 
 Next Step:
-Worker 120 completes the five-point protocol discovery correction and hands off exact schemas or a fail-closed blocker.
+Worker 121 executes `docs/superpowers/plans/2026-08-29-hermes-vertex-video-provider-port.md`, commits the bounded offline implementation/tests, records evidence in SSOT, returns ownership to PLANNER, and exits without any live/provider operation.
+
+## Prior Planner Review (Iteration 124)
+Iteration: 124
+
+Decision:
+BLOCKED
+
+Assessment:
+- Accept Worker 120 commit `882f61df3f` and the corrected protocol-level discovery evidence. The later successful transcript establishes real MCP stdio initialization and `tools/list` for PI (`product-intelligence` 1.29.1) and VF (`video-factory`), with typed input schemas for all required wire tools.
+- Accept the minimal VF signature correction: `scenes` and `frames` are explicit top-level wire fields, synthetic `kwargs` is removed, and no canonical domain/service behavior changed.
+- The earlier PI wrong-interpreter attempt failed closed; the subsequent run used the PI repository virtualenv and completed protocol discovery. No business/provider tool was invoked.
+- Task 4 source/provenance/startup/schema/discovery gate is now accepted. Overall MVP remains blocked because VF `render`/`export` intentionally fail closed without a real provider integration, and Task 5 requires Operator-selected provider, credentials, spending authority, real product input, run identity/home, and supervised approvals.
+
+Evidence:
+- SSOT SHA256 at review start `02635504F57CA0BA2BEB3AFB08FBC62B35DCA2DDDBEE64A40272DD5AD7D039A3`; owner PLANNER; Worker marker 120.
+- Static review covered commit `882f61df3f`, its two-file diff, Worker 120 transcript, the failed first PI attempt, and the later successful protocol output for both servers.
+- Successful transcript records protocol version `2025-11-25`, PI server `product-intelligence` version `1.29.1`, VF server `video-factory`, and non-empty JSON `inputSchema` objects including explicit VF `scenes`/`frames` and exact PI durable IDs.
+- Worker reported 22 focused offline tests passing, scoped Ruff and diff-check. Planner did not rerun them.
+- Scheduler recorded run `24e9a4601c2641378399cbe9c37d039f` exit code 0; PID `1648` and worker lock are absent; relevant repository status is stable.
+- Planner ran no tests, Python, runtime, build, discovery, or provider calls.
+
+Scope Adjustment:
+Close Task 4. Do not dispatch Task 5 until all five Operator inputs are explicit. Provider integration may be implemented only after the intended provider/source is selected; live execution remains bounded by the approved cap and HITL gates.
+
+Next Step:
+Operator supplies the five Task 5 inputs listed in Current Next Action. Planner then creates one bounded provider-integration/live-acceptance assignment; no work is dispatched before that authorization.
 
 ## History
+
+### Iteration 125 Planner
+2026-08-29: Operator confirmed Google Vertex as the canonical Video Factory provider direction and required `D:/work/hermes-upstream-rearchitecture` to remain the only writable implementation worktree, with `D:/work/hermes-agent` read-only reference. Static provenance identified the previously live-proven `google_vertex` / `veo-3.1-generate-001` implementation at commit `d975d948c6`. Decision CONTINUE: reopened IN_PROGRESS and assigned Worker 121 a bounded offline port/refactor with focused injected tests only. No token, provider, generation, render, export-provider, publish, runtime, build or broad discovery authorized.
+
+### Iteration 124 Planner
+2026-08-29T10:30:30.191Z: Accepted Worker 120 commit `882f61df3f` and later successful real-stdio schema evidence after the launcher exited naturally. Task 4 is closed. Decision BLOCKED for Task 5 pending intended provider/integration source, local credential confirmation, exact currency/cap/allowed operations, selected real product plus owner/home/SQLite, and supervised HITL availability. No live/business/provider calls or worker dispatch.
+
+### Iteration 123 Planner
+2026-08-29T10:25:30.127Z: Decision BLOCKED after Worker 120 launcher PID `1648` and run lock remained active for three consecutive post-handoff heartbeat checks. Requested explicit Operator authorization to terminate only that run's process tree and remove only its lock after confirming process absence. Commit `882f61df3f` and report remain pending final static review; no tests/runtime/providers or destructive source operations performed.
 
 ### Iteration 120 Worker
 2026-08-29T10:14:00.000Z: Completed Worker 120 (commit `882f61df3f`). Performed MCP stdio protocol discovery via real stdio ClientSessions over subprocess streams for PI and VF. Reconciled VF compatibility signatures: explicitly declared top-level `scenes` and `frames`, and removed `**kwargs` so that FastMCP generates clean JSON wire schemas without synthetic required `"kwargs"`. Captured exact protocol inputSchemas for all 6 VF compatibility tools and 5 PI bridge tools. Added schema regression test to test suite; verified 22 focused tests passing in 2.39s, clean Ruff and clean diff check. Handoff to PLANNER.
