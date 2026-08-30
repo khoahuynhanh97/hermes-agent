@@ -9,7 +9,7 @@ IN_PROGRESS
 Program Continuation - Personal Happy Path and Bounded Hardening
 
 ## Current Owner
-PLANNER
+WORKER
 
 ## Continuation Scope
 
@@ -82,23 +82,98 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 ---
 
 ## Current Next Action
-Owner: PLANNER
+Owner: WORKER
 
-Assignment: Task 5 Live Acceptance Full Pass Completed (commit `d4eeafc5bd`).
-Plan: docs/superpowers/plans/2026-08-29-hermes-vertex-video-provider-port.md
+Assignment ID: `ARCH-G2-CANONICAL-OWNERSHIP-AUDIT`
+Assignment Status: `READY`
 
 Objective:
-Review Task 5 Supervised Live Acceptance Run and Video Factory Evidence:
-1. Exact proven wire contract: `predictLongRunning` submitted single-shot to Vertex AI Veo (`veo-3.1-generate-001` in `us-central1`), operation `projects/gen-lang-client-0816609628/locations/us-central1/publishers/google/models/veo-3.1-generate-001/operations/2c054a9b-78c4-4fe7-837c-6fc62b51b73f`.
-2. Heartbeat polling: 3 poll cycles over `fetchPredictOperation`, transitioning `running` -> `running` -> `completed` in ~45 seconds.
-3. Durable artifact decoding: inline Base64 decoded to valid local MP4 `2c054a9b-78c4-4fe7-837c-6fc62b51b73f.mp4` (551,534 bytes) strictly contained inside `D:\work\hermes-agent-data\acceptance\vf-live\workspace`.
-4. Deterministic local export: promoted to `exports\export_proj_vf_live_01_2c054a9b-78c4-4fe7-837c-6fc62b51b73f.mp4` (551,534 bytes) without provider call.
-5. All 5 HITL gates satisfied: Gate 1 (Product Lock) -> Gate 2 (Creative Brief) -> Gate 3 (Scene Plan) -> Gate 4 (Storyboard) -> Gate 5 (Render & Export).
-6. Budget guardrail preserved: exactly 1 paid submission made, well below the $10.00 USD hard cap.
+Audit canonical ownership across upstream Hermes, `hermes_personal`, and
+`src/hermes`. Determine which code belongs to the single canonical upstream
+`run_agent.AIAgent` runtime and which code is an edge capability, durable
+workflow support, duplicate-runtime candidate, or packaging orphan.
 
-Required next action:
-1. Review Task 5 live acceptance evidence and confirm `PERSONAL_HAPPY_PATH_V1` Video Factory milestone complete.
-2. Advance program roadmap to next milestone.
+Target architecture constraints:
+- `run_agent.AIAgent` is the only canonical conversational brain.
+- Existing upstream CLI, gateway, TUI, desktop, and serve surfaces remain the
+  canonical ingress/runtime surfaces unless contrary runtime evidence is found.
+- Knowledge Base and Video Factory are bounded edge capabilities.
+- Skills describe procedures; tools/MCP perform structured external actions.
+- Workflow code owns only required durable sequencing, checkpoints, retries,
+  restart recovery, and HITL state.
+- Do not assume a second general-purpose turn service, gateway, router,
+  conversation runtime, memory platform, or process topology is canonical.
+
+Required audit scope:
+- `run_agent.py`
+- `cli.py`
+- `gateway/**`
+- `hermes_cli/**`
+- `agent/skill_commands.py`
+- `plugins/**`
+- `hermes_personal/**`
+- `src/hermes/**`
+- `pyproject.toml`
+- tests that exercise modules inside the discovered runtime closure
+- existing runtime-truth and architecture reports
+
+For each responsibility record:
+- current owner and exact symbol/file;
+- production caller and entry path;
+- packaging/import status;
+- runtime evidence and evidence level;
+- overlap with upstream;
+- required capability consumer;
+- proposed classification and confidence.
+
+Allowed classifications:
+- `KEEP_UPSTREAM_CANONICAL`
+- `KEEP_AS_PERSONAL_CAPABILITY`
+- `KEEP_AS_DURABLE_CAPABILITY_SUPPORT`
+- `PORT_TO_PLUGIN_EDGE`
+- `PORT_TO_MCP_EDGE`
+- `CORE_PATCH_NOT_REQUIRED`
+- `RUNTIME_DUPLICATE_CANDIDATE`
+- `PACKAGING_ORPHAN`
+- `UNKNOWN_NEEDS_EVIDENCE`
+
+Evidence levels:
+- `CONFIRMED`
+- `TESTED`
+- `DECLARED_ONLY`
+- `UNKNOWN`
+
+Required outputs under `reports/personal-assistant-architecture/`:
+- `canonical-ownership-matrix.csv`
+- `runtime-removal-candidates.md`
+- `target-runtime-flow.md`
+- `happy-path-gap-matrix.md`
+- `next-implementation-slice.md`
+
+Constraints:
+- Audit only: do not implement ownership decisions.
+- No cleanup, deletion, move, refactor, or new architecture.
+- No paid provider calls and no production Telegram messages.
+- Preserve all pre-existing tracked and untracked worktree changes byte-for-byte.
+- The only permitted new/modified files are the five required audit artifacts
+  and the Worker handoff update to this coordination file.
+- `UNKNOWN` is not `DEAD`.
+- Tests do not by themselves prove production reachability.
+- A `ProcessSpec`, documented route, or configured command is `DECLARED_ONLY`
+  unless runtime observation proves otherwise.
+- Do not claim the historical 663-test result as a fresh ARCH-G2 verification.
+
+Success criteria:
+1. Every general runtime responsibility has one proposed canonical owner.
+2. Every duplicate candidate has exact source, caller, packaging, and evidence.
+3. Upstream `AIAgent`-to-capability gaps are explicitly identified.
+4. Packaging orphans are distinguished from reachable runtime code.
+5. Task 5 remains accepted only at provider-capability level.
+6. The smallest safe implementation slice after the audit is specified without
+   implementing it.
+7. Worker records exact files inspected, commands used, evidence levels, and
+   unresolved unknowns in the handoff.
+8. Worker returns `Current Owner` to `PLANNER` after completing the artifacts.
 
 ## Last Worker Report
 
@@ -204,6 +279,47 @@ Files Changed in Commit `882f61df3f`:
 - `tests/mcp_servers/test_video_factory_server.py`
 
 ## Last Planner Review
+Iteration: 126
+
+Decision:
+`VIDEO_PROVIDER_CAPABILITY_ACCEPTED`; dispatch
+`ARCH-G2-CANONICAL-OWNERSHIP-AUDIT`.
+
+Assessment:
+- Accept Task 5 only as proof that the bounded Google Vertex Veo provider path
+  can submit one real operation, poll it to completion, decode a valid local
+  MP4, and promote the artifact deterministically.
+- Do not accept complete `PERSONAL_HAPPY_PATH_V1`. Current evidence does not
+  prove a production-reachable upstream `AIAgent` path through real product
+  discovery, governed knowledge retrieval, Video Factory orchestration, and a
+  unified enforced budget ledger.
+- Canonical ownership must be audited before cleanup or further architecture is
+  added. In particular, `hermes_personal` runtime surfaces and `src/hermes`
+  packaging/reachability require evidence-based classification against the
+  existing upstream runtime.
+
+Evidence:
+- Implementation commit: `d4eeafc5bd4034509212dfc42510224b5b5543dd`.
+- Task 5 coordination handoff/current pre-dispatch HEAD:
+  `b193b1d07e800d7109e77f5ae5f61fa66f2fb454`.
+- Worker evidence records one completed Vertex operation and matching render
+  and export artifacts of 551,534 bytes.
+- The reported 663 `hermes_personal` tests are historical evidence and were not
+  rerun by this Planner review.
+- Planner performed static/read-only review only; no provider call, production
+  Telegram action, source modification, or test execution was performed.
+
+Scope Adjustment:
+Close Task 5 at provider-capability level. Keep overall personal happy-path
+acceptance open. The next step is ownership audit, not implementation or
+cleanup.
+
+Next Step:
+Worker executes `ARCH-G2-CANONICAL-OWNERSHIP-AUDIT`, creates only the five
+required artifacts, updates the handoff evidence, returns ownership to Planner,
+and exits.
+
+## Prior Planner Review (Iteration 125)
 Iteration: 125
 
 Decision:
