@@ -82,10 +82,10 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 ---
 
 ## Current Next Action
-Owner: WORKER
+Owner: PLANNER
 
 Assignment ID: `ARCH-G2-R1-EVIDENCE-CORRECTION`
-Assignment Status: `READY`
+Assignment Status: AWAITING_PLANNER_REVIEW
 
 Objective:
 Correct the five ARCH-G2 audit artifacts using exact filesystem, symbol,
