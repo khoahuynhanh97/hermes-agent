@@ -1,6 +1,6 @@
 # Hermes Personal Gateway
 
-The Hermes Personal gateway is a convergence boundary for conversational ingress. It normalizes authenticated Telegram, CLI, web, and omni envelopes into one `AgentTurnRequest` contract and sends every natural-language turn to `HermesTurnService`. The service calls one `UpstreamAIAgentAdapter`, backed by the public upstream `AIAgent` API. Channel adapters do not choose product, video, provider, or workflow implementations.
+The Hermes Personal gateway is a convergence boundary for conversational ingress. It normalizes authenticated Telegram, CLI, web, and omni envelopes into one `AgentTurnRequest` contract and sends every natural-language turn through `HermesTurnService`. The facade calls one `UpstreamAIAgentAdapter`, backed by the public upstream `AIAgent` API. Channel adapters do not choose product, video, provider, or workflow implementations.
 
 ## Identity And Sessions
 
@@ -37,6 +37,11 @@ The configured provider mode uses `SessionScopedAgentPool` in `hermes_personal/r
 - **Shutdown Disposal**: Upon Gateway shutdown, the lifespan/shutdown handler invokes `SessionScopedAgentPool.close()`, which closes all pooled agent instances and cleans up resources.
 - **Production Limitation**: The in-memory pool retains active session instances for the duration of the Gateway process lifetime without an LRU eviction/idle session retirement policy. In large multi-user production deployments, an explicit bounded eviction strategy should be added.
 
+## Agent execution boundary
+
+HermesTurnService must not own a second conversation loop, prompt builder, memory platform, tool router, or capability catalog. It normalizes AgentTurnRequest, validates identity/session/workflow ownership, claims durable events, invokes the supplied upstream agent, and projects AgentEvent results. All model selection, prompt caching, tool execution, and session memory remain upstream un_agent.AIAgent responsibilities.
+
+
 ## Deterministic Controls
 
 Natural-language normalizers produce only `AgentTurnRequest`. Approve, reject, retry, cancel, upload, and form updates remain explicit `OperatorCommand` operations with their own target/version/idempotency contract. Conversational text that happens to contain words such as "approve" is still a natural-language turn and is never converted into an operator action by a channel normalizer.
@@ -46,3 +51,5 @@ Natural-language normalizers produce only `AgentTurnRequest`. Approve, reject, r
 `HermesTurnService` plus the upstream `AIAgent` remain the sole general-purpose brain. Ingress packages are limited to contracts, identity/session resolution, orchestration binding, and the upstream adapter. An AST acceptance boundary scans the exact project adapter packages and rejects semantic routing tables, provider or Product Intelligence/Video Factory imports, workflow mutation, and direct domain calls.
 
 This gate registers the project service and locks its behavior, but production Telegram, CLI, web, and omni route cutover is deferred. Existing upstream routes are not replaced by Gate 2 Task 6; cutover must occur in the later routing gate with its own rollout and rollback checks.
+
+

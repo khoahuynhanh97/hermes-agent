@@ -11,7 +11,7 @@ It decouples stable domain capability declarations (`product.research`, `video.b
 ## Architectural Principles
 
 1. **Sole Brain Architecture**:
-   - The Hermes Orchestrator (`AgentTurnRuntime` + `AIAgent`) remains the sole general-purpose brain for all conversational turns.
+   - Upstream `run_agent.AIAgent` remains the sole general-purpose brain for all conversational turns. `HermesTurnService` is a thin facade only; it does not route domain intent or execute tools.
    - Capability catalog rules and domain skills specify permitted capabilities; tools cannot be executed without evaluator authorization.
 
 2. **Stable Manifest & Immutable Bindings**:
@@ -168,3 +168,4 @@ When capability policy denials or errors occur during turn processing, `HermesTu
 3. **Unauthorized Skill Error (`code: unauthorized_skill`)**:
    - Cause: The active domain skill is not declared in `CapabilitySpec.allowed_skills`.
    - Remedy: Verify skill frontmatter `allowed-capabilities` and workflow setup.
+

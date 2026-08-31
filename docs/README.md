@@ -48,8 +48,7 @@ source and tests.
 
 ## Current implementation boundary
 
-The implemented core uses a single upstream `AIAgent` through
-`HermesTurnService`, SQLite persistence, local filesystem artifacts, in-process
+The implemented core uses a single upstream `run_agent.AIAgent` through\n`HermesTurnService`, SQLite persistence, local filesystem artifacts, in-process
 job threads, and a subprocess supervisor abstraction. RabbitMQ, Kafka, Redis,
 and a dead-letter queue are not part of the current implementation.
 
@@ -59,3 +58,4 @@ smoke coverage. The standalone MCP discovery, durable-worker, and Telegram
 runner commands remain optional gaps and must be disabled in the local profile.
 See [Operations](hermes-personal/operations.md) for the exact command and
 [Known gaps](known-gaps.md) for the remaining production boundary.
+

@@ -105,3 +105,4 @@ uv run ruff check hermes_personal/workflows hermes_personal/product_video
 Also test the canonical turn path when workflow events or operator commands are
 changed, because cross-channel behavior is owned by `HermesTurnService`, not the
 workflow module alone.
+
