@@ -17450,6 +17450,53 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             except Exception:
                 return "Could not start /learn — please try again."
 
+        if canonical in ("hoc_kien_thuc", "hoc_cta"):
+            from agent.knowledge_capture_prompt import (
+                KnowledgeCaptureInputError,
+                ProcedureContractError,
+                build_knowledge_capture_prompt,
+            )
+
+            _mode = "cta" if canonical == "hoc_cta" else "knowledge"
+            _capture_req = event.get_command_args().strip()
+            try:
+                event.text = build_knowledge_capture_prompt(_capture_req, mode=_mode)
+            except KnowledgeCaptureInputError:
+                return (
+                    f"Cách dùng: /{canonical} <link video hoặc đường dẫn media>"
+                )
+            except ProcedureContractError as exc:
+                logger.error(
+                    "Failed to load procedure contract for /%s: %s",
+                    canonical,
+                    exc,
+                    exc_info=True,
+                )
+                return (
+                    f"Không thể bắt đầu /{canonical}: procedure contract bị thiếu, rỗng hoặc không đọc được. "
+                    "Hãy kiểm tra cấu hình kỹ thuật hoặc đồng bộ bundled skills."
+                )
+            except Exception as exc:
+                logger.error("Failed to start /%s: %s", canonical, exc, exc_info=True)
+                return f"Không thể bắt đầu /{canonical} — vui lòng thử lại."
+
+            try:
+                adapter = self._adapter_for_source(source)
+                if adapter:
+                    _capture_meta = self._thread_metadata_for_source(source)
+                    _ack_msg = (
+                        "Đang tải media, trích transcript và phân tích cấu trúc Hook/CTA…"
+                        if _mode == "cta"
+                        else "Đang tải media, trích transcript và tạo bộ artifact kiến thức…"
+                    )
+                    await adapter.send(
+                        str(source.chat_id),
+                        _ack_msg,
+                        metadata=_capture_meta,
+                    )
+            except Exception:
+                logger.debug(f"{canonical} ack send failed", exc_info=True)
+
         if canonical == "init":
             # /init: rewrite the turn to a guidance-laden prompt and fall
             # through to normal agent processing (same fall-through as /learn
@@ -17912,10 +17959,17 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     # the user instead of silently forwarding it to the LLM
                     # as free text (which leads to silent-failure behavior
                     # like the model inventing a delegate_task call).
-                    # Normalize to hyphenated form before checking known
-                    # built-ins (command may be an alias target set by the
-                    # quick-command block above, so _cmd_def can be stale).
-                    if command.replace("_", "-") not in GATEWAY_KNOWN_COMMANDS:
+                    # `canonical` is the name returned by resolve_command() —
+                    # it is already in GATEWAY_KNOWN_COMMANDS if it is a real
+                    # built-in (e.g. hoc_cta, hoc_kien_thuc). The raw string
+                    # transform below was replaced to avoid misses when the
+                    # canonical name contains underscores (e.g. hoc-cta is
+                    # not in the set but hoc_cta is).
+                    _is_known = (
+                        (canonical is not None and canonical in GATEWAY_KNOWN_COMMANDS)
+                        or command in GATEWAY_KNOWN_COMMANDS
+                    )
+                    if not _is_known:
                         logger.warning(
                             "Unrecognized slash command /%s from %s — "
                             "replying with unknown-command notice",

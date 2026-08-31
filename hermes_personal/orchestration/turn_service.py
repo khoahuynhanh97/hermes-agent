@@ -72,6 +72,13 @@ async def _advance_iterator_in_worker(
 
 
 class HermesTurnService:
+    """Thin channel-neutral facade over an upstream agent.
+
+    This service must not build system prompts, select providers, maintain a
+    second transcript, route domain intent, or execute tools itself. The
+    supplied ``agent`` is the only conversational/model execution owner.
+    """
+
     def __init__(
         self,
         identity_repository: IdentityRepository,
@@ -127,11 +134,7 @@ class HermesTurnService:
 
         transcript = self._transcript_factory.for_session(request.session_id)
         history = self._assemble_history(transcript, request.session_id)
-        if self._context_assembler is not None:
-            assembled_context = self._context_assembler.assemble(request, history)
-            effective_history = assembled_context.assemble_history_messages()
-        else:
-            effective_history = history
+        effective_history = history
 
         transcript.append_user_turn(request.message)
         outputs: Iterator[AgentOutput] | None = None
