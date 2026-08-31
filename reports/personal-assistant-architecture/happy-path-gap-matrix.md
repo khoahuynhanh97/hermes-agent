@@ -11,7 +11,7 @@
 | Subsystem | Area | Current Status | Identified Gap | Severity | Required Remediation |
 | :--- | :--- | :--- | :--- | :---: | :--- |
 | **Video Factory** | MCP Registration | Verified via stdio subprocess | `AIAgent` configuration does not auto-mount `src/hermes/mcp/video_factory/server.py` in default `config.yaml` | **MEDIUM** | Add stdio MCP server entry to default `config.yaml` / MCP catalog |
-| **Video Factory** | Provider Integration | Task 5 Google Vertex Veo Proven (`d4eeafc5bd`) | Live provider is implemented and proven; requires profile ADC credentials in `.env` / environment | **LOW** | Document credential setup in `docs/` |
+| **Video Factory** | Provider Integration | Task 5 Google Vertex Veo Proven (`d4eeafc5bd`) | Live provider is implemented and proven; requires service-gated credentials in configuration. | **LOW** | Document credential setup in `docs/` |
 | **Video Factory** | Packaging Layout | `src/hermes` layout | `src/hermes` is not in `pyproject.toml` package finding | **LOW** | Run as stdio MCP subprocess (clean decoupling) or add package inclusion |
 | **Knowledge Base** | Agent Skill Bridge | Governed learning module tested | `AIAgent` requires governed skill `hermes-personal-knowledge-learning` active in `skills/` | **LOW** | Ensure skill is linked in default active skills directory |
 | **HITL Approvals** | Interactive Resumption | Handled in domain tests | CLI/Telegram interactive approval buttons need direct callback mapping to active workflow IDs | **MEDIUM** | Connect Telegram inline keyboard approval callback to Outbox/Workflow engine |

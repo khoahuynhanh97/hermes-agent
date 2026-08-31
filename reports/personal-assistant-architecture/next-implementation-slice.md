@@ -35,8 +35,8 @@ Implement the smallest non-speculative integration slice that connects the canon
 ## 3. Allowed Files for Next Slice
 
 ```
-skills/hermes-personal-product-video-production/SKILL.md
-skills/hermes-personal-knowledge-learning/SKILL.md
+      - `.agents/skills/hermes-personal-product-video-production/SKILL.md`
+      - `.agents/skills/hermes-personal-knowledge-learning/SKILL.md`
 hermes_personal/runtime/supervisor.py
 tests/hermes_personal/e2e/test_canonical_agent_integration.py
 ```

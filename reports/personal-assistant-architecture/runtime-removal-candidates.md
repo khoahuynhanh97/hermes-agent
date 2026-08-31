@@ -37,7 +37,7 @@ The audit identified two primary categories requiring consolidation or packaging
 #### 3. `hermes_personal.runtime.gateway_server` (FastAPI Server)
 - **File**: [`hermes_personal/runtime/gateway_server.py`](file:///d:/work/hermes-upstream-rearchitecture/hermes_personal/runtime/gateway_server.py#L1-L426)
 - **Current Role**: Exposes FastAPI endpoints (`/api/turn`, `/api/events`, `/healthz`).
-- **Upstream Overlap**: Duplicates upstream `gateway/run.py` (which already manages WebSocket / RPC / platform ingress for Telegram, Discord, Slack, etc.) and `mcp_serve.py`.
+- **Upstream Overlap**: Duplicates upstream `gateway/run.py` (which already manages WebSocket / RPC / platform ingress for Telegram, Discord, Slack, etc.) and `mcp_serve.py`. Upstream Telegram adapter exists under `plugins/platforms/telegram/**`.
 - **Classification**: `RUNTIME_DUPLICATE_CANDIDATE`
 - **Consolidation Rationale**: Upstream Hermes already has gateway platforms and CLI. Adding an extra HTTP turn server is only needed if third-party HTTP clients require `/api/turn`; otherwise, messaging platforms belong in `gateway/platforms/`.
 
