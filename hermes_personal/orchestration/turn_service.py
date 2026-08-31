@@ -99,10 +99,6 @@ class HermesTurnService:
     def catalog_service(self) -> CapabilityCatalogService | None:
         return self._catalog_service
 
-    @property
-    def context_assembler(self) -> Any | None:
-        return self._context_assembler
-
     def build_policy_context(
         self,
         request: AgentTurnRequest,
@@ -135,9 +131,6 @@ class HermesTurnService:
         effective_history = history
 
         transcript.append_user_turn(request.message)
-        if self._context_assembler is not None:
-            assembled = self._context_assembler.assemble(request, effective_history)
-            effective_history = assembled.history
         outputs: Iterator[AgentOutput] | None = None
         terminal_emitted = False
         next_sequence = 0

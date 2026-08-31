@@ -320,10 +320,6 @@ COMMAND_REGISTRY: list[CommandDef] = [
                "Tools & Skills", cli_only=True, aliases=("generate-pet",), args_hint="[description]"),
     CommandDef("learn", "Learn a reusable skill from anything you describe (dirs, URLs, this chat, notes)",
                "Tools & Skills", args_hint="<what to learn from>"),
-    CommandDef("hoc_kien_thuc", "Capture grounded knowledge and source artifacts",
-               "Tools & Skills", aliases=("hoc",), args_hint="<media URL or local path>"),
-    CommandDef("hoc_cta", "Capture hooks, CTA, and conversion structures from media",
-               "Tools & Skills", args_hint="<media URL or local path>"),
     CommandDef("init", "Generate or update AGENTS.md project instructions from a repo scan",
                "Tools & Skills", args_hint="[notes]"),
     CommandDef("cron", "Manage scheduled tasks", "Tools & Skills",
@@ -1370,7 +1366,7 @@ _SLACK_PRIORITY_ALIASES = ("btw", "bg")
 #     (session export is an interactive surface; platform is a rare
 #     informational lookup) — without this entry /save tips the registry
 #     past the 50-cap and silently clamps /platform, breaking parity.
-_SLACK_VIA_HERMES_ONLY = frozenset({"topup", "moa", "debug", "egress", "init", "version", "diff", "update", "heartbeat", "refine", "pause", "whoami", "platform", "hoc_kien_thuc", "hoc", "hoc_cta"})
+_SLACK_VIA_HERMES_ONLY = frozenset({"topup", "moa", "debug", "egress", "init", "version", "diff", "update", "heartbeat", "refine", "pause", "whoami", "platform"})
 
 
 def _sanitize_slack_name(raw: str) -> str:
