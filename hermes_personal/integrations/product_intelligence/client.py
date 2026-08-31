@@ -29,8 +29,9 @@ class ProductIntelligenceClient:
     * ``lock_resource_pack`` - generates a lock payload and runs the anti-corruption service.
     """
 
-    def __init__(self, owner_user_id: str = "user") -> None:
+    def __init__(self, owner_user_id: str = "user", *, fake: bool = False) -> None:
         self.owner_user_id = owner_user_id
+        self.fake = fake
         self.service = ProductResourceService()
         self._pipeline = ProductResearchPipeline()
         self._builder = ResourcePackBuilder()
@@ -47,9 +48,19 @@ class ProductIntelligenceClient:
         idempotency_key: str | None = None,
         **kwargs: Any,
     ) -> dict:
-        """Run the deterministic research pipeline."""
+        """Run product research.
+
+        When ``fake`` is true, use the local deterministic pipeline for
+        development/testing only. When ``fake`` is false, require an explicit
+        external MCP source; otherwise fail closed to avoid fabricating
+        production evidence.
+        """
+        if not self.fake:
+            raise RuntimeError(
+                "Product research requires an external MCP provider or explicit fake=True."
+            )
         spec = ResearchSpec(product_name=product_name, keywords=keywords)
-        result = self._pipeline.run(spec)
+        result = self._pipeline.run(spec, fake=True)
         res = {
             "owner": "product_intelligence",
             "schema": "product_research_report",

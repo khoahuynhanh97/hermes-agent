@@ -56,15 +56,19 @@ class ProductResearchPipeline:
     pure and therefore trivially testable.
     """
 
-    def run(self, spec: ResearchSpec) -> ResearchResult:
-        # Deterministic dummy data – generate a fake market potential percentage.
-        # In a real implementation this would query external sources.
-        potential = 42  # fixed deterministic value for testing
-        summary = f"Research for {spec.product_name}: {potential}% market potential"
+    def run(self, spec: ResearchSpec, *, fake: bool = False) -> ResearchResult:
+        if not fake:
+            raise RuntimeError(
+                "Product research requires an external MCP provider or explicit fake=True."
+            )
+        # Explicit fake mode only — fixed deterministic value for local development/testing.
+        potential = 42
+        summary = f"Research for {spec.product_name}: {potential}% market potential [FAKE]"
         report_dict = {
             "product_name": spec.product_name,
             "keywords": spec.keywords,
             "potential": potential,
+            "fake": True,
         }
         report = json.dumps(report_dict)
         return ResearchResult(summary=summary, report=report)
