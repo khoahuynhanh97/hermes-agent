@@ -87,7 +87,6 @@ class HermesTurnService:
         transcript_factory: TranscriptFactory,
         agent: UpstreamAgentPort,
         catalog_service: CapabilityCatalogService | None = None,
-        context_assembler: Any | None = None,
     ) -> None:
         self._identity_repository = identity_repository
         self._session_repository = session_repository
@@ -95,7 +94,6 @@ class HermesTurnService:
         self._transcript_factory = transcript_factory
         self._agent = agent
         self._catalog_service = catalog_service
-        self._context_assembler = context_assembler
 
     @property
     def catalog_service(self) -> CapabilityCatalogService | None:
@@ -137,6 +135,9 @@ class HermesTurnService:
         effective_history = history
 
         transcript.append_user_turn(request.message)
+        if self._context_assembler is not None:
+            assembled = self._context_assembler.assemble(request, effective_history)
+            effective_history = assembled.history
         outputs: Iterator[AgentOutput] | None = None
         terminal_emitted = False
         next_sequence = 0
