@@ -1,4 +1,4 @@
-# Hermes Coordination
+﻿# Hermes Coordination
 
 ## Overall Goal
 Implement the Hermes Upstream Gateway Rearchitecture program: converge Telegram, CLI, Web, and Omni natural-language ingress onto one canonical Hermes Agent Turn path; add stable capabilities, durable workflows, shared approvals/budgets, governed learning, and one-command runtime supervision while preserving legacy data and avoiding live paid-provider calls in verification.
@@ -1205,3 +1205,9 @@ absent. PID 12812 is no longer present; stale lock/progress retained without
 inventing an exit outcome. No code/tests/runtime/provider calls or dispatch.
 Both owners PLANNER. Stop heartbeat while no useful autonomous action remains;
 live MVP OPEN and advanced production hardening deferred.
+
+### Iteration 120 Worker — CANONICAL-ASSISTANT-FULL-FIX-R1
+live MVP OPEN and advanced production hardening deferred.
+
+### Iteration 120 Worker - CANONICAL-ASSISTANT-FULL-FIX-R1
+2026-09-02T00:00:00.000Z: Worker 120 commits 103e408496 f0ec94c103 06f4b1f20f closed Tasks 0-8 of CANONICAL-ASSISTANT-FULL-FIX-R1 plan. Removed _context_assembler dead code from hermes_personal/orchestration/turn_service.py. Converged /hoc /hoc_kien_thuc /hoc_cta onto skill-command dispatch via new .agents/skills/hoc*/SKILL.md. Removed CLI/gateway dedicated branches cli.py:12070 gateway/run.py:17452 hermes_cli/cli_commands_mixin.py:2120. Added hermes_personal/integrations/video_factory/__init__.py MCP canonical seam. Verified Telegram adapter plugins/platforms/telegram/** does NOT import product_video or hermes_personal - generic upstream boundary intact. Workflows already restrict to durable state with HITL gates enforced in hermes_personal/product_video/handlers.py:ProductVideoWorkflowState + HITL_WAITING_STATES. No test execution per operator instruction. Final evidence level IMPLEMENTED_UNVERIFIED. Result AWAITING_PLANNER_REVIEW. Owner PLANNER. Pending Task 9 orphan removal of src/hermes/** deferred - tests reference it; operator forbade test edits. Pending Task 10 docs reconciliation. Untracked worktree artifacts preserved: agent/knowledge_capture_prompt.py skills/media/learning-from-video/ reports/audio.wav reports/exact_transcript.txt reports/*.html reports/video_sample.mp4 reports/tiktok_info.json reports/tikwm_data.json reports/runtime-truth/ tests/agent/test_knowledge_capture_prompt.py tests/skills/test_learning_from_video_skill.py .skills_prompt_snapshot.json .todos.md SOUL.md.
