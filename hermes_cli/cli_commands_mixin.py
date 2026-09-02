@@ -2118,42 +2118,6 @@ class CLICommandsMixin:
         else:  # pragma: no cover - defensive (no live input loop)
             print("  /learn needs an active chat session to run.")
 
-    def _handle_knowledge_capture_command(self, cmd: str):
-        """Handle /hoc_kien_thuc, /hoc, and /hoc_cta as grounded media-capture turns."""
-        from agent.knowledge_capture_prompt import (
-            KnowledgeCaptureInputError,
-            ProcedureContractError,
-            build_knowledge_capture_prompt,
-        )
-
-        parts = cmd.strip().split(None, 1)
-        verb = parts[0].lstrip("/").lower() if parts else "hoc"
-        mode = "cta" if verb in ("hoc_cta", "cta") else "knowledge"
-        source_request = parts[1].strip() if len(parts) > 1 else ""
-        try:
-            msg = build_knowledge_capture_prompt(source_request, mode=mode)
-        except KnowledgeCaptureInputError as exc:
-            print(f"  {exc}")
-            return
-        except ProcedureContractError as exc:
-            print(
-                f"  Không thể bắt đầu /{verb}: procedure contract bị thiếu, rỗng hoặc không đọc được ({exc}). "
-                "Hãy chạy đồng bộ bundled skills hoặc kiểm tra HERMES_HOME."
-            )
-            return
-        except Exception as exc:
-            print(f"  Không thể bắt đầu /{verb}: {exc}")
-            return
-
-        if mode == "cta":
-            print("\n⚡ Đang thu thập media và phân tích cấu trúc Hook/CTA...")
-        else:
-            print("\n⚡ Đang thu thập media và tạo bộ artifact kiến thức...")
-        if hasattr(self, "_pending_input"):
-            self._pending_input.put(msg)
-        else:  # pragma: no cover - defensive (no live input loop)
-            print(f"  /{verb} cần một phiên chat đang hoạt động.")
-
     def _handle_init_command(self, cmd: str):
         """Handle /init — generate or update AGENTS.md from a project scan.
 
