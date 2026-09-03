@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import abc
+import json
 import os
 import signal
 import socket
@@ -166,6 +167,61 @@ class ProcessState:
     last_exit_code: int | None = None
 
 
+def probe_video_factory_stdio(
+    executable: str | None = None,
+    timeout_seconds: float = 5.0,
+) -> bool:
+    """Lightweight readiness probe verifying Video Factory responds to stdio MCP discovery."""
+    import sys
+
+    py_exec = executable or sys.executable
+    cmd = [py_exec, "-m", "hermes_personal.integrations.video_factory.server"]
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        init_req = (
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": {"name": "supervisor-probe", "version": "1.0"},
+                    },
+                }
+            )
+            + "\n"
+        )
+        tools_req = (
+            json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+            + "\n"
+        )
+        stdout, _ = proc.communicate(init_req + tools_req, timeout=timeout_seconds)
+        for line in stdout.strip().splitlines():
+            try:
+                data = json.loads(line)
+                if data.get("id") == 1 and "result" in data:
+                    return True
+                if (
+                    data.get("id") == 2
+                    and "result" in data
+                    and "tools" in data["result"]
+                ):
+                    return True
+            except json.JSONDecodeError:
+                continue
+        return False
+    except Exception:
+        return False
+
+
 class Supervisor:
     """Supervises the Hermes process topology with bounded exponential backoff and graceful shutdown."""
 
@@ -301,6 +357,8 @@ class Supervisor:
             return False
 
         if probe.probe_type == "noop" or probe.probe_type == "exec":
+            if probe.endpoint == "video_factory_stdio" or "video_factory" in probe.endpoint:
+                return probe_video_factory_stdio(timeout_seconds=probe.timeout_seconds) and child.is_alive()
             return child.is_alive()
 
         if probe.probe_type == "http":

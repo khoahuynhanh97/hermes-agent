@@ -8,3 +8,10 @@ runtime:
   enable_telegram: false
   enable_workers: false
   enable_mcp: false
+
+# Canonical Video Factory FastMCP stdio server definition
+# When running with standard AIAgent, add this to ~/.hermes/config.yaml under mcp_servers:
+mcp_servers:
+  video_factory:
+    command: "uv"
+    args: ["run", "python", "-m", "hermes_personal.integrations.video_factory.server"]
