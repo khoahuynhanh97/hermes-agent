@@ -453,6 +453,7 @@ def test_e2e_http_operator_route_full_workflow_progression(tmp_path):
     """Full end-to-end HTTP route integration test using TestClient(app) progressing through all workflow stages."""
     db_file = tmp_path / "e2e_http.db"
     conn = connect(db_file)
+    init_default_engine(BudgetPolicy(max_total=1000, per_channel={"video_factory": 500, "product_intelligence": 500}))
     cmd_handler = create_operator_command_handler(conn, provider_mode="fake")
     events_api = EventsAPI(
         command_handler=cmd_handler,
@@ -546,7 +547,13 @@ def test_e2e_http_operator_route_full_workflow_progression(tmp_path):
     # Step 5: Run dispatcher.process_batch() for product_video.creative_brief -> AwaitingBriefApproval
     report5 = dispatcher.process_batch()
     assert report5.claimed == 1
-    assert report5.succeeded == 1
+    if report5.succeeded != 1:
+        print("DEBUG report5:", report5)
+        cur = conn.cursor()
+        cur.execute('SELECT outbox_id, last_error FROM workflow_outbox ORDER BY outbox_id DESC LIMIT 3')
+        for row in cur.fetchall():
+            print("DEBUG outbox row:", row[0], "err=", (row[1] or '')[:800])
+    assert report5.succeeded == 1, report5
 
     agg5, ver5 = repo.get_workflow(wf_id)
     assert agg5["state"] == ProductVideoWorkflowState.AWAITING_BRIEF_APPROVAL.value
