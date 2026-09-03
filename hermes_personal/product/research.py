@@ -49,14 +49,40 @@ class ResearchResult:
 
 
 class ProductResearchPipeline:
-    """Deterministic, provider‑free research pipeline.
+    """Product research pipeline with fail-closed external MCP support."""
 
-    The ``run`` method fabricates a tiny dataset based on the ``spec.query``
-    and returns a ``ResearchResult``. No external I/O occurs – the function is
-    pure and therefore trivially testable.
-    """
+    def __init__(self, mcp_client: Any = None) -> None:
+        self.mcp_client = mcp_client
 
-    def run(self, spec: ResearchSpec, *, fake: bool = False) -> ResearchResult:
+    def run(
+        self,
+        spec: ResearchSpec,
+        *,
+        fake: bool = False,
+        mcp_client: Any = None,
+    ) -> ResearchResult:
+        client = mcp_client or self.mcp_client
+        if client is not None:
+            try:
+                # Dispatch to external Product Intelligence MCP provider
+                if hasattr(client, "research_product"):
+                    result = client.research_product(spec.product_name, spec.keywords)
+                elif hasattr(client, "research"):
+                    result = client.research(spec.product_name, spec.keywords)
+                else:
+                    raise AttributeError("Configured MCP client lacks research_product/research method")
+
+                if isinstance(result, ResearchResult):
+                    return result
+                if isinstance(result, dict):
+                    summary = result.get("summary", f"Research for {spec.product_name}")
+                    report_val = result.get("report")
+                    report = report_val if isinstance(report_val, str) else json.dumps(result)
+                    return ResearchResult(summary=summary, report=report)
+                raise TypeError(f"Unexpected MCP response shape: {type(result)}")
+            except Exception as exc:
+                raise RuntimeError(f"External Product Intelligence MCP failed: {exc}") from exc
+
         if not fake:
             raise RuntimeError(
                 "Product research requires an external MCP provider or explicit fake=True."
@@ -74,11 +100,15 @@ class ProductResearchPipeline:
         return ResearchResult(summary=summary, report=report)
 
 
-def run_research(spec: ResearchSpec) -> ResearchResult:
+def run_research(
+    spec: ResearchSpec,
+    *,
+    fake: bool = False,
+    mcp_client: Any = None,
+) -> ResearchResult:
     """Convenient one‑liner used by tests/CLI.
 
     Executes the pipeline with the provided specification.
     """
-
-    pipeline = ProductResearchPipeline()
-    return pipeline.run(spec)
+    pipeline = ProductResearchPipeline(mcp_client=mcp_client)
+    return pipeline.run(spec, fake=fake, mcp_client=mcp_client)

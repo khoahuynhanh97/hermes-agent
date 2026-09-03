@@ -29,11 +29,18 @@ class ProductIntelligenceClient:
     * ``lock_resource_pack`` - generates a lock payload and runs the anti-corruption service.
     """
 
-    def __init__(self, owner_user_id: str = "user", *, fake: bool = False) -> None:
+    def __init__(
+        self,
+        owner_user_id: str = "user",
+        *,
+        fake: bool = False,
+        mcp_client: Any = None,
+    ) -> None:
         self.owner_user_id = owner_user_id
         self.fake = fake
+        self.mcp_client = mcp_client
         self.service = ProductResourceService()
-        self._pipeline = ProductResearchPipeline()
+        self._pipeline = ProductResearchPipeline(mcp_client=mcp_client)
         self._builder = ResourcePackBuilder()
 
     # ---------------------------------------------------------------------
@@ -46,6 +53,8 @@ class ProductIntelligenceClient:
         workflow_id: str | None = None,
         job_id: str | None = None,
         idempotency_key: str | None = None,
+        *,
+        mcp_client: Any = None,
         **kwargs: Any,
     ) -> dict:
         """Run product research.
@@ -55,6 +64,25 @@ class ProductIntelligenceClient:
         external MCP source; otherwise fail closed to avoid fabricating
         production evidence.
         """
+        active_client = mcp_client or self.mcp_client
+        if active_client is not None:
+            spec = ResearchSpec(product_name=product_name, keywords=keywords)
+            result = self._pipeline.run(spec, fake=False, mcp_client=active_client)
+            res = {
+                "owner": "product_intelligence",
+                "schema": "product_research_report",
+                "version": 1,
+                "summary": result.summary,
+                "report": result.report,
+            }
+            if workflow_id:
+                res["workflow_id"] = workflow_id
+            if job_id:
+                res["job_id"] = job_id
+            if idempotency_key:
+                res["idempotency_key"] = idempotency_key
+            return res
+
         if not self.fake:
             raise RuntimeError(
                 "Product research requires an external MCP provider or explicit fake=True."
