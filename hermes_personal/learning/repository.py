@@ -113,6 +113,13 @@ class LearningRepository:
         with self._conn:
             self._conn.execute(
                 """
+                INSERT OR IGNORE INTO global_user_identity (owner_user_id, display_name, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (candidate.owner_user_id, candidate.owner_user_id, datetime.now(timezone.utc).isoformat()),
+            )
+            self._conn.execute(
+                """
                 INSERT INTO learning_candidate (candidate_id, owner_user_id, kind, title, content, digest, source_outcome_id, status, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,

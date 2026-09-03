@@ -235,6 +235,8 @@ def _load_skill_payload(skill_identifier: str, task_id: str | None = None) -> tu
     if not raw_identifier:
         return None
 
+    loaded_skill: dict[str, Any] = {}
+    normalized = raw_identifier
     try:
         from tools.skills_tool import SKILLS_DIR, skill_view
         from agent.skill_utils import normalize_skill_lookup_name
@@ -245,23 +247,41 @@ def _load_skill_payload(skill_identifier: str, task_id: str | None = None) -> tu
             skill_view(normalized, task_id=task_id, preprocess=False)
         )
     except Exception:
-        return None
+        loaded_skill = {}
 
     if not loaded_skill.get("success"):
-        return None
+        # Fallback to direct path reading if raw_identifier points to a skill dir or SKILL.md
+        from agent.skill_utils import parse_frontmatter
+        p = Path(raw_identifier)
+        smd = p / "SKILL.md" if p.is_dir() else p
+        if smd.is_file():
+            try:
+                content = smd.read_text(encoding="utf-8-sig", errors="replace")
+                fm, body = parse_frontmatter(content)
+                name = fm.get("name", smd.parent.name)
+                loaded_skill = {
+                    "success": True,
+                    "name": name,
+                    "path": str(smd),
+                    "skill_dir": str(smd.parent),
+                    "content": body,
+                    "raw_content": content,
+                    "frontmatter": fm,
+                }
+            except Exception:
+                return None
+        else:
+            return None
 
     skill_name = str(loaded_skill.get("name") or normalized)
     skill_path = str(loaded_skill.get("path") or "")
     skill_dir = None
-    # Prefer the absolute skill_dir returned by skill_view() — this is
-    # correct for both local and external skills.  Fall back to the old
-    # SKILLS_DIR-relative reconstruction only when skill_dir is absent
-    # (e.g. legacy skill_view responses).
     abs_skill_dir = loaded_skill.get("skill_dir")
     if abs_skill_dir:
         skill_dir = Path(abs_skill_dir)
     elif skill_path:
         try:
+            from tools.skills_tool import SKILLS_DIR
             skill_dir = SKILLS_DIR / Path(skill_path).parent
         except Exception:
             skill_dir = None
@@ -449,22 +469,31 @@ def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
         disabled = _get_disabled_skill_names()
         seen_names: set = set()
 
-        # Scan project dirs first (highest precedence), then local, then external.
+        # Scan project dirs first (highest precedence), then candidate project dirs, then local, then external.
         # Project dirs iterate through the quarantine chokepoint.
+        from agent.skill_utils import find_project_root, _candidate_project_skills_dirs, is_quarantined_project_skill
         project_dirs = list(get_project_skills_dirs())
         dirs_to_scan = list(project_dirs)
+        root = find_project_root()
+        if root:
+            for cand_dir in _candidate_project_skills_dirs(root):
+                if cand_dir not in dirs_to_scan:
+                    dirs_to_scan.append(cand_dir)
         if SKILLS_DIR.exists():
             dirs_to_scan.append(SKILLS_DIR)
         dirs_to_scan.extend(get_external_skills_dirs())
 
         for scan_dir in dirs_to_scan:
+            _is_proj_tier = scan_dir in project_dirs or (root and scan_dir in _candidate_project_skills_dirs(root))
             _iter = (
                 iter_project_skill_files(scan_dir)
-                if scan_dir in project_dirs
+                if _is_proj_tier
                 else iter_skill_index_files(scan_dir, "SKILL.md")
             )
             for skill_md in _iter:
                 if any(part in {'.git', '.github', '.hub', '.archive'} for part in skill_md.parts):
+                    continue
+                if _is_proj_tier and is_quarantined_project_skill(skill_md):
                     continue
                 try:
                     content = skill_md.read_text(encoding='utf-8')
@@ -523,14 +552,55 @@ def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
                             name, cmd_key, commands[cmd_key]["name"],
                         )
                         continue
-                    commands[cmd_key] = {
+                    entry = {
                         "name": name,
                         "description": description or f"Invoke the {name} skill",
                         "skill_md_path": str(skill_md),
                         "skill_dir": str(skill_md.parent),
                     }
+                    commands[cmd_key] = entry
+
+                    # Also register any frontmatter aliases
+                    raw_aliases = frontmatter.get("aliases", [])
+                    if isinstance(raw_aliases, str):
+                        raw_aliases = [raw_aliases]
+                    if isinstance(raw_aliases, list):
+                        for alias_item in raw_aliases:
+                            alias_clean = str(alias_item).lower().replace(' ', '-').replace('_', '-')
+                            alias_clean = _SKILL_INVALID_CHARS.sub('', alias_clean)
+                            alias_clean = _SKILL_MULTI_HYPHEN.sub('-', alias_clean).strip('-')
+                            if not alias_clean:
+                                continue
+                            if resolve_command(alias_clean) is not None:
+                                continue
+                            alias_key = f"/{alias_clean}"
+                            if alias_key not in commands:
+                                commands[alias_key] = entry
                 except Exception:
                     continue
+        try:
+            from hermes_cli.plugins import discover_plugins, get_plugin_manager
+            discover_plugins()
+            pm = get_plugin_manager()
+            for qn, p_entry in getattr(pm, "_plugin_skills", {}).items():
+                p_path = Path(p_entry.get("path", ""))
+                if not p_path.is_file():
+                    continue
+                p_name = p_entry.get("bare_name") or p_path.parent.name
+                p_slug = p_name.lower().replace(' ', '-').replace('_', '-')
+                p_slug = _SKILL_INVALID_CHARS.sub('', p_slug)
+                p_slug = _SKILL_MULTI_HYPHEN.sub('-', p_slug).strip('-')
+                if p_slug and resolve_command(p_slug) is None:
+                    p_key = f"/{p_slug}"
+                    if p_key not in commands:
+                        commands[p_key] = {
+                            "name": p_name,
+                            "description": p_entry.get("description") or f"Invoke the {p_name} skill",
+                            "skill_md_path": str(p_path),
+                            "skill_dir": str(p_path.parent),
+                        }
+        except Exception:
+            pass
     except Exception:
         pass
     # Publish the finished map and the platform/home it was scanned for as
