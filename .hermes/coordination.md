@@ -1,4 +1,4 @@
-﻿# Hermes Coordination
+# Hermes Coordination
 
 ## Overall Goal
 Implement the Hermes Upstream Gateway Rearchitecture program: converge Telegram, CLI, Web, and Omni natural-language ingress onto one canonical Hermes Agent Turn path; add stable capabilities, durable workflows, shared approvals/budgets, governed learning, and one-command runtime supervision while preserving legacy data and avoiding live paid-provider calls in verification.
@@ -84,60 +84,24 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 ## Current Next Action
 Owner: PLANNER
 
-Assignment ID: `ARCH-G2-R1-EVIDENCE-CORRECTION`
+Assignment ID: `CANONICAL-ASSISTANT-FULL-FIX-R2`
 Assignment Status: AWAITING_PLANNER_REVIEW
+Status Result: `IMPLEMENTED_UNVERIFIED`
 
 Objective:
-Correct the five ARCH-G2 audit artifacts using exact filesystem, symbol,
-caller, packaging, skill-discovery, and runtime evidence. This is audit
-correction only; do not implement any recommendation or begin ARCH-G3.
+Handoff CANONICAL-ASSISTANT-FULL-FIX-R2 to Planner for review.
 
-Required corrections:
-1. Record assignment dispatch commit `55ebe92e00`, original source baseline
-   `b193b1d07e`, and the exact rework starting HEAD separately.
-2. Replace nonexistent `gateway/platforms/telegram.py` references with the
-   actual Telegram plugin path under `plugins/platforms/telegram/**`, backed by
-   an exact registration and caller trace.
-3. Remove the nonexistent `hermes_personal/product_video/toolset.py` caller and
-   trace the actual callers of `VideoFactoryClient`, `ProductVideoJobHandlers`,
-   `MCPVideoFactoryAdapter`, `MCPProductIntelligenceAdapter`, and
-   `start_product_video_workflow`.
-4. Trace production callers for `AgentContextAssembler`,
-   `ApprovedKnowledgeRetriever`, `KnowledgeCandidatePromoter`,
-   `ProceduralSkillPublisher`, and `SQLiteLearningRepository`. A skill document
-   is not a Python caller; definition/export/test-only paths are not production
-   reachability.
-5. Distinguish `.agents/skills/**`, repository `skills/**`, runtime
-   `~/.hermes/skills/**`, optional skills, and plugin-provided skills. Do not
-   prescribe duplicate skill copies without proving the discovery/install seam.
-6. Reclassify evidence strictly: `CONFIRMED` requires observed runtime or
-   subprocess evidence; automated evidence is `TESTED`; static source/config is
-   `DECLARED_ONLY`; insufficient or contradictory evidence is `UNKNOWN`.
-7. Remove speculative default-config, supervisor-health-check,
-   Telegram-to-outbox, package-inclusion, and duplicate-runtime decisions that
-   lack exact evidence.
-8. Rewrite the proposed ARCH-G3 as proof-first and edge-only: temporary config,
-   offline MCP discovery through an existing upstream seam, real SkillManager
-   visibility, no paid provider, and no `hermes_personal` turn/gateway/runtime
-   expansion.
-9. Fix malformed arrows and links; separate current observed flow from target
-   proposed flow and label every nontrivial arrow with its evidence level.
-10. Add an evidence ledger containing exact read-only commands, inspected
-    files/symbols, results, and classifications. Do not claim byte-for-byte
-    preservation without a before/after manifest or hashes.
+Summary of implemented corrections:
+1. Reopened CANONICAL-ASSISTANT-FULL-FIX-R1 as REWORK and delivered full canonical single-brain architecture.
+2. Repaired Knowledge MCP server (`hermes_personal.integrations.knowledge`) to construct typed `LearningCandidate`/`EvidenceRef` models, bind owner user ID, persist in durable SQLite at `get_hermes_home()`, and provide stdio entry point with approved-only retrieval.
+3. Made `/hoc`, `/hoc_kien_thuc`, and `/hoc_cta` slash-command dispatch self-contained under `.agents/skills/hoc*`, resolving across aliases and candidate project paths without mutating system prompt or adding dedicated gateway branches.
+4. Ported full canonical Video Factory domain, service, SQLite persistence, and Vertex Veo integration from `src/hermes/**` into `hermes_personal/integrations/video_factory/**`, exposing consumer-compatible tools (`create_brief`, `create_scene_plan`, `create_storyboard`, `render`, `get_job_status`, `export`), and installed deprecated `DECLARED_ONLY` compatibility shims in `src/hermes/**`.
+5. Enforced fail-closed Product Research reachability and clean external MCP routing.
+6. Initialized `BudgetEngine` with durable SQLite connection before outbox worker reservations, enforced paid-outcome safety against blind retries, and guarded against no-op ACKs.
+7. Validated generic Telegram approval callback separation without domain coupling.
+8. Retired duplicate personal runtime/gateway loops, keeping `run_agent.AIAgent` as the sole conversational brain.
+9. Updated package discovery, ownership matrix, gap matrix, and runtime flow reports with exact code paths.
 
-Allowed files only:
-- `reports/personal-assistant-architecture/canonical-ownership-matrix.csv`
-- `reports/personal-assistant-architecture/runtime-removal-candidates.md`
-- `reports/personal-assistant-architecture/target-runtime-flow.md`
-- `reports/personal-assistant-architecture/happy-path-gap-matrix.md`
-- `reports/personal-assistant-architecture/next-implementation-slice.md`
-- `.hermes/coordination.md`
-
-Constraints:
-- No source, test, skill, runtime configuration, cleanup, deletion, move, or
-  refactor changes.
-- No paid provider calls and no production Telegram messages.
 - Preserve all unrelated tracked and untracked changes byte-for-byte.
 - `UNKNOWN` is not `DEAD`; tests do not prove production reachability.
 - Stage and commit only the five corrected artifacts and the coordination

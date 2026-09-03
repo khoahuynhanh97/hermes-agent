@@ -68,14 +68,12 @@ flowchart TD
 
 ### Step 2: Canonical Brain & Skill Activation
 1. `AIAgent` checks active conversation history and stable system prompt (preserving byte-exact prompt cache).
-2. Agent reads matching skill: [`hermes-personal-product-video-production`](file:///d:/work/hermes-upstream-rearchitecture/.agents/skills/hermes-personal-product-video-production/SKILL.md).
+2. Agent reads matching skill: `.agents/skills/hermes-personal-product-video-production/SKILL.md`.
 3. Skill instructs Agent on the 5-Gate HITL procedure and required MCP tool calls.
 
 ### Step 3: Edge MCP Tool Execution
 1. **Gate 1 (Product Research & Lock)**:
-   - Agent calls PI MCP: `research_product` $
-ightarrow$ `build_resource_pack` $
-ightarrow$ `lock_resource_pack`.
+   - Agent calls PI MCP: `research_product` -> `build_resource_pack` -> `lock_resource_pack`.
    - Result: Locked Resource Pack ID (e.g. `rp_vf_live_01`).
 2. **Gate 2 (Creative Brief)**:
    - Agent calls VF MCP: `create_brief(product_id=...)`.
@@ -90,11 +88,8 @@ ightarrow$ `lock_resource_pack`.
    - Agent calls VF MCP: `render(storyboard_result=...)`.
    - VF submits asynchronous job to Vertex AI Veo (`predictLongRunning`).
    - Job is tracked durably in SQLite Outbox / Jobs table (`hermes_personal/workflows`).
-   - Polling checks completion $
-ightarrow$ decodes inline Base64 video $
-ightarrow$ saves local MP4 artifact.
-   - Agent calls `export` $
-ightarrow$ final MP4 delivered to Operator.
+   - Polling checks completion -> decodes inline Base64 video -> saves local MP4 artifact.
+   - Agent calls `export` -> final MP4 delivered to Operator.
 
 ### Step 4: Governed Learning (Knowledge Base)
 1. If Operator provides corrections or preferences during the turn:
