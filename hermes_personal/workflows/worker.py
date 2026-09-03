@@ -50,6 +50,14 @@ def run_worker(
     db_path.parent.mkdir(parents=True, exist_ok=True)
     connection = connect(db_path)
     repo = OutboxRepository(connection)
+    _worker_id = worker_id or f"durable-worker-{os.getpid()}"
+
+    from hermes_personal.workflows.budgets import BudgetPolicy, init_default_engine
+    init_default_engine(
+        policy=BudgetPolicy(max_total=100000, per_channel={"video_factory": 50000, "telegram": 10000, "default": 10000}),
+        connection=connection,
+        owner_user_id=_worker_id,
+    )
 
     if topic_handlers is None and delivery_fn is None:
         from hermes_personal.product_video.handlers import create_product_video_topic_handlers
@@ -66,8 +74,6 @@ def run_worker(
             poll_timeout=_render_poll_timeout,
             poll_interval=_render_poll_interval,
         )
-
-    _worker_id = worker_id or f"durable-worker-{os.getpid()}"
     # Scale lease duration so it comfortably covers polling duration + buffer (prevents stale ACK failure)
     lease_duration = max(30.0, _render_poll_timeout + 60.0)
     dispatcher = OutboxDispatcher(
