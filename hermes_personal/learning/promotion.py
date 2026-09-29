@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import uuid
 from dataclasses import dataclass
 from typing import Any
 
@@ -51,6 +50,14 @@ class PromotionService:
         existing = self.repository.get_candidate(candidate.candidate_id)
         if not existing:
             candidate = self.repository.create_candidate(candidate)
+        else:
+            if (existing.owner_user_id != candidate.owner_user_id
+                    or existing.compute_digest() != candidate.compute_digest()):
+                raise InvalidCandidate("Candidate does not match the persisted candidate")
+            candidate = existing
+
+        if evaluation.candidate_id != candidate.candidate_id:
+            raise InvalidCandidate("Evaluation does not belong to candidate")
 
         # Record evaluation
         self.repository.record_evaluation(evaluation)
@@ -90,13 +97,18 @@ class PromotionService:
                     "kind": candidate.kind,
                     "title": candidate.title,
                     "content": candidate.content,
+                    "content_digest": candidate.compute_digest(),
+                    "expected_version": max(
+                        (v.version for v in self.repository.get_versions_for_candidate(candidate.candidate_id)),
+                        default=0,
+                    ) + 1,
                     "evaluation_id": evaluation.evaluation_id,
                     "score": evaluation.score,
                     "reason": evaluation.reason,
                 }
                 approval_id = self.approval_service.submit_request(payload)
             else:
-                approval_id = f"appr_{uuid.uuid4().hex[:12]}"
+                raise InvalidCandidate("Approval service is required for owner approval")
 
             self.repository.update_candidate_status(candidate.candidate_id, "pending_approval")
             return PromotionRequestResult(
@@ -128,26 +140,31 @@ class PromotionService:
         if cand.owner_user_id != owner_user_id:
             raise InvalidCandidate(f"Candidate owner '{cand.owner_user_id}' does not match '{owner_user_id}'")
 
-        if self.approval_service is not None:
-            try:
-                self.approval_service.approve(approval_id)
-            except Exception:
-                # If already approved or approval mock, proceed
-                pass
+        if self.approval_service is None:
+            raise InvalidCandidate("Approval service is required for owner approval")
+        req = self.approval_service.get_request(approval_id)
+        if getattr(req.status, "value", req.status) != "approved":
+            raise InvalidCandidate("Promotion requires an already approved owner request")
+        bindings = {
+            "action": "promote_learning",
+            "owner_user_id": owner_user_id,
+            "candidate_id": candidate_id,
+            "kind": cand.kind,
+            "content_digest": cand.compute_digest(),
+        }
+        if any(req.payload.get(key) != value for key, value in bindings.items()):
+            raise InvalidCandidate("Approval does not match candidate owner, kind, or content")
+        versions = self.repository.get_versions_for_candidate(candidate_id)
+        next_version = max((v.version for v in versions), default=0) + 1
+        receipt_version = req.payload.get("expected_version")
+        if type(receipt_version) is not int or receipt_version != next_version:
+            raise InvalidVersion("Approval version is missing or stale")
+        if expected_version is not None and expected_version != next_version:
+            raise InvalidVersion(f"Expected version {expected_version} but next version is {next_version}")
 
-        # Supersede prior active versions
-        for v in self.repository.get_versions_for_candidate(candidate_id):
-            if v.status == "active":
-                self.repository.update_version_status(v.version_id, "superseded")
-
-        new_version = self.repository.create_version(candidate_id, cand.content)
-        if expected_version is not None and new_version.version != expected_version:
-            raise InvalidVersion(
-                f"Expected version {expected_version} but created version {new_version.version}"
-            )
-
-        self.repository.update_candidate_status(candidate_id, "approved")
-        return new_version
+        return self.repository.create_version(
+            candidate_id, cand.content, expected_version=next_version,
+        )
 
     def rollback(
         self,

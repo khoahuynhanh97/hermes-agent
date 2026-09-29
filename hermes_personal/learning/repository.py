@@ -321,7 +321,9 @@ class LearningRepository:
             created_at=r["created_at"],
         )
 
-    def create_version(self, candidate_id: str, content: str) -> LearningVersion:
+    def create_version(
+        self, candidate_id: str, content: str, *, expected_version: int | None = None,
+    ) -> LearningVersion:
         cand = self.get_candidate(candidate_id)
         if not cand:
             raise InvalidVersion(f"Candidate '{candidate_id}' not found")
@@ -338,6 +340,26 @@ class LearningRepository:
         created_at = datetime.now(timezone.utc).isoformat()
 
         with self._conn:
+            if expected_version is not None:
+                # Acquire the writer lock before checking the approved version.
+                self._conn.execute(
+                    "UPDATE learning_candidate SET status = status WHERE candidate_id = ?",
+                    (candidate_id,),
+                )
+                current = self._conn.execute(
+                    "SELECT COALESCE(MAX(version), 0) FROM learning_version WHERE candidate_id = ?",
+                    (candidate_id,),
+                ).fetchone()[0]
+                if current + 1 != expected_version or next_v != expected_version:
+                    raise InvalidVersion("Approval version is stale")
+                self._conn.execute(
+                    "UPDATE learning_version SET status = 'superseded' "
+                    "WHERE candidate_id = ? AND status = 'active'", (candidate_id,),
+                )
+                self._conn.execute(
+                    "UPDATE learning_candidate SET status = 'approved' WHERE candidate_id = ?",
+                    (candidate_id,),
+                )
             self._conn.execute(
                 """
                 INSERT INTO learning_version (version_id, candidate_id, owner_user_id, version, content, digest, status, created_at)
@@ -368,6 +390,10 @@ class LearningRepository:
                     created_at,
                 ),
             )
+
+        # Index into FTS if candidate is approved
+        if cand.status == "approved" or (expected_version is not None):
+            self.index_version_fts(candidate_id, version_id)
 
         return LearningVersion(
             version_id=version_id,
@@ -497,3 +523,70 @@ class LearningRepository:
             for r in cur.fetchall()
         ]
 
+    def index_version_fts(self, candidate_id: str, version_id: str) -> None:
+        """Index an approved learning version into the FTS5 knowledge index."""
+        cand = self.get_candidate(candidate_id)
+        version = self.get_version(version_id)
+        if not cand or not version:
+            return
+        # Remove any existing FTS entry for this version and insert new one
+        try:
+            with self._conn:
+                self._conn.execute(
+                    "DELETE FROM knowledge_fts WHERE version_id = ?", (version_id,)
+                )
+                self._conn.execute(
+                    """
+                    INSERT INTO knowledge_fts (title, content, candidate_id, version_id, owner_user_id, kind)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (cand.title, version.content, candidate_id, version_id, version.owner_user_id, cand.kind),
+                )
+        except Exception:
+            pass
+
+    def search_fts(
+        self, query: str, owner_user_id: str, kind: str | None = None, limit: int = 10
+    ) -> list[tuple[str, str, str, str, float]]:
+        """Full-text search over the knowledge FTS5 index.
+
+        Returns list of (candidate_id, version_id, title, snippet, rank) tuples
+        filtered by owner and optionally by kind.
+        """
+        if not query.strip():
+            return []
+        # Escape FTS5 special characters for safety
+        safe_query = query.replace('"', '""')
+        try:
+            if kind:
+                cur = self._conn.execute(
+                    """
+                    SELECT candidate_id, version_id, title,
+                           snippet(knowledge_fts, 1, '<b>', '</b>', '...', 64) as snippet,
+                           rank
+                    FROM knowledge_fts
+                    WHERE knowledge_fts MATCH ? AND owner_user_id = ? AND kind = ?
+                    ORDER BY rank
+                    LIMIT ?
+                    """,
+                    (f'"{safe_query}"', owner_user_id, kind, limit),
+                )
+            else:
+                cur = self._conn.execute(
+                    """
+                    SELECT candidate_id, version_id, title,
+                           snippet(knowledge_fts, 1, '<b>', '</b>', '...', 64) as snippet,
+                           rank
+                    FROM knowledge_fts
+                    WHERE knowledge_fts MATCH ? AND owner_user_id = ?
+                    ORDER BY rank
+                    LIMIT ?
+                    """,
+                    (f'"{safe_query}"', owner_user_id, limit),
+                )
+            return [
+                (row[0], row[1], row[2], row[3], row[4])
+                for row in cur.fetchall()
+            ]
+        except Exception:
+            return []

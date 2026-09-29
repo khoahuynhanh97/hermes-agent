@@ -1,0 +1,1027 @@
+{
+  "timestamp_utc": "2026-08-29T18:19:07.737857+00:00",
+  "summary": {
+    "total_classified_modules": 109,
+    "processes_declared": 6,
+    "routes_audited": 8,
+    "services_audited": 8
+  },
+  "processes": [
+    {
+      "name": "gateway",
+      "runtime_status": "TESTED",
+      "target_module": "hermes_personal.runtime.gateway_server",
+      "target_exists": true,
+      "target_path": "D:\\work\\hermes-upstream-rearchitecture\\hermes_personal\\runtime\\gateway_server.py",
+      "argv_template": [
+        "python",
+        "-m",
+        "hermes_personal.runtime.gateway_server",
+        "--port",
+        "{gateway_port}",
+        "--provider-mode",
+        "{provider_mode}"
+      ],
+      "required": true,
+      "readiness_probe": {
+        "type": "http",
+        "endpoint": "http://127.0.0.1:{gateway_port}/health/ready"
+      },
+      "evidence": "Declared in ProcessSpec (hermes_personal.runtime.processes). Exercised in tests/hermes_personal/runtime/test_gateway_server.py, test_startup_readiness_lifecycle.py, and e2e/test_runtime_smoke.py via in-process ASGI/SmokeRunner. Not observed as a standalone OS process in production."
+    },
+    {
+      "name": "app_api",
+      "runtime_status": "TESTED",
+      "target_module": "hermes_personal.api.server",
+      "target_exists": true,
+      "target_path": "D:\\work\\hermes-upstream-rearchitecture\\hermes_personal\\api\\server.py",
+      "argv_template": [
+        "python",
+        "-m",
+        "hermes_personal.api.server",
+        "--port",
+        "{app_api_port}",
+        "--gateway-port",
+        "{gateway_port}"
+      ],
+      "required": true,
+      "readiness_probe": {
+        "type": "http",
+        "endpoint": "http://127.0.0.1:{app_api_port}/healthz"
+      },
+      "evidence": "Declared in ProcessSpec (hermes_personal.runtime.processes). Exercised in tests/hermes_personal/api/test_server.py and test_turn_api.py. In-process test clients verify routes."
+    },
+    {
+      "name": "mcp_discovery",
+      "runtime_status": "DECLARED",
+      "target_module": "hermes_personal.capabilities.mcp_runner",
+      "target_exists": false,
+      "target_path": null,
+      "argv_template": [
+        "python",
+        "-m",
+        "hermes_personal.capabilities.mcp_runner",
+        "--action",
+        "discover"
+      ],
+      "required": true,
+      "readiness_probe": {
+        "type": "exec",
+        "endpoint": "mcp_snapshot_check"
+      },
+      "evidence": "Declared in ProcessSpec when enable_mcp=True. Module hermes_personal.capabilities.mcp_runner is missing from the tree. Documented as a known gap in docs/known-gaps.md."
+    },
+    {
+      "name": "durable_worker",
+      "runtime_status": "TESTED",
+      "target_module": "hermes_personal.workflows.worker",
+      "target_exists": true,
+      "target_path": "D:\\work\\hermes-upstream-rearchitecture\\hermes_personal\\workflows\\worker.py",
+      "argv_template": [
+        "python",
+        "-m",
+        "hermes_personal.workflows.worker"
+      ],
+      "required": true,
+      "readiness_probe": {
+        "type": "noop"
+      },
+      "evidence": "Declared in ProcessSpec when enable_workers=True. Target module exists and is exercised via workflow unit/integration tests in tests/hermes_personal/workflows/."
+    },
+    {
+      "name": "telegram",
+      "runtime_status": "DECLARED",
+      "target_module": "hermes_personal.gateway.platforms.telegram_runner",
+      "target_exists": false,
+      "target_path": null,
+      "argv_template": [
+        "python",
+        "-m",
+        "hermes_personal.gateway.platforms.telegram_runner"
+      ],
+      "required": false,
+      "readiness_probe": {
+        "type": "noop"
+      },
+      "evidence": "Declared in ProcessSpec when enable_telegram=True. Target package hermes_personal.gateway.platforms is missing. Documented as a known gap in docs/known-gaps.md (legacy gateway handles Telegram)."
+    },
+    {
+      "name": "web_ui",
+      "runtime_status": "TESTED",
+      "target_module": "web dev server",
+      "target_exists": true,
+      "target_path": "D:\\work\\hermes-upstream-rearchitecture\\web",
+      "argv_template": [
+        "node",
+        "run",
+        "dev",
+        "--",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "{web_port}"
+      ],
+      "required": false,
+      "readiness_probe": {
+        "type": "http",
+        "endpoint": "http://127.0.0.1:{web_port}"
+      },
+      "evidence": "Declared in ProcessSpec when enable_web=True in development mode. Config and argv construction tested in tests/hermes_personal/runtime/test_processes.py."
+    }
+  ],
+  "routes": [
+    {
+      "service": "gateway_server",
+      "method": "POST",
+      "path": "/api/v1/turns",
+      "runtime_status": "TESTED",
+      "contract": "AgentTurnRequest -> AgentEvent (NDJSON stream)",
+      "evidence": "Tested in tests/hermes_personal/runtime/test_gateway_server.py and test_turn_api.py"
+    },
+    {
+      "service": "gateway_server",
+      "method": "GET",
+      "path": "/health/ready",
+      "runtime_status": "TESTED",
+      "contract": "JSON readiness state",
+      "evidence": "Tested in tests/hermes_personal/runtime/test_startup_readiness_lifecycle.py"
+    },
+    {
+      "service": "gateway_server",
+      "method": "GET",
+      "path": "/health/live",
+      "runtime_status": "TESTED",
+      "contract": "JSON liveness state",
+      "evidence": "Tested in tests/hermes_personal/runtime/test_gateway_server.py"
+    },
+    {
+      "service": "app_api",
+      "method": "POST",
+      "path": "/api/v1/turns",
+      "runtime_status": "TESTED",
+      "contract": "Ingress turn dispatch",
+      "evidence": "Tested in tests/hermes_personal/api/test_server.py"
+    },
+    {
+      "service": "app_api",
+      "method": "GET",
+      "path": "/api/v1/turns/{turn_id}",
+      "runtime_status": "TESTED",
+      "contract": "Turn query by ID",
+      "evidence": "Tested in tests/hermes_personal/application/test_turn_api.py"
+    },
+    {
+      "service": "app_api",
+      "method": "GET",
+      "path": "/api/v1/events/stream",
+      "runtime_status": "TESTED",
+      "contract": "Server-Sent Events (SSE) stream",
+      "evidence": "Tested in tests/hermes_personal/application/test_events_api.py"
+    },
+    {
+      "service": "app_api",
+      "method": "GET",
+      "path": "/api/v1/events/replay",
+      "runtime_status": "TESTED",
+      "contract": "Durable event replay",
+      "evidence": "Tested in tests/hermes_personal/application/test_events_api.py and test_idempotency_event_replay.py"
+    },
+    {
+      "service": "app_api",
+      "method": "GET",
+      "path": "/healthz",
+      "runtime_status": "TESTED",
+      "contract": "Application health status",
+      "evidence": "Tested in tests/hermes_personal/api/test_server.py"
+    }
+  ],
+  "services": [
+    {
+      "name": "HermesTurnService",
+      "module": "hermes_personal.turns.service",
+      "runtime_status": "TESTED",
+      "evidence": "Canonical single turn coordinator. Tested extensively in tests/hermes_personal/turns/."
+    },
+    {
+      "name": "EventRepository",
+      "module": "hermes_personal.events.repository",
+      "runtime_status": "TESTED",
+      "evidence": "Durable SQLite event store. Tested in tests/hermes_personal/events/."
+    },
+    {
+      "name": "SessionRepository",
+      "module": "hermes_personal.sessions.repository",
+      "runtime_status": "TESTED",
+      "evidence": "Durable SQLite session store. Tested in tests/hermes_personal/sessions/."
+    },
+    {
+      "name": "IdentityRepository",
+      "module": "hermes_personal.identity.repository",
+      "runtime_status": "TESTED",
+      "evidence": "Principal and owner isolation store. Tested in tests/hermes_personal/identity/."
+    },
+    {
+      "name": "Supervisor",
+      "module": "hermes_personal.runtime.supervisor",
+      "runtime_status": "TESTED",
+      "evidence": "Process supervisor with exponential backoff & readiness probes. Tested in tests/hermes_personal/runtime/test_supervisor.py."
+    },
+    {
+      "name": "ProductVideoWorkflow",
+      "module": "hermes_personal.workflows.product_video",
+      "runtime_status": "TESTED",
+      "evidence": "HITL gated pipeline (Product Lock, Brief, Scene Plan, Storyboard, Final approval). Tested in tests/hermes_personal/workflows/test_product_video.py."
+    },
+    {
+      "name": "KnowledgeCapturePromptEngine",
+      "module": "agent.knowledge_capture_prompt",
+      "runtime_status": "TESTED",
+      "evidence": "Prompt engine for /hoc, /hoc_kien_thuc, /hoc_cta. Dynamic procedure contract loader. Tested in tests/agent/test_knowledge_capture_prompt.py."
+    },
+    {
+      "name": "LearningFromVideoSkill",
+      "module": "skills/media/learning-from-video/SKILL.md",
+      "runtime_status": "TESTED",
+      "evidence": "Bundled skill. Tested in tests/skills/test_learning_from_video_skill.py."
+    }
+  ],
+  "modules": [
+    {
+      "module": "hermes_personal.__init__",
+      "path": "hermes_personal/__init__.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/__init__.py"
+    },
+    {
+      "module": "hermes_personal.api.__init__",
+      "path": "hermes_personal/api/__init__.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/api/__init__.py"
+    },
+    {
+      "module": "hermes_personal.api.server",
+      "path": "hermes_personal/api/server.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/api/server.py"
+    },
+    {
+      "module": "hermes_personal.application.__init__",
+      "path": "hermes_personal/application/__init__.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/application/__init__.py"
+    },
+    {
+      "module": "hermes_personal.application.app",
+      "path": "hermes_personal/application/app.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/application/app.py"
+    },
+    {
+      "module": "hermes_personal.application.events_api",
+      "path": "hermes_personal/application/events_api.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/application/events_api.py"
+    },
+    {
+      "module": "hermes_personal.application.health_api",
+      "path": "hermes_personal/application/health_api.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/application/health_api.py"
+    },
+    {
+      "module": "hermes_personal.application.middleware",
+      "path": "hermes_personal/application/middleware.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/application/middleware.py"
+    },
+    {
+      "module": "hermes_personal.application.operator_handler",
+      "path": "hermes_personal/application/operator_handler.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/application/operator_handler.py"
+    },
+    {
+      "module": "hermes_personal.application.turn_api",
+      "path": "hermes_personal/application/turn_api.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/application/turn_api.py"
+    },
+    {
+      "module": "hermes_personal.capabilities.__init__",
+      "path": "hermes_personal/capabilities/__init__.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/capabilities/__init__.py"
+    },
+    {
+      "module": "hermes_personal.capabilities.bindings",
+      "path": "hermes_personal/capabilities/bindings.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/capabilities/bindings.py"
+    },
+    {
+      "module": "hermes_personal.capabilities.discovery",
+      "path": "hermes_personal/capabilities/discovery.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/capabilities/discovery.py"
+    },
+    {
+      "module": "hermes_personal.capabilities.errors",
+      "path": "hermes_personal/capabilities/errors.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/capabilities/errors.py"
+    },
+    {
+      "module": "hermes_personal.capabilities.manifest",
+      "path": "hermes_personal/capabilities/manifest.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/capabilities/manifest.py"
+    },
+    {
+      "module": "hermes_personal.capabilities.policy",
+      "path": "hermes_personal/capabilities/policy.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/capabilities/policy.py"
+    },
+    {
+      "module": "hermes_personal.capabilities.search",
+      "path": "hermes_personal/capabilities/search.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/capabilities/search.py"
+    },
+    {
+      "module": "hermes_personal.capabilities.service",
+      "path": "hermes_personal/capabilities/service.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/capabilities/service.py"
+    },
+    {
+      "module": "hermes_personal.capabilities.snapshots",
+      "path": "hermes_personal/capabilities/snapshots.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/capabilities/snapshots.py"
+    },
+    {
+      "module": "hermes_personal.contracts.__init__",
+      "path": "hermes_personal/contracts/__init__.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/contracts/__init__.py"
+    },
+    {
+      "module": "hermes_personal.contracts.capability",
+      "path": "hermes_personal/contracts/capability.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/contracts/capability.py"
+    },
+    {
+      "module": "hermes_personal.contracts.events",
+      "path": "hermes_personal/contracts/events.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/contracts/events.py"
+    },
+    {
+      "module": "hermes_personal.contracts.operator",
+      "path": "hermes_personal/contracts/operator.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/contracts/operator.py"
+    },
+    {
+      "module": "hermes_personal.contracts.principal",
+      "path": "hermes_personal/contracts/principal.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/contracts/principal.py"
+    },
+    {
+      "module": "hermes_personal.contracts.serialization",
+      "path": "hermes_personal/contracts/serialization.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/contracts/serialization.py"
+    },
+    {
+      "module": "hermes_personal.contracts.turn",
+      "path": "hermes_personal/contracts/turn.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/contracts/turn.py"
+    },
+    {
+      "module": "hermes_personal.cutover.__init__",
+      "path": "hermes_personal/cutover/__init__.py",
+      "classification": "SUPPORT_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Cutover inventory and retirement tooling: hermes_personal/cutover/__init__.py"
+    },
+    {
+      "module": "hermes_personal.cutover.inventory",
+      "path": "hermes_personal/cutover/inventory.py",
+      "classification": "SUPPORT_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Cutover inventory and retirement tooling: hermes_personal/cutover/inventory.py"
+    },
+    {
+      "module": "hermes_personal.cutover.parity",
+      "path": "hermes_personal/cutover/parity.py",
+      "classification": "SUPPORT_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Cutover inventory and retirement tooling: hermes_personal/cutover/parity.py"
+    },
+    {
+      "module": "hermes_personal.cutover.retirement",
+      "path": "hermes_personal/cutover/retirement.py",
+      "classification": "SUPPORT_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Cutover inventory and retirement tooling: hermes_personal/cutover/retirement.py"
+    },
+    {
+      "module": "hermes_personal.gateway.__init__",
+      "path": "hermes_personal/gateway/__init__.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/gateway/__init__.py"
+    },
+    {
+      "module": "hermes_personal.gateway.normalizers",
+      "path": "hermes_personal/gateway/normalizers.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/gateway/normalizers.py"
+    },
+    {
+      "module": "hermes_personal.gateway.plugin",
+      "path": "hermes_personal/gateway/plugin.py",
+      "classification": "SUPPORT_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Gateway plugin adapter: hermes_personal/gateway/plugin.py"
+    },
+    {
+      "module": "hermes_personal.identity.__init__",
+      "path": "hermes_personal/identity/__init__.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/identity/__init__.py"
+    },
+    {
+      "module": "hermes_personal.identity.models",
+      "path": "hermes_personal/identity/models.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/identity/models.py"
+    },
+    {
+      "module": "hermes_personal.identity.repository",
+      "path": "hermes_personal/identity/repository.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/identity/repository.py"
+    },
+    {
+      "module": "hermes_personal.integrations.product_intelligence.__init__",
+      "path": "hermes_personal/integrations/product_intelligence/__init__.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/integrations/product_intelligence/__init__.py"
+    },
+    {
+      "module": "hermes_personal.integrations.product_intelligence.client",
+      "path": "hermes_personal/integrations/product_intelligence/client.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/integrations/product_intelligence/client.py"
+    },
+    {
+      "module": "hermes_personal.integrations.product_intelligence.contracts",
+      "path": "hermes_personal/integrations/product_intelligence/contracts.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/integrations/product_intelligence/contracts.py"
+    },
+    {
+      "module": "hermes_personal.integrations.product_video.binding",
+      "path": "hermes_personal/integrations/product_video/binding.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/integrations/product_video/binding.py"
+    },
+    {
+      "module": "hermes_personal.integrations.product_video.handlers",
+      "path": "hermes_personal/integrations/product_video/handlers.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/integrations/product_video/handlers.py"
+    },
+    {
+      "module": "hermes_personal.integrations.video_factory.__init__",
+      "path": "hermes_personal/integrations/video_factory/__init__.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/integrations/video_factory/__init__.py"
+    },
+    {
+      "module": "hermes_personal.integrations.video_factory.client",
+      "path": "hermes_personal/integrations/video_factory/client.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/integrations/video_factory/client.py"
+    },
+    {
+      "module": "hermes_personal.integrations.video_factory.contracts",
+      "path": "hermes_personal/integrations/video_factory/contracts.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/integrations/video_factory/contracts.py"
+    },
+    {
+      "module": "hermes_personal.learning.__init__",
+      "path": "hermes_personal/learning/__init__.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/learning/__init__.py"
+    },
+    {
+      "module": "hermes_personal.learning.context",
+      "path": "hermes_personal/learning/context.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/learning/context.py"
+    },
+    {
+      "module": "hermes_personal.learning.evaluator",
+      "path": "hermes_personal/learning/evaluator.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/learning/evaluator.py"
+    },
+    {
+      "module": "hermes_personal.learning.memory_policy",
+      "path": "hermes_personal/learning/memory_policy.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/learning/memory_policy.py"
+    },
+    {
+      "module": "hermes_personal.learning.metrics",
+      "path": "hermes_personal/learning/metrics.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/learning/metrics.py"
+    },
+    {
+      "module": "hermes_personal.learning.models",
+      "path": "hermes_personal/learning/models.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/learning/models.py"
+    },
+    {
+      "module": "hermes_personal.learning.promotion",
+      "path": "hermes_personal/learning/promotion.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/learning/promotion.py"
+    },
+    {
+      "module": "hermes_personal.learning.repository",
+      "path": "hermes_personal/learning/repository.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/learning/repository.py"
+    },
+    {
+      "module": "hermes_personal.learning.retrieval",
+      "path": "hermes_personal/learning/retrieval.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/learning/retrieval.py"
+    },
+    {
+      "module": "hermes_personal.learning.skill_publisher",
+      "path": "hermes_personal/learning/skill_publisher.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/learning/skill_publisher.py"
+    },
+    {
+      "module": "hermes_personal.migration.__init__",
+      "path": "hermes_personal/migration/__init__.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/migration/__init__.py"
+    },
+    {
+      "module": "hermes_personal.migration.inventory",
+      "path": "hermes_personal/migration/inventory.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/migration/inventory.py"
+    },
+    {
+      "module": "hermes_personal.migration.reconcile",
+      "path": "hermes_personal/migration/reconcile.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/migration/reconcile.py"
+    },
+    {
+      "module": "hermes_personal.observability.__init__",
+      "path": "hermes_personal/observability/__init__.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/observability/__init__.py"
+    },
+    {
+      "module": "hermes_personal.observability.context",
+      "path": "hermes_personal/observability/context.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/observability/context.py"
+    },
+    {
+      "module": "hermes_personal.observability.health",
+      "path": "hermes_personal/observability/health.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/observability/health.py"
+    },
+    {
+      "module": "hermes_personal.observability.redaction",
+      "path": "hermes_personal/observability/redaction.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/observability/redaction.py"
+    },
+    {
+      "module": "hermes_personal.orchestration.__init__",
+      "path": "hermes_personal/orchestration/__init__.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/orchestration/__init__.py"
+    },
+    {
+      "module": "hermes_personal.orchestration.event_repository",
+      "path": "hermes_personal/orchestration/event_repository.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/orchestration/event_repository.py"
+    },
+    {
+      "module": "hermes_personal.orchestration.ports",
+      "path": "hermes_personal/orchestration/ports.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/orchestration/ports.py"
+    },
+    {
+      "module": "hermes_personal.orchestration.turn_service",
+      "path": "hermes_personal/orchestration/turn_service.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/orchestration/turn_service.py"
+    },
+    {
+      "module": "hermes_personal.orchestration.upstream_agent",
+      "path": "hermes_personal/orchestration/upstream_agent.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/orchestration/upstream_agent.py"
+    },
+    {
+      "module": "hermes_personal.product.research",
+      "path": "hermes_personal/product/research.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/product/research.py"
+    },
+    {
+      "module": "hermes_personal.product.resource_pack",
+      "path": "hermes_personal/product/resource_pack.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/product/resource_pack.py"
+    },
+    {
+      "module": "hermes_personal.product_video.__init__",
+      "path": "hermes_personal/product_video/__init__.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/product_video/__init__.py"
+    },
+    {
+      "module": "hermes_personal.product_video.binding",
+      "path": "hermes_personal/product_video/binding.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/product_video/binding.py"
+    },
+    {
+      "module": "hermes_personal.product_video.handlers",
+      "path": "hermes_personal/product_video/handlers.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/product_video/handlers.py"
+    },
+    {
+      "module": "hermes_personal.product_video.workflow",
+      "path": "hermes_personal/product_video/workflow.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/product_video/workflow.py"
+    },
+    {
+      "module": "hermes_personal.provenance",
+      "path": "hermes_personal/provenance.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/provenance.py"
+    },
+    {
+      "module": "hermes_personal.runtime.__init__",
+      "path": "hermes_personal/runtime/__init__.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/runtime/__init__.py"
+    },
+    {
+      "module": "hermes_personal.runtime.cli",
+      "path": "hermes_personal/runtime/cli.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/runtime/cli.py"
+    },
+    {
+      "module": "hermes_personal.runtime.config",
+      "path": "hermes_personal/runtime/config.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/runtime/config.py"
+    },
+    {
+      "module": "hermes_personal.runtime.gateway_server",
+      "path": "hermes_personal/runtime/gateway_server.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/runtime/gateway_server.py"
+    },
+    {
+      "module": "hermes_personal.runtime.plugin",
+      "path": "hermes_personal/runtime/plugin.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/runtime/plugin.py"
+    },
+    {
+      "module": "hermes_personal.runtime.processes",
+      "path": "hermes_personal/runtime/processes.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/runtime/processes.py"
+    },
+    {
+      "module": "hermes_personal.runtime.readiness",
+      "path": "hermes_personal/runtime/readiness.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/runtime/readiness.py"
+    },
+    {
+      "module": "hermes_personal.runtime.startup",
+      "path": "hermes_personal/runtime/startup.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/runtime/startup.py"
+    },
+    {
+      "module": "hermes_personal.runtime.supervisor",
+      "path": "hermes_personal/runtime/supervisor.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Core active turn & runtime component: hermes_personal/runtime/supervisor.py"
+    },
+    {
+      "module": "hermes_personal.sessions.__init__",
+      "path": "hermes_personal/sessions/__init__.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/sessions/__init__.py"
+    },
+    {
+      "module": "hermes_personal.sessions.models",
+      "path": "hermes_personal/sessions/models.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/sessions/models.py"
+    },
+    {
+      "module": "hermes_personal.sessions.repository",
+      "path": "hermes_personal/sessions/repository.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/sessions/repository.py"
+    },
+    {
+      "module": "hermes_personal.sessions.upstream_transcript",
+      "path": "hermes_personal/sessions/upstream_transcript.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/sessions/upstream_transcript.py"
+    },
+    {
+      "module": "hermes_personal.storage.sqlite",
+      "path": "hermes_personal/storage/sqlite.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "MEDIUM",
+      "evidence": "Domain module: hermes_personal/storage/sqlite.py"
+    },
+    {
+      "module": "hermes_personal.workflows.__init__",
+      "path": "hermes_personal/workflows/__init__.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/workflows/__init__.py"
+    },
+    {
+      "module": "hermes_personal.workflows.approvals",
+      "path": "hermes_personal/workflows/approvals.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/workflows/approvals.py"
+    },
+    {
+      "module": "hermes_personal.workflows.budgets",
+      "path": "hermes_personal/workflows/budgets.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/workflows/budgets.py"
+    },
+    {
+      "module": "hermes_personal.workflows.definitions",
+      "path": "hermes_personal/workflows/definitions.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/workflows/definitions.py"
+    },
+    {
+      "module": "hermes_personal.workflows.engine",
+      "path": "hermes_personal/workflows/engine.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/workflows/engine.py"
+    },
+    {
+      "module": "hermes_personal.workflows.envelope",
+      "path": "hermes_personal/workflows/envelope.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/workflows/envelope.py"
+    },
+    {
+      "module": "hermes_personal.workflows.jobs",
+      "path": "hermes_personal/workflows/jobs.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/workflows/jobs.py"
+    },
+    {
+      "module": "hermes_personal.workflows.models",
+      "path": "hermes_personal/workflows/models.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/workflows/models.py"
+    },
+    {
+      "module": "hermes_personal.workflows.outbox_dispatcher",
+      "path": "hermes_personal/workflows/outbox_dispatcher.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/workflows/outbox_dispatcher.py"
+    },
+    {
+      "module": "hermes_personal.workflows.outbox_repository",
+      "path": "hermes_personal/workflows/outbox_repository.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/workflows/outbox_repository.py"
+    },
+    {
+      "module": "hermes_personal.workflows.recovery",
+      "path": "hermes_personal/workflows/recovery.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/workflows/recovery.py"
+    },
+    {
+      "module": "hermes_personal.workflows.repository",
+      "path": "hermes_personal/workflows/repository.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/workflows/repository.py"
+    },
+    {
+      "module": "hermes_personal.workflows.worker",
+      "path": "hermes_personal/workflows/worker.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Durable persistence and domain layer: hermes_personal/workflows/worker.py"
+    },
+    {
+      "module": "agent.knowledge_capture_prompt",
+      "path": "agent/knowledge_capture_prompt.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Prompt engine for video knowledge capture turns"
+    },
+    {
+      "module": "hermes_cli.commands",
+      "path": "hermes_cli/commands.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "CLI & Gateway command registry and resolution"
+    },
+    {
+      "module": "hermes_cli.cli_commands_mixin",
+      "path": "hermes_cli/cli_commands_mixin.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Interactive CLI slash command dispatchers"
+    },
+    {
+      "module": "cli",
+      "path": "cli.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "CLI master orchestrator"
+    },
+    {
+      "module": "gateway.run",
+      "path": "gateway/run.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Messaging Gateway runner & routing engine"
+    },
+    {
+      "module": "hermes_constants",
+      "path": "hermes_constants.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Hermes constants and profile path resolution"
+    },
+    {
+      "module": "run_agent",
+      "path": "run_agent.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Upstream AIAgent runtime core"
+    },
+    {
+      "module": "model_tools",
+      "path": "model_tools.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Built-in model tools orchestrator"
+    },
+    {
+      "module": "toolsets",
+      "path": "toolsets.py",
+      "classification": "ACTIVE_RUNTIME",
+      "confidence": "HIGH",
+      "evidence": "Toolset definition and core schema boundary"
+    }
+  ],
+  "contradictions_and_gaps": [
+    {
+      "component": "mcp_discovery",
+      "declared_in": "hermes_personal/runtime/processes.py",
+      "status": "MISSING_MODULE",
+      "detail": "Target module hermes_personal.capabilities.mcp_runner does not exist on disk. ProcessSpec cannot be launched if enable_mcp=True. Must remain disabled as documented in docs/known-gaps.md."
+    },
+    {
+      "component": "telegram_runner",
+      "declared_in": "hermes_personal/runtime/processes.py",
+      "status": "MISSING_MODULE",
+      "detail": "Target module hermes_personal.gateway.platforms.telegram_runner does not exist on disk. Telegram is served via legacy gateway in gateway/run.py. Must remain disabled in hermes start profile."
+    }
+  ]
+}

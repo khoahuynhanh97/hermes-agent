@@ -67,14 +67,10 @@ class DailyImportRepository:
 
     def _ensure_schema(self) -> None:
         with self.connection:
-            row = self.connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='daily_product_video_import'"
-            ).fetchone()
-            if not row:
-                self.connection.executescript(_LEDGER_SCHEMA)
-            else:
-                from hermes_personal.storage.sqlite import _migrate_daily_product_video_import
-                _migrate_daily_product_video_import(self.connection)
+            self.connection.executescript(_LEDGER_SCHEMA)
+            from hermes_personal.storage.sqlite import _migrate_daily_product_video_import
+            _migrate_daily_product_video_import(self.connection)
+
 
     def claim_product(
         self,

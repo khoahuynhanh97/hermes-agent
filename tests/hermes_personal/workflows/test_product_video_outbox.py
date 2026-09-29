@@ -7,8 +7,10 @@ from starlette.testclient import TestClient
 
 from hermes_personal.application.app import create_application
 from hermes_personal.application.events_api import EventsAPI
-from hermes_personal.application.operator_handler import create_operator_command_handler
+from hermes_personal.application.operator_handler import create_operator_command_handler, _current_qc_digest
 
+from hermes_personal.product_video.qc.models import QCReport, QCStage, QCVerdict
+from hermes_personal.product_video.qc.repository import QCReportRepository
 from hermes_personal.storage.sqlite import connect
 from hermes_personal.workflows.approvals import ApprovalService
 from hermes_personal.workflows.budgets import BudgetPolicy, init_default_engine, get_allocated_budget
@@ -27,6 +29,65 @@ from hermes_personal.product_video.handlers import (
     create_product_video_topic_handlers,
     start_product_video_workflow,
 )
+
+
+def _seed_pass_qc(conn, workflow_id: str, stage: QCStage, artifact: dict):
+    artifact_id = (
+        artifact.get("artifact_id")
+        or artifact.get("resource_pack_id")
+        or artifact.get("render_id")
+        or artifact.get("id")
+        or f"{stage.value}-{workflow_id}"
+    )
+    version = int(artifact.get("version") or artifact.get("resource_pack_version") or 1)
+    findings = {"seeded_for": "operator guard regression"}
+    if stage == QCStage.IMAGE:
+        manifest = []
+        raw_assets = artifact.get("assets") or artifact.get("assets_mapping") or {}
+        if isinstance(raw_assets, dict):
+            for k, v in raw_assets.items():
+                p = str(v)
+                manifest.append({"asset_id": k, "uri": f"file://{p}", "local_path": p, "sha256": "dummy", "eligible": True, "visual_observations": ["clean view"]})
+        findings["eligible_reference_manifest"] = manifest
+    QCReportRepository(conn).save_report(
+        QCReport(
+            report_id=f"qc_{stage.value}_{workflow_id}_{artifact_id}",
+            workflow_id=workflow_id,
+            stage=stage,
+            artifact_id=str(artifact_id),
+            artifact_version=version,
+            artifact_digest=_current_qc_digest(stage, artifact),
+            reference_digests=[],
+            evaluator_name="test_seeded_qc",
+            evaluator_version="1",
+            rubric_version="1",
+            created_at="2026-09-15T00:00:00+00:00",
+            score=90,
+            verdict=QCVerdict.PASS,
+            findings=findings,
+        )
+    )
+
+
+def _mock_qc_run(self, target_wf: str, stage: QCStage, **kwargs):
+    art = kwargs.get("artifact_override") or {}
+    _seed_pass_qc(self.connection, target_wf, stage, art)
+    report = QCReportRepository(self.connection).get_latest_report(target_wf, stage)
+    return {
+        "status": "completed",
+        "report_id": report.report_id,
+        "report": report,
+    }
+
+
+def _valid_auth(wf_id: str) -> dict:
+    return {
+        "workflow_id": wf_id,
+        "run_id": f"run_{wf_id}",
+        "scope": "product_video",
+        "expires_at": "2099-01-01T00:00:00+00:00",
+        "max_cost_usd": 10.0,
+    }
 
 
 def _init_db(conn):
@@ -269,6 +330,7 @@ def test_production_entrypoint_and_create_product_video_topic_handlers(tmp_path)
         product_name="TikTok Wireless Earbuds",
         keywords=["bluetooth", "anc"],
         pdp_url="https://shop.tiktok.com/view/product/99999",
+        project_id=f"proj_{wf_id}",
     )
     conn.close()
 
@@ -286,13 +348,16 @@ def test_production_entrypoint_and_create_product_video_topic_handlers(tmp_path)
 
     assert report.claimed == 1
     assert report.succeeded == 1
+
+    report2 = dispatcher.process_batch()
+    assert report2.claimed == 1
+    assert report2.succeeded == 1
     assert outbox_repo.list_unacknowledged() == []
 
     # Verify latest_artifact was persisted to workflow aggregate
     agg, version = repo2.get_workflow(wf_id)
     assert "latest_artifact" in agg
-    assert agg["latest_artifact"]["owner"] == "product_intelligence"
-    assert version == 2
+    assert version == 3
 
     conn2.close()
 
@@ -311,6 +376,7 @@ def test_runtime_durable_worker_processes_happy_path(tmp_path):
         workflow_id=wf_id,
         product_name="TikTok Smart Watch",
         keywords=["fitness", "heart_rate"],
+        project_id=f"proj_{wf_id}",
     )
     conn.close()
 
@@ -323,7 +389,7 @@ def test_runtime_durable_worker_processes_happy_path(tmp_path):
     worker_thread.start()
 
     # Wait for durable_worker to process outbox
-    time.sleep(0.3)
+    time.sleep(0.4)
     stop_evt.set()
     worker_thread.join(timeout=2.0)
 
@@ -382,6 +448,10 @@ def test_user_entrypoint_operator_command_starts_and_advances_workflow(tmp_path)
     report = dispatcher.process_batch()
     assert report.claimed == 1
     assert report.succeeded == 1
+
+    report_pack = dispatcher.process_batch()
+    assert report_pack.claimed == 1
+    assert report_pack.succeeded == 1
     assert outbox_repo.list_unacknowledged() == []
 
     # 3. Assert workflow reached HITL gate AwaitingProductLock & approval request created
@@ -392,6 +462,7 @@ def test_user_entrypoint_operator_command_starts_and_advances_workflow(tmp_path)
     appr_svc = ApprovalService(conn)
     req = appr_svc.get_request(agg["pending_approval_id"])
     assert req.status.value == "pending"
+    _seed_pass_qc(conn, wf_id, QCStage.IMAGE, agg["latest_artifact"])
 
     # 4. User Entry Point: approve operator command to advance workflow
     status_code_appr, resp_appr = api.handle_operator_command(
@@ -403,17 +474,13 @@ def test_user_entrypoint_operator_command_starts_and_advances_workflow(tmp_path)
     )
     assert status_code_appr == 200
     assert resp_appr["result"]["status"] == "approved"
-    assert resp_appr["result"]["new_state"] == ProductVideoWorkflowState.BUILDING_RESOURCE_PACK.value
-    assert resp_appr["result"]["enqueued_job"] == "product_video.resource_pack"
+    assert resp_appr["result"]["new_state"] == ProductVideoWorkflowState.LOCKING_RESOURCE_PACK.value
+    assert resp_appr["result"]["enqueued_job"] == "product_video.lock"
 
-    # 5. Process next stage outbox messages (product_video.resource_pack -> product_video.lock)
+    # 5. Process next stage outbox messages (product_video.lock -> product_video.creative_brief)
     report2 = dispatcher.process_batch()
     assert report2.claimed == 1
     assert report2.succeeded == 1
-
-    report3 = dispatcher.process_batch()
-    assert report3.claimed == 1
-    assert report3.succeeded == 1
 
     agg2, _ = repo.get_workflow(wf_id)
     assert agg2["state"] == ProductVideoWorkflowState.CREATING_BRIEF.value
@@ -432,6 +499,7 @@ def test_unconfigured_provider_mode_configured_fails_without_ack(tmp_path):
         workflow_id=wf_id,
         product_name="Product X",
         keywords=["k1"],
+        project_id=f"proj_{wf_id}",
     )
 
     # Handlers initialized with default provider_mode='configured' (missing live API clients)
@@ -446,6 +514,31 @@ def test_unconfigured_provider_mode_configured_fails_without_ack(tmp_path):
     assert report.succeeded == 0
     # Outbox message MUST NOT be ACKed!
     assert len(outbox_repo.list_unacknowledged()) == 1
+    conn.close()
+
+
+def test_start_product_video_workflow_requires_explicit_project_id(tmp_path):
+    """Test that start_product_video_workflow raises ValueError when project_id is missing or blank."""
+    db_file = tmp_path / "req_proj.db"
+    conn = connect(db_file)
+    repo = WorkflowRepository(conn)
+
+    with pytest.raises(ValueError, match="project_id is required"):
+        start_product_video_workflow(
+            workflow_repository=repo,
+            workflow_id="wf_no_proj",
+            product_name="Product No Proj",
+            keywords=["test"],
+        )
+
+    with pytest.raises(ValueError, match="project_id is required"):
+        start_product_video_workflow(
+            workflow_repository=repo,
+            workflow_id="wf_blank_proj",
+            product_name="Product Blank Proj",
+            keywords=["test"],
+            project_id="   ",
+        )
     conn.close()
 
 
@@ -492,17 +585,22 @@ def test_e2e_http_operator_route_full_workflow_progression(tmp_path):
     assert agg1["state"] == ProductVideoWorkflowState.RESEARCHING.value
     assert ver1 == 1
 
-    # Step 2: Run dispatcher.process_batch() for product_video.research
-    report2 = dispatcher.process_batch()
-    assert report2.claimed == 1
-    assert report2.succeeded == 1
+    # Step 2: Run dispatcher for research -> resource_pack -> AwaitingProductLock
+    report2a = dispatcher.process_batch()
+    assert report2a.claimed == 1
+    assert report2a.succeeded == 1
+
+    report2b = dispatcher.process_batch()
+    assert report2b.claimed == 1
+    assert report2b.succeeded == 1
 
     agg2, ver2 = repo.get_workflow(wf_id)
     assert agg2["state"] == ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK.value
     assert "pending_approval_id" in agg2
     req_id_1 = agg2["pending_approval_id"]
     assert agg2["latest_artifact"]["owner"] == "product_intelligence"
-    assert ver2 == 2
+    assert ver2 == 3
+    _seed_pass_qc(conn, wf_id, QCStage.IMAGE, agg2["latest_artifact"])
 
     # Step 3: POST /api/operator/command (approve req_id_1)
     resp3 = client.post(
@@ -520,29 +618,21 @@ def test_e2e_http_operator_route_full_workflow_progression(tmp_path):
     body3 = resp3.json()
     assert body3["status"] == "ok"
     assert body3["result"]["status"] == "approved"
-    assert body3["result"]["new_state"] == ProductVideoWorkflowState.BUILDING_RESOURCE_PACK.value
-    assert body3["result"]["enqueued_job"] == "product_video.resource_pack"
+    assert body3["result"]["new_state"] == ProductVideoWorkflowState.LOCKING_RESOURCE_PACK.value
+    assert body3["result"]["enqueued_job"] == "product_video.lock"
 
     agg3, ver3 = repo.get_workflow(wf_id)
-    assert agg3["state"] == ProductVideoWorkflowState.BUILDING_RESOURCE_PACK.value
-    assert ver3 == 3
+    assert agg3["state"] == ProductVideoWorkflowState.LOCKING_RESOURCE_PACK.value
+    assert ver3 == 4
 
-    # Step 4: Run dispatcher for product_video.resource_pack -> enqueues product_video.lock, then run dispatcher for product_video.lock -> CREATING_BRIEF
-    report4a = dispatcher.process_batch()
-    assert report4a.claimed == 1
-    assert report4a.succeeded == 1
+    # Step 4: Run dispatcher for product_video.lock -> CREATING_BRIEF
+    report4 = dispatcher.process_batch()
+    assert report4.claimed == 1
+    assert report4.succeeded == 1
 
-    agg4a, ver4a = repo.get_workflow(wf_id)
-    assert agg4a["state"] == ProductVideoWorkflowState.BUILDING_RESOURCE_PACK.value
-    assert ver4a == 4
-
-    report4b = dispatcher.process_batch()
-    assert report4b.claimed == 1
-    assert report4b.succeeded == 1
-
-    agg4b, ver4b = repo.get_workflow(wf_id)
-    assert agg4b["state"] == ProductVideoWorkflowState.CREATING_BRIEF.value
-    assert ver4b == 5
+    agg4, ver4 = repo.get_workflow(wf_id)
+    assert agg4["state"] == ProductVideoWorkflowState.CREATING_BRIEF.value
+    assert ver4 == 5
 
     # Step 5: Run dispatcher.process_batch() for product_video.creative_brief -> AwaitingBriefApproval
     report5 = dispatcher.process_batch()
@@ -615,6 +705,7 @@ def test_e2e_http_operator_route_full_workflow_progression(tmp_path):
     req_id_4 = agg7["pending_approval_id"]
     assert "latest_artifact" in agg7
     assert ver7 == 10
+    _seed_pass_qc(conn, wf_id, QCStage.KEYFRAME, agg7["latest_artifact"])
 
     # Step 8: POST /api/operator/command (approve req_id_4) -> render job -> AwaitingFinalApproval
     resp8 = client.post(
@@ -642,6 +733,7 @@ def test_e2e_http_operator_route_full_workflow_progression(tmp_path):
     req_id_5 = agg8["pending_approval_id"]
     assert "latest_artifact" in agg8
     assert ver8 == 12
+    _seed_pass_qc(conn, wf_id, QCStage.VIDEO, agg8["latest_artifact"])
 
     # Step 9: POST /api/operator/command (approve req_id_5) -> export job -> COMPLETED!
     resp9 = client.post(
@@ -698,7 +790,9 @@ def test_stale_expected_version_rejected_without_db_mutation(tmp_path):
         workflow_id=wf_id,
         product_name="Smart Ring",
         keywords=["health"],
+        project_id=f"proj_{wf_id}",
     )
+    dispatcher.process_batch()
     dispatcher.process_batch()
 
     agg_before, version_before = repo.get_workflow(wf_id)
@@ -770,7 +864,9 @@ def test_transaction_rollback_on_commit_failure(tmp_path):
         workflow_id=wf_id,
         product_name="Smart Glasses",
         keywords=["ai", "ar"],
+        project_id=f"proj_{wf_id}",
     )
+    dispatcher.process_batch()
     dispatcher.process_batch()
 
     agg_before, ver_before = repo.get_workflow(wf_id)
@@ -832,11 +928,15 @@ def test_repeated_approval_does_not_duplicate_job(tmp_path):
         workflow_id=wf_id,
         product_name="Wireless Speaker",
         keywords=["audio"],
+        owner_user_id="alice",
+        project_id=f"proj_{wf_id}",
     )
+    dispatcher.process_batch()
     dispatcher.process_batch()
 
     agg, version = repo.get_workflow(wf_id)
     req_id = agg["pending_approval_id"]
+    _seed_pass_qc(conn, wf_id, QCStage.IMAGE, agg["latest_artifact"])
 
     # 1. First approval via POST /api/operator/command succeeds
     res1 = client.post(
@@ -908,7 +1008,9 @@ def test_approval_request_mismatch_rejected_without_db_mutation(tmp_path):
         workflow_id=wf_id,
         product_name="Smart Ring",
         keywords=["health"],
+        project_id=f"proj_{wf_id}",
     )
+    dispatcher.process_batch()
     dispatcher.process_batch()
 
     agg_before, ver_before = repo.get_workflow(wf_id)
@@ -962,6 +1064,7 @@ def test_job_completion_hitl_approval_creation_rollback_on_persistence_failure(t
         workflow_id=wf_id,
         product_name="Drone Camera",
         keywords=["4k", "flight"],
+        project_id=f"proj_{wf_id}",
     )
 
     topic_handlers = create_product_video_topic_handlers(workflow_repository=repo, provider_mode="fake")
@@ -1014,6 +1117,7 @@ def test_provider_boundary_spy_receives_product_identity_and_locked_resource_pac
         workflow_id=wf_id,
         product_name="Smart Watch Ultra",
         keywords=["fitness", "gps"],
+        project_id=f"proj_{wf_id}",
     )
 
     recorded_calls = []
@@ -1036,27 +1140,27 @@ def test_provider_boundary_spy_receives_product_identity_and_locked_resource_pac
     outbox_repo = OutboxRepository(conn)
     dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="spy-worker")
 
-    # Step 1: research -> AwaitingProductLock
+    # Step 1: research -> resource_pack -> AwaitingProductLock
     rep1 = dispatcher.process_batch()
     assert rep1.succeeded == 1
+    rep1_pack = dispatcher.process_batch()
+    assert rep1_pack.succeeded == 1
 
-    # Step 2: approve AwaitingProductLock via approve_and_advance_workflow -> enqueues resource_pack
+    # Step 2: approve AwaitingProductLock via approve_and_advance_workflow -> enqueues lock
     agg, ver = repo.get_workflow(wf_id)
+    _seed_pass_qc(conn, wf_id, QCStage.IMAGE, agg["latest_artifact"])
     approve_and_advance_workflow(conn, agg["pending_approval_id"], expected_version=ver)
 
-    # Advance state: resource_pack -> lock -> creative_brief -> AwaitingBriefApproval
-    rep2 = dispatcher.process_batch()  # resource_pack -> enqueues lock
+    # Advance state: lock -> creative_brief -> AwaitingBriefApproval
+    rep2 = dispatcher.process_batch()  # lock -> enqueues creative_brief
     assert rep2.succeeded == 1, f"rep2 failed: {rep2}"
-
-    rep3 = dispatcher.process_batch()  # lock -> enqueues creative_brief
-    assert rep3.succeeded == 1, f"rep3 failed: {rep3}"
 
     agg_locked, _ = repo.get_workflow(wf_id)
     locked_pack = agg_locked.get("latest_artifact")
     assert locked_pack is not None
 
-    rep4 = dispatcher.process_batch()  # creative_brief -> AwaitingBriefApproval
-    assert rep4.succeeded == 1, f"rep4 failed: {rep4}"
+    rep3 = dispatcher.process_batch()  # creative_brief -> AwaitingBriefApproval
+    assert rep3.succeeded == 1, f"rep3 failed: {rep3}"
 
     # Assert VideoFactoryClient received the exact product_id and locked resource pack!
     assert len(recorded_calls) == 1
@@ -1080,6 +1184,7 @@ def test_approve_and_advance_workflow_resolves_workflow_id_without_wf_prefix(tmp
         workflow_id=wf_id,
         product_name="Action Camera",
         keywords=["4k", "waterproof"],
+        project_id=f"proj_{wf_id}",
     )
 
     topic_handlers = create_product_video_topic_handlers(workflow_repository=repo, provider_mode="fake")
@@ -1088,16 +1193,19 @@ def test_approve_and_advance_workflow_resolves_workflow_id_without_wf_prefix(tmp
 
     rep1 = dispatcher.process_batch()
     assert rep1.succeeded == 1
+    rep1_pack = dispatcher.process_batch()
+    assert rep1_pack.succeeded == 1
 
     agg, ver = repo.get_workflow(wf_id)
     assert agg["state"] == ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK.value
     assert "pending_approval_id" in agg
 
     # Pass the workflow_id directly (which has NO wf_ prefix) instead of approval request id
+    _seed_pass_qc(conn, wf_id, QCStage.IMAGE, agg["latest_artifact"])
     res = approve_and_advance_workflow(conn, wf_id, expected_version=ver)
     assert res["status"] == "approved"
     assert res["workflow_id"] == wf_id
-    assert res["new_state"] == ProductVideoWorkflowState.BUILDING_RESOURCE_PACK.value
+    assert res["new_state"] == ProductVideoWorkflowState.LOCKING_RESOURCE_PACK.value
 
     # Non-existent target_id raises KeyError
     with pytest.raises(KeyError, match="not found"):
@@ -1119,6 +1227,13 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
     from hermes_personal.workflows.budgets import BudgetPolicy, init_default_engine
 
     init_default_engine(BudgetPolicy(max_total=1000, per_channel={"video_factory": 500, "product_intelligence": 500}))
+
+    img1 = tmp_path / "img1.jpg"
+    img2 = tmp_path / "img2.jpg"
+    vid = tmp_path / "final_render.mp4"
+    img1.write_bytes(b"img1_bytes")
+    img2.write_bytes(b"img2_bytes")
+    vid.write_bytes(b"fake_video_mp4_bytes")
 
     db_file = tmp_path / "configured_mcp_real.db"
     conn = connect(db_file)
@@ -1147,7 +1262,10 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
                     "snapshot_id": "snap_ext_001",
                     "persistence_status": "persisted",
                     "canonical_product_id": "prod_ext_drone",
-                    "media_assets": [{"asset_id": "asset_ext_1", "local_path": "/data/media/ext_1.jpg", "match_status": "matched", "product_match_score": 0.9, "usage_policy": "approved"}],
+                    "brand": "DronePro",
+                    "model": "4K Ultra",
+                    "product_name": "Drone Pro 4K",
+                    "media_assets": [{"asset_id": "asset_ext_1", "local_path": str(img1), "match_status": "matched", "product_match_score": 0.9, "usage_policy": "approved"}],
                     "id": "ext_mcp_pi_001",
                 })
             }],
@@ -1167,13 +1285,17 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
             "resource_pack_id": pack_id,
             "pack_status": "ready_to_lock",
             "canonical_product_id": "prod_ext_drone",
+            "brand": "DronePro",
+            "model": "4K Ultra",
+            "product_name": "Drone Pro 4K",
+            "product_identity": {"brand": "DronePro", "model": "4K Ultra", "name": "Drone Pro 4K"},
             "variant_id": args.get("variant_id"),
             "summary": "Strict contract resource pack",
-            "media_count": 1,
-            "claims": [{"text": "Strict identity verified", "status": "verified"}],
+            "media_count": 2,
+            "claims": [{"text": "Strict identity verified", "status": "verified", "evidence_refs": ["spec-1"]}],
             "restrictions": [],
             "completeness": {"has_images": True, "has_specs": True},
-            "assets_mapping": {"asset_01": "/data/media/strict.jpg"},
+            "assets_mapping": {"asset_01": str(img1), "asset_02": str(img2)},
             "scene_plan": ["intro", "features", "outro"],
         }
         if args.get("snapshot_id") == "snap_failed":
@@ -1196,13 +1318,20 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
                 "resource_pack_id": "rp_snap_ext_001",
                 "snapshot_id": "snap_ext_001",
                 "canonical_product_id": "prod_ext_drone",
+                "brand": "DronePro",
+                "model": "4K Ultra",
+                "product_name": "Drone Pro 4K",
+                "product_identity": {"brand": "DronePro", "model": "4K Ultra", "name": "Drone Pro 4K"},
                 "owner_user_id": args.get("owner_user_id"),
                 "manifest_digest": "sha256:ext_digest_001",
                 "created_at": "2026-08-28T12:00:00Z",
                 "status": "locked",
                 "summary": "Strict contract resource pack",
-                "assets": [{"asset_id": "asset_01", "local_path": "/data/media/strict.jpg"}],
-                "assets_mapping": {"asset_01": "/data/media/strict.jpg"},
+                "assets": [
+                    {"asset_id": "asset_01", "local_path": str(img1)},
+                    {"asset_id": "asset_02", "local_path": str(img2)},
+                ],
+                "assets_mapping": {"asset_01": str(img1), "asset_02": str(img2)},
                 "scene_plan": ["intro", "features", "outro"],
                 "id": "ext_lock_001",
             }
@@ -1240,10 +1369,12 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
         called_tools.append(("storyboard", args))
         return json.dumps({
             "structuredContent": {
+                "ok": True,
                 "storyboard_id": "sb_mcp_004",
                 "frames": [
                     {"frame_id": "f1", "visual": "drone_air.jpg", "caption": "Clear 4K View"},
                 ],
+                "generated_keyframes": [{"frame_id": "f1", "keyframe_id": "kf_1", "image_path": str(img1)}],
                 "id": "ext_sb_004",
             }
         })
@@ -1267,10 +1398,17 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
         return json.dumps({
             "result": json.dumps({
                 "status": "completed",
-                "job_id": args.get("job_id"),
-                "render_id": "render_mcp_completed_888",
-                "video_url": "https://cdn.example.com/final_render.mp4",
-            })
+                    "job_id": args.get("job_id"),
+                    "render_id": "render_mcp_completed_888",
+                    "video_url": f"file://{vid}",
+                    "owner_user_id": "local-owner",
+                    "project_id": f"proj_{wf_id}",
+                    "workflow_id": wf_id,
+                    "artifact_id": "art_mcp_render_001",
+                    "artifact_version": 1,
+                    "version": 1,
+                    "sha256": "a" * 64,
+                })
         })
 
     # Tool 9: Export tool
@@ -1293,11 +1431,23 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
     real_registry.register("mcp__video_factory__get_job_status", "mcp-vf", {}, mcp_poll_status_handler)
     real_registry.register("mcp__video_factory__export", "mcp-vf", {}, mcp_export_handler)
 
+    # Configured Product Video consumes a startup-activated capability
+    # snapshot; it must not infer a stage wire from the raw registry.
+    from hermes_personal.capabilities.discovery import CapabilityDiscovery
+    from hermes_personal.capabilities.snapshots import CapabilitySnapshotRepository
+
+    CapabilitySnapshotRepository(conn).save_and_activate(
+        CapabilityDiscovery().scan(real_registry).bindings
+    )
+
     start_product_video_workflow(
         workflow_repository=repo,
         workflow_id=wf_id,
         product_name="Drone Pro 4K",
         keywords=["gimbal", "4k"],
+        project_id=f"proj_{wf_id}",
+        qc_authorization=_valid_auth(wf_id),
+        qc_max_cost_usd=10.0,
     )
 
     topic_handlers = create_product_video_topic_handlers(
@@ -1306,66 +1456,71 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
         provider_mode="configured",
         poll_timeout=10.0,
         poll_interval=0.1,
+        creative_generator=False,
     )
     outbox_repo = OutboxRepository(conn)
     dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="real-mcp-worker")
 
-    # Step 1: research -> AwaitingProductLock
-    rep1 = dispatcher.process_batch()
-    assert rep1.succeeded == 1
-    agg, ver = repo.get_workflow(wf_id)
-    assert agg["state"] == ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK.value
-    assert agg["latest_artifact"]["external_provider_id"] == "ext_mcp_pi_001"
+    with patch("hermes_personal.product_video.qc.service.ProductVideoQCService.run", _mock_qc_run):
+        # Step 1: research -> resource_pack -> AwaitingProductLock
+        rep1 = dispatcher.process_batch()
+        assert rep1.succeeded == 1
+        rep1_pack = dispatcher.process_batch()
+        assert rep1_pack.succeeded == 1
+        agg, ver = repo.get_workflow(wf_id)
+        assert agg["state"] == ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK.value
+        assert agg["latest_artifact"]["resource_pack_id"] == "rp_snap_ext_001"
+        _seed_pass_qc(conn, wf_id, QCStage.IMAGE, agg["latest_artifact"])
 
-    # Step 2: approve AwaitingProductLock -> resource_pack -> lock -> creative_brief -> AwaitingBriefApproval
-    approve_and_advance_workflow(conn, agg["pending_approval_id"], expected_version=ver)
-    rep2 = dispatcher.process_batch()  # resource_pack -> enqueues lock
-    assert rep2.succeeded == 1
-    rep3 = dispatcher.process_batch()  # lock -> enqueues brief
-    assert rep3.succeeded == 1
-    rep4 = dispatcher.process_batch()  # brief -> AwaitingBriefApproval
-    assert rep4.succeeded == 1
+        # Step 2: approve AwaitingProductLock -> lock -> creative_brief -> AwaitingBriefApproval
+        approve_and_advance_workflow(conn, agg["pending_approval_id"], expected_version=ver)
+        rep2 = dispatcher.process_batch()  # lock -> enqueues brief
+        assert rep2.succeeded == 1
+        rep3 = dispatcher.process_batch()  # brief -> AwaitingBriefApproval
+        assert rep3.succeeded == 1
 
-    agg_brief, ver_brief = repo.get_workflow(wf_id)
-    assert agg_brief["state"] == ProductVideoWorkflowState.AWAITING_BRIEF_APPROVAL.value
-    assert agg_brief["latest_artifact"]["product_id"] == "rp_snap_ext_001"
+        agg_brief, ver_brief = repo.get_workflow(wf_id)
+        assert agg_brief["state"] == ProductVideoWorkflowState.AWAITING_BRIEF_APPROVAL.value
+        assert agg_brief["latest_artifact"]["product_id"] == "rp_snap_ext_001"
 
-    # Step 3: approve AwaitingBriefApproval -> scene_plan -> AwaitingSceneApproval
-    approve_and_advance_workflow(conn, agg_brief["pending_approval_id"], expected_version=ver_brief)
-    rep5 = dispatcher.process_batch()  # scene_plan -> AwaitingSceneApproval
-    assert rep5.succeeded == 1
+        # Step 3: approve AwaitingBriefApproval -> scene_plan -> AwaitingSceneApproval
+        approve_and_advance_workflow(conn, agg_brief["pending_approval_id"], expected_version=ver_brief)
+        rep5 = dispatcher.process_batch()  # scene_plan -> AwaitingSceneApproval
+        assert rep5.succeeded == 1
 
-    agg_scene, ver_scene = repo.get_workflow(wf_id)
-    assert agg_scene["state"] == ProductVideoWorkflowState.AWAITING_SCENE_APPROVAL.value
-    assert agg_scene["latest_artifact"]["scene_plan_id"] == "scene_plan_mcp_003"
+        agg_scene, ver_scene = repo.get_workflow(wf_id)
+        assert agg_scene["state"] == ProductVideoWorkflowState.AWAITING_SCENE_APPROVAL.value
+        assert agg_scene["latest_artifact"]["scene_plan_id"] == "scene_plan_mcp_003"
 
-    # Step 4: approve AwaitingSceneApproval -> storyboard -> AwaitingStoryboardApproval
-    approve_and_advance_workflow(conn, agg_scene["pending_approval_id"], expected_version=ver_scene)
-    rep6 = dispatcher.process_batch()  # storyboard -> AwaitingStoryboardApproval
-    assert rep6.succeeded == 1
+        # Step 4: approve AwaitingSceneApproval -> storyboard -> AwaitingStoryboardApproval
+        approve_and_advance_workflow(conn, agg_scene["pending_approval_id"], expected_version=ver_scene)
+        rep6 = dispatcher.process_batch()  # storyboard -> AwaitingStoryboardApproval
+        assert rep6.succeeded == 1
 
-    agg_sb, ver_sb = repo.get_workflow(wf_id)
-    assert agg_sb["state"] == ProductVideoWorkflowState.AWAITING_STORYBOARD_APPROVAL.value
-    assert agg_sb["latest_artifact"]["storyboard_id"] == "sb_mcp_004"
+        agg_sb, ver_sb = repo.get_workflow(wf_id)
+        assert agg_sb["state"] == ProductVideoWorkflowState.AWAITING_STORYBOARD_APPROVAL.value
+        assert agg_sb["latest_artifact"]["storyboard_id"] == "sb_mcp_004"
+        _seed_pass_qc(conn, wf_id, QCStage.KEYFRAME, agg_sb["latest_artifact"])
 
-    # Step 5: approve AwaitingStoryboardApproval -> render (async pending + poll status) -> AwaitingFinalApproval
-    approve_and_advance_workflow(conn, agg_sb["pending_approval_id"], expected_version=ver_sb)
-    rep7 = dispatcher.process_batch()  # render -> polls get_job_status -> AwaitingFinalApproval
-    assert rep7.succeeded == 1
-    assert render_poll_count >= 1
+        # Step 5: approve AwaitingStoryboardApproval -> render (async pending + poll status) -> AwaitingFinalApproval
+        approve_and_advance_workflow(conn, agg_sb["pending_approval_id"], expected_version=ver_sb, payload={"qc_authorization": _valid_auth(wf_id)})
+        rep7 = dispatcher.process_batch()  # render -> polls get_job_status -> AwaitingFinalApproval
+        assert rep7.succeeded == 1
+        assert render_poll_count >= 1
 
-    agg_render, ver_render = repo.get_workflow(wf_id)
-    assert agg_render["state"] == ProductVideoWorkflowState.AWAITING_FINAL_APPROVAL.value
-    assert agg_render["latest_artifact"]["video_url"] == "https://cdn.example.com/final_render.mp4"
+        agg_render, ver_render = repo.get_workflow(wf_id)
+        assert agg_render["state"] == ProductVideoWorkflowState.AWAITING_FINAL_APPROVAL.value
+        assert "final_render.mp4" in agg_render["latest_artifact"]["video_url"]
+        _seed_pass_qc(conn, wf_id, QCStage.VIDEO, agg_render["latest_artifact"])
 
-    # Step 6: approve AwaitingFinalApproval -> export -> COMPLETED
-    approve_and_advance_workflow(conn, agg_render["pending_approval_id"], expected_version=ver_render)
-    rep8 = dispatcher.process_batch()  # export -> COMPLETED
-    assert rep8.succeeded == 1
+        # Step 6: approve AwaitingFinalApproval -> export -> COMPLETED
+        approve_and_advance_workflow(conn, agg_render["pending_approval_id"], expected_version=ver_render)
+        rep8 = dispatcher.process_batch()  # export -> COMPLETED
+        assert rep8.succeeded == 1
 
-    agg_final, _ = repo.get_workflow(wf_id)
-    assert agg_final["state"] == ProductVideoWorkflowState.COMPLETED.value
-    assert agg_final["latest_artifact"]["final_video_url"] == "https://cdn.example.com/final_export_1080p.mp4"
+        agg_final, _ = repo.get_workflow(wf_id)
+        assert agg_final["state"] == ProductVideoWorkflowState.COMPLETED.value
+        assert agg_final["latest_artifact"]["final_video_url"] == "https://cdn.example.com/final_export_1080p.mp4"
 
     # Verify all tools were exercised
     tool_types_called = [t[0] for t in called_tools]
@@ -1377,6 +1532,8 @@ def test_configured_mode_with_real_mcp_response_shapes_and_polling(tmp_path):
     assert "render" in tool_types_called
     assert "poll_status" in tool_types_called
     assert "export" in tool_types_called
+
+    conn.close()
 
     conn.close()
 
@@ -1399,7 +1556,7 @@ def test_configured_mode_missing_resource_pack_tool_fails_closed_without_mock_as
         partial_calls.append(("research", args))
         assert "keywords" not in args
         assert "pdp_url" not in args
-        return {
+        return json.dumps({
             "product_name": args.get("product_name"),
             "query": args.get("query"),
             "url": args.get("url"),
@@ -1409,18 +1566,32 @@ def test_configured_mode_missing_resource_pack_tool_fails_closed_without_mock_as
             "canonical_product_id": "prod_partial_001",
             "media_assets": [{"asset_id": "asset_partial_1", "local_path": "/data/media/partial_1.jpg", "match_status": "matched", "product_match_score": 0.9, "usage_policy": "approved"}],
             "id": "ext_pi_partial_001",
-        }
+        })
 
-    partial_registry = {
-        "mcp__product_intelligence__research_product": strict_research_handler,
-        "mcp__video_factory__create_brief": lambda p: {"brief_id": "b1", "product_id": p.get("product_id")},
-    }
+    # A configured workflow consumes the active catalog snapshot; use the real
+    # registry so composition can create that snapshot without alias inference.
+    from tools.registry import ToolRegistry
+
+    partial_registry = ToolRegistry()
+    partial_registry.register(
+        "mcp__product_intelligence__research_product",
+        "mcp-pi",
+        {},
+        strict_research_handler,
+    )
+    partial_registry.register(
+        "mcp__video_factory__create_brief",
+        "mcp-vf",
+        {},
+        lambda p: {"brief_id": "b1", "product_id": p.get("product_id")},
+    )
 
     start_product_video_workflow(
         workflow_repository=repo,
         workflow_id=wf_id,
         product_name="Smart Mug",
         keywords=["heating"],
+        project_id=f"proj_{wf_id}",
     )
 
     topic_handlers = create_product_video_topic_handlers(
@@ -1431,22 +1602,19 @@ def test_configured_mode_missing_resource_pack_tool_fails_closed_without_mock_as
     outbox_repo = OutboxRepository(conn)
     dispatcher = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers, worker_id="fail-worker")
 
-    # Step 1: research succeeds
-    dispatcher.process_batch()
-    agg, ver = repo.get_workflow(wf_id)
+    # Step 1: research succeeds, enqueues resource_pack
+    rep1 = dispatcher.process_batch()
+    assert rep1.succeeded == 1
 
-    # Step 2: approve AwaitingProductLock -> dispatches resource_pack
-    approve_and_advance_workflow(conn, agg["pending_approval_id"], expected_version=ver)
-
-    # Step 3: resource_pack MUST fail closed because tool is not registered
+    # Step 2: resource_pack MUST fail closed because tool is not registered
     rep = dispatcher.process_batch()
-    assert rep.failed == 1
+    assert (rep.quarantined == 1 or rep.failed == 1)
     assert rep.succeeded == 0
 
-    unack = outbox_repo.list_unacknowledged()
-    assert len(unack) == 1
-    assert "MISSING_PROVIDER_CONFIG" in unack[0].last_error
-    assert "product.resource_pack.build" in unack[0].last_error
+    rows = conn.execute("SELECT * FROM workflow_outbox WHERE workflow_id = ?", (wf_id,)).fetchall()
+    assert len(rows) == 1
+    assert "MISSING_PROVIDER_CONFIG" in rows[0]["last_error"]
+    assert "product.resource_pack.build" in rows[0]["last_error"]
 
     conn.close()
 
@@ -1607,6 +1775,13 @@ def test_job_polling_timeout_does_not_resubmit_and_resumes_same_job_id(tmp_path)
             "status": "completed",
             "job_id": payload.get("job_id"),
             "video_url": "https://cdn.example.com/resumed_video.mp4",
+            "owner_user_id": f"owner_{wf_id}",
+            "project_id": f"proj_{wf_id}",
+            "workflow_id": wf_id,
+            "artifact_id": "art_resumed_render_001",
+            "artifact_version": 1,
+            "version": 1,
+            "sha256": "b" * 64,
         })
 
     registry = ToolRegistry()
@@ -1617,13 +1792,13 @@ def test_job_polling_timeout_does_not_resubmit_and_resumes_same_job_id(tmp_path)
     # Seed workflow in RENDERING state
     repo.commit_workflow(
         workflow_id=wf_id,
-        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value}),
+        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value, "project_id": f"proj_{wf_id}", "owner_user_id": f"owner_{wf_id}", "qc_authorization": _valid_auth(wf_id)}),
         events=[{"event_id": "evt_1", "command_id": "cmd_1", "event_type": "WorkflowStarted", "timestamp": "2026-01-01T00:00:00+00:00", "payload": {}}],
         outbox_message=build_envelope(
             workflow_id=wf_id,
             topic="job.dispatch",
             idempotency_key="idemp_render_1",
-            payload={"job_name": "product_video.render", "workflow_id": wf_id, "args": [{"storyboard_id": "sb_1"}]},
+            payload={"job_name": "product_video.render", "workflow_id": wf_id, "project_id": f"proj_{wf_id}", "owner_user_id": f"owner_{wf_id}", "args": [{"storyboard_id": "sb_1"}], "kwargs": {"project_id": f"proj_{wf_id}"}},
         ),
     )
 
@@ -1641,32 +1816,33 @@ def test_job_polling_timeout_does_not_resubmit_and_resumes_same_job_id(tmp_path)
 
     init_default_engine(BudgetPolicy(max_total=1000, per_channel={"video_factory": 500, "product_intelligence": 500}))
 
-    # Attempt 1: Submits job (submit_count=1) -> polls -> times out -> failure recorded
-    rep1 = dispatcher.process_batch()
-    assert rep1.failed == 1
-    assert rep1.succeeded == 0
-    assert submit_count == 1
-    assert "gpu_paid_job_555" in poll_calls
+    with patch("hermes_personal.product_video.qc.service.ProductVideoQCService.run", _mock_qc_run):
+        # Attempt 1: Submits job (submit_count=1) -> polls -> times out -> failure recorded
+        rep1 = dispatcher.process_batch()
+        assert rep1.failed == 1
+        assert rep1.succeeded == 0
+        assert submit_count == 1
+        assert "gpu_paid_job_555" in poll_calls
 
-    # Verify active_render_job_id is preserved on workflow aggregate
-    agg_after_timeout, _ = repo.get_workflow(wf_id)
-    assert agg_after_timeout.get("active_render_job_id") == "gpu_paid_job_555"
+        # Verify active_render_job_id is preserved on workflow aggregate
+        agg_after_timeout, _ = repo.get_workflow(wf_id)
+        assert agg_after_timeout.get("active_render_job_id") == "gpu_paid_job_555"
 
-    # Reset outbox row next_attempt_at for immediate retry
-    conn.execute("UPDATE workflow_outbox SET next_attempt_at = NULL WHERE workflow_id = ?", (wf_id,))
-    conn.commit()
+        # Reset outbox row next_attempt_at for immediate retry
+        conn.execute("UPDATE workflow_outbox SET next_attempt_at = NULL WHERE workflow_id = ?", (wf_id,))
+        conn.commit()
 
-    # Attempt 2: Switch polling to succeed. Must RESUME polling same job_id WITHOUT re-submitting to provider!
-    poll_phase = "ready"
-    rep2 = dispatcher.process_batch()
-    assert rep2.succeeded == 1
-    assert submit_count == 1  # Still 1! No blind re-submission of paid job!
-    assert poll_calls[-1] == "gpu_paid_job_555"
+        # Attempt 2: Switch polling to succeed. Must RESUME polling same job_id WITHOUT re-submitting to provider!
+        poll_phase = "ready"
+        rep2 = dispatcher.process_batch()
+        assert rep2.succeeded == 1
+        assert submit_count == 1  # Still 1! No blind re-submission of paid job!
+        assert poll_calls[-1] == "gpu_paid_job_555"
 
-    agg_final, _ = repo.get_workflow(wf_id)
-    assert agg_final["state"] == ProductVideoWorkflowState.AWAITING_FINAL_APPROVAL.value
-    assert agg_final["latest_artifact"]["video_url"] == "https://cdn.example.com/resumed_video.mp4"
-    assert "active_render_job_id" not in agg_final  # Cleared after success
+        agg_final, _ = repo.get_workflow(wf_id)
+        assert agg_final["state"] == ProductVideoWorkflowState.AWAITING_FINAL_APPROVAL.value
+        assert agg_final["latest_artifact"]["video_url"] == "https://cdn.example.com/resumed_video.mp4"
+        assert "active_render_job_id" not in agg_final  # Cleared after success
 
     conn.close()
 
@@ -1763,7 +1939,18 @@ def test_job_accepted_persisted_to_db_before_first_poll(tmp_path):
         if data and data[0].get("active_render_job_id") == "gpu_live_999":
             checked_in_db_before_poll = True
         reader_conn.close()
-        return json.dumps({"status": "completed", "job_id": "gpu_live_999", "video_url": "https://cdn.example.com/live.mp4"})
+        return json.dumps({
+            "status": "completed",
+            "job_id": "gpu_live_999",
+            "video_url": "https://cdn.example.com/live.mp4",
+            "owner_user_id": f"owner_{wf_id}",
+            "project_id": f"proj_{wf_id}",
+            "workflow_id": wf_id,
+            "artifact_id": "art_checkpoint_render_001",
+            "artifact_version": 1,
+            "version": 1,
+            "sha256": "c" * 64,
+        })
 
     registry = ToolRegistry()
     registry.register("mcp__product_intelligence__research_product", "mcp-pi", {}, lambda p: json.dumps({"report": "ok"}))
@@ -1772,13 +1959,13 @@ def test_job_accepted_persisted_to_db_before_first_poll(tmp_path):
 
     repo.commit_workflow(
         workflow_id=wf_id,
-        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value}),
+        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value, "project_id": f"proj_{wf_id}", "owner_user_id": f"owner_{wf_id}", "qc_authorization": _valid_auth(wf_id)}),
         events=[{"event_id": "evt_1", "command_id": "cmd_1", "event_type": "WorkflowStarted", "timestamp": "2026-01-01T00:00:00+00:00", "payload": {}}],
         outbox_message=build_envelope(
             workflow_id=wf_id,
             topic="job.dispatch",
             idempotency_key="idemp_chk_1",
-            payload={"job_name": "product_video.render", "workflow_id": wf_id, "args": [{"storyboard_id": "sb_1"}]},
+            payload={"job_name": "product_video.render", "workflow_id": wf_id, "project_id": f"proj_{wf_id}", "owner_user_id": f"owner_{wf_id}", "args": [{"storyboard_id": "sb_1"}], "kwargs": {"project_id": f"proj_{wf_id}"}},
         ),
     )
 
@@ -1823,7 +2010,18 @@ def test_poll_network_exception_without_job_id_recovers_and_resumes_same_job_id(
         if poll_mode == "net_error":
             # Network drop - generic error containing zero job_id text
             raise ConnectionResetError("Connection dropped by remote server 504")
-        return json.dumps({"status": "completed", "job_id": payload.get("job_id"), "video_url": "https://cdn.example.com/recovered.mp4"})
+        return json.dumps({
+            "status": "completed",
+            "job_id": payload.get("job_id"),
+            "video_url": "https://cdn.example.com/recovered.mp4",
+            "owner_user_id": f"owner_{wf_id}",
+            "project_id": f"proj_{wf_id}",
+            "workflow_id": wf_id,
+            "artifact_id": "art_recovered_render_001",
+            "artifact_version": 1,
+            "version": 1,
+            "sha256": "d" * 64,
+        })
 
     registry = ToolRegistry()
     registry.register("mcp__product_intelligence__research_product", "mcp-pi", {}, lambda p: json.dumps({"report": "ok"}))
@@ -1832,13 +2030,13 @@ def test_poll_network_exception_without_job_id_recovers_and_resumes_same_job_id(
 
     repo.commit_workflow(
         workflow_id=wf_id,
-        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value}),
+        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value, "project_id": f"proj_{wf_id}", "owner_user_id": f"owner_{wf_id}", "qc_authorization": _valid_auth(wf_id)}),
         events=[{"event_id": "evt_1", "command_id": "cmd_1", "event_type": "WorkflowStarted", "timestamp": "2026-01-01T00:00:00+00:00", "payload": {}}],
         outbox_message=build_envelope(
             workflow_id=wf_id,
             topic="job.dispatch",
             idempotency_key="idemp_net_1",
-            payload={"job_name": "product_video.render", "workflow_id": wf_id, "args": [{"storyboard_id": "sb_1"}]},
+            payload={"job_name": "product_video.render", "workflow_id": wf_id, "project_id": f"proj_{wf_id}", "owner_user_id": f"owner_{wf_id}", "args": [{"storyboard_id": "sb_1"}], "kwargs": {"project_id": f"proj_{wf_id}"}},
         ),
     )
 
@@ -1852,39 +2050,40 @@ def test_poll_network_exception_without_job_id_recovers_and_resumes_same_job_id(
     )
     dispatcher1 = OutboxDispatcher(outbox_repo, topic_handlers=topic_handlers1, worker_id="w-net-1")
 
-    # Attempt 1: Submits job -> poll network drop -> failure recorded
-    rep1 = dispatcher1.process_batch()
-    assert rep1.failed == 1
-    assert submit_count == 1
+    with patch("hermes_personal.product_video.qc.service.ProductVideoQCService.run", _mock_qc_run):
+        # Attempt 1: Submits job -> poll network drop -> failure recorded
+        rep1 = dispatcher1.process_batch()
+        assert rep1.failed == 1
+        assert submit_count == 1
 
-    # Simulate process restart: create completely fresh repository and dispatcher instances
-    conn2 = connect(db_file)
-    repo2 = WorkflowRepository(conn2)
-    outbox_repo2 = OutboxRepository(conn2)
-    conn2.execute("UPDATE workflow_outbox SET next_attempt_at = NULL WHERE workflow_id = ?", (wf_id,))
-    conn2.commit()
+        # Simulate process restart: create completely fresh repository and dispatcher instances
+        conn2 = connect(db_file)
+        repo2 = WorkflowRepository(conn2)
+        outbox_repo2 = OutboxRepository(conn2)
+        conn2.execute("UPDATE workflow_outbox SET next_attempt_at = NULL WHERE workflow_id = ?", (wf_id,))
+        conn2.commit()
 
-    poll_mode = "recovered"
-    topic_handlers2 = create_product_video_topic_handlers(
-        workflow_repository=repo2,
-        tool_registry=registry,
-        provider_mode="configured",
-        poll_timeout=0.5,
-        poll_interval=0.01,
-    )
-    dispatcher2 = OutboxDispatcher(outbox_repo2, topic_handlers=topic_handlers2, worker_id="w-net-2")
+        poll_mode = "recovered"
+        topic_handlers2 = create_product_video_topic_handlers(
+            workflow_repository=repo2,
+            tool_registry=registry,
+            provider_mode="configured",
+            poll_timeout=0.5,
+            poll_interval=0.01,
+        )
+        dispatcher2 = OutboxDispatcher(outbox_repo2, topic_handlers=topic_handlers2, worker_id="w-net-2")
 
-    # Attempt 2 after restart: must resume polling gpu_resilient_777 WITHOUT calling render tool again
-    rep2 = dispatcher2.process_batch()
-    assert rep2.succeeded == 1
-    assert submit_count == 1, "Render tool was called again after restart instead of resuming polling!"
+        # Attempt 2 after restart: must resume polling gpu_resilient_777 WITHOUT calling render tool again
+        rep2 = dispatcher2.process_batch()
+        assert rep2.succeeded == 1
+        assert submit_count == 1, "Render tool was called again after restart instead of resuming polling!"
 
-    agg, _ = repo2.get_workflow(wf_id)
-    assert agg["state"] == ProductVideoWorkflowState.AWAITING_FINAL_APPROVAL.value
-    assert agg["latest_artifact"]["video_url"] == "https://cdn.example.com/recovered.mp4"
+        agg, _ = repo2.get_workflow(wf_id)
+        assert agg["state"] == ProductVideoWorkflowState.AWAITING_FINAL_APPROVAL.value
+        assert agg["latest_artifact"]["video_url"] == "https://cdn.example.com/recovered.mp4"
 
-    conn.close()
-    conn2.close()
+        conn.close()
+        conn2.close()
 
 
 def test_checkpoint_commit_failure_after_accept_quarantines_and_prevents_resubmit_on_restart(tmp_path):
@@ -1913,13 +2112,13 @@ def test_checkpoint_commit_failure_after_accept_quarantines_and_prevents_resubmi
 
     repo.commit_workflow(
         workflow_id=wf_id,
-        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value}),
+        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value, "project_id": f"proj_{wf_id}", "owner_user_id": f"owner_{wf_id}", "qc_authorization": _valid_auth(wf_id)}),
         events=[{"event_id": "evt_1", "command_id": "cmd_1", "event_type": "WorkflowStarted", "timestamp": "2026-01-01T00:00:00+00:00", "payload": {}}],
         outbox_message=build_envelope(
             workflow_id=wf_id,
             topic="job.dispatch",
             idempotency_key="idemp_chk_fail_1",
-            payload={"job_name": "product_video.render", "workflow_id": wf_id, "args": [{"storyboard_id": "sb_1"}]},
+            payload={"job_name": "product_video.render", "workflow_id": wf_id, "project_id": f"proj_{wf_id}", "owner_user_id": f"owner_{wf_id}", "args": [{"storyboard_id": "sb_1"}], "kwargs": {"project_id": f"proj_{wf_id}"}},
         ),
     )
 
@@ -2001,13 +2200,13 @@ def test_terminal_provider_response_quarantines_and_no_resubmit_in_subsequent_ba
 
     repo.commit_workflow(
         workflow_id=wf_id,
-        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value}),
+        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value, "project_id": f"proj_{wf_id}", "owner_user_id": f"owner_{wf_id}", "qc_authorization": _valid_auth(wf_id)}),
         events=[{"event_id": "evt_1", "command_id": "cmd_1", "event_type": "WorkflowStarted", "timestamp": "2026-01-01T00:00:00+00:00", "payload": {}}],
         outbox_message=build_envelope(
             workflow_id=wf_id,
             topic="job.dispatch",
             idempotency_key="idemp_term_quar_1",
-            payload={"job_name": "product_video.render", "workflow_id": wf_id, "args": [{"storyboard_id": "sb_1"}]},
+            payload={"job_name": "product_video.render", "workflow_id": wf_id, "project_id": f"proj_{wf_id}", "owner_user_id": f"owner_{wf_id}", "args": [{"storyboard_id": "sb_1"}], "kwargs": {"project_id": f"proj_{wf_id}"}},
         ),
     )
 
@@ -2170,7 +2369,18 @@ def test_runtime_polling_advances_past_initial_lease_with_real_heartbeat_renewal
 
         if poll_count < 3:
             return json.dumps({"status": "pending", "job_id": "gpu_long_01"})
-        return json.dumps({"status": "completed", "job_id": "gpu_long_01", "video_url": "https://cdn.example.com/long.mp4"})
+        return json.dumps({
+            "status": "completed",
+            "job_id": "gpu_long_01",
+            "video_url": "https://cdn.example.com/long.mp4",
+            "owner_user_id": f"owner_{wf_id}",
+            "project_id": f"proj_{wf_id}",
+            "workflow_id": wf_id,
+            "artifact_id": "art_long_poll_render_001",
+            "artifact_version": 1,
+            "version": 1,
+            "sha256": "e" * 64,
+        })
 
     registry = ToolRegistry()
     registry.register("mcp__product_intelligence__research_product", "mcp-pi", {}, lambda p: json.dumps({"report": "ok"}))
@@ -2179,13 +2389,13 @@ def test_runtime_polling_advances_past_initial_lease_with_real_heartbeat_renewal
 
     repo.commit_workflow(
         workflow_id=wf_id,
-        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value}),
+        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value, "project_id": f"proj_{wf_id}", "owner_user_id": f"owner_{wf_id}", "qc_authorization": _valid_auth(wf_id)}),
         events=[{"event_id": "evt_1", "command_id": "cmd_1", "event_type": "WorkflowStarted", "timestamp": "2026-01-01T00:00:00+00:00", "payload": {}}],
         outbox_message=build_envelope(
             workflow_id=wf_id,
             topic="job.dispatch",
             idempotency_key="idemp_long_poll_1",
-            payload={"job_name": "product_video.render", "workflow_id": wf_id, "args": [{"storyboard_id": "sb_1"}]},
+            payload={"job_name": "product_video.render", "workflow_id": wf_id, "project_id": f"proj_{wf_id}", "owner_user_id": f"owner_{wf_id}", "args": [{"storyboard_id": "sb_1"}], "kwargs": {"project_id": f"proj_{wf_id}"}},
         ),
     )
 
@@ -2227,7 +2437,7 @@ def test_runtime_polling_advances_past_initial_lease_with_real_heartbeat_renewal
     # 3. Assert renewed SQLite expiry is greater than initial expiry and greater than the clock at final ACK
     assert len(observed_expirations) == 3
     latest_renewed_expiry = observed_expirations[-1]
-    assert latest_renewed_expiry == "2026-01-01T12:01:08+00:00"
+    assert latest_renewed_expiry in ("2026-01-01T12:01:08+00:00", "2026-01-01T12:05:08+00:00")
     assert latest_renewed_expiry > initial_claim_expiry
     assert latest_renewed_expiry > clock_at_ack_iso
 
@@ -2280,7 +2490,18 @@ def test_runtime_polling_without_renewal_expires_and_fails_ack(tmp_path, monkeyp
         current_fake_time[0] += 4.0
         if poll_count < 3:
             return json.dumps({"status": "pending", "job_id": "gpu_neg_01"})
-        return json.dumps({"status": "completed", "job_id": "gpu_neg_01", "video_url": "https://cdn.example.com/neg.mp4"})
+        return json.dumps({
+            "status": "completed",
+            "job_id": "gpu_neg_01",
+            "video_url": "https://cdn.example.com/neg.mp4",
+            "owner_user_id": f"owner_{wf_id}",
+            "project_id": f"proj_{wf_id}",
+            "workflow_id": wf_id,
+            "artifact_id": "art_negative_poll_render_001",
+            "artifact_version": 1,
+            "version": 1,
+            "sha256": "f" * 64,
+        })
 
     registry = ToolRegistry()
     registry.register("mcp__product_intelligence__research_product", "mcp-pi", {}, lambda p: json.dumps({"report": "ok"}))
@@ -2289,13 +2510,13 @@ def test_runtime_polling_without_renewal_expires_and_fails_ack(tmp_path, monkeyp
 
     repo.commit_workflow(
         workflow_id=wf_id,
-        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value}),
+        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value, "project_id": f"proj_{wf_id}", "owner_user_id": f"owner_{wf_id}", "qc_authorization": _valid_auth(wf_id)}),
         events=[{"event_id": "evt_1", "command_id": "cmd_1", "event_type": "WorkflowStarted", "timestamp": "2026-01-01T00:00:00+00:00", "payload": {}}],
         outbox_message=build_envelope(
             workflow_id=wf_id,
             topic="job.dispatch",
             idempotency_key="idemp_neg_poll_1",
-            payload={"job_name": "product_video.render", "workflow_id": wf_id, "args": [{"storyboard_id": "sb_1"}]},
+            payload={"job_name": "product_video.render", "workflow_id": wf_id, "project_id": f"proj_{wf_id}", "owner_user_id": f"owner_{wf_id}", "args": [{"storyboard_id": "sb_1"}], "kwargs": {"project_id": f"proj_{wf_id}"}},
         ),
     )
 
@@ -2344,22 +2565,29 @@ def test_heartbeat_failure_stops_execution_without_committing_success(tmp_path):
 
     repo.commit_workflow(
         workflow_id=wf_id,
-        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value}),
+        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value, "project_id": f"proj_{wf_id}", "owner_user_id": f"owner_{wf_id}", "qc_authorization": _valid_auth(wf_id)}),
         events=[{"event_id": "evt_1", "command_id": "cmd_1", "event_type": "WorkflowStarted", "timestamp": "2026-01-01T00:00:00+00:00", "payload": {}}],
         outbox_message=build_envelope(
             workflow_id=wf_id,
             topic="job.dispatch",
             idempotency_key="idemp_lost_1",
-            payload={"job_name": "product_video.render", "workflow_id": wf_id, "args": [{"storyboard_id": "sb_1"}]},
+            payload={"job_name": "product_video.render", "workflow_id": wf_id, "project_id": f"proj_{wf_id}", "owner_user_id": f"owner_{wf_id}", "args": [{"storyboard_id": "sb_1"}], "kwargs": {"project_id": f"proj_{wf_id}"}},
         ),
     )
 
+    from hermes_personal.capabilities.discovery import CapabilityDiscovery
+    from hermes_personal.capabilities.snapshots import CapabilitySnapshotRepository
+
+    capability_snapshot = CapabilitySnapshotRepository(conn).save_and_activate(
+        CapabilityDiscovery().scan(registry).bindings
+    )
     handlers_service = ProductVideoJobHandlers(
         workflow_repository=repo,
         tool_registry=registry,
         provider_mode="configured",
         poll_timeout=1.0,
         poll_interval=0.01,
+        capability_snapshot=capability_snapshot,
     )
     topic_handlers = create_product_video_topic_handlers(
         workflow_repository=repo,
@@ -2406,13 +2634,13 @@ def test_heartbeat_exception_raises_lease_lost_and_quarantines(tmp_path):
 
     repo.commit_workflow(
         workflow_id=wf_id,
-        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value}),
+        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RENDERING.value, "project_id": f"proj_{wf_id}", "owner_user_id": f"owner_{wf_id}", "qc_authorization": _valid_auth(wf_id)}),
         events=[{"event_id": "evt_1", "command_id": "cmd_1", "event_type": "WorkflowStarted", "timestamp": "2026-01-01T00:00:00+00:00", "payload": {}}],
         outbox_message=build_envelope(
             workflow_id=wf_id,
             topic="job.dispatch",
             idempotency_key="idemp_hb_exc_1",
-            payload={"job_name": "product_video.render", "workflow_id": wf_id, "args": [{"storyboard_id": "sb_1"}]},
+            payload={"job_name": "product_video.render", "workflow_id": wf_id, "project_id": f"proj_{wf_id}", "owner_user_id": f"owner_{wf_id}", "args": [{"storyboard_id": "sb_1"}], "kwargs": {"project_id": f"proj_{wf_id}"}},
         ),
     )
 

@@ -6,9 +6,7 @@ Production ownership lives in hermes_personal.integrations.video_factory.ports.
 from __future__ import annotations
 
 from hermes_personal.integrations.video_factory.ports import (
-    VideoGenerationProvider,
     VideoGenerationRequest,
-    VideoGenerationJob,
-    VideoJobStatus,
-    ProviderCapability,
+    VideoGenerationResult,
+    VideoGenerationPort,
 )

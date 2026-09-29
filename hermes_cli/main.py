@@ -484,6 +484,7 @@ from hermes_cli.subcommands.pairing import build_pairing_parser
 from hermes_cli.subcommands.plugins import build_plugins_parser
 from hermes_cli.subcommands.mcp import build_mcp_parser
 from hermes_cli.subcommands.claw import build_claw_parser
+from hermes_cli.subcommands.personal import build_personal_parser
 
 
 def _require_tty(command_name: str) -> None:
@@ -11654,7 +11655,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "dump", "egress", "fallback", "gateway", "hooks", "import", "import-agent", "insights",
         "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate", "moa",
         "journey", "memory-graph", "learning",
-        "model", "monitoring", "pairing", "pause", "peer", "pets", "plugins", "portal", "profile",
+        "model", "monitoring", "pairing", "pause", "peer", "personal", "pets", "plugins", "portal", "profile",
         "project", "proxy",
         "prompt-size",
         "resume",
@@ -12935,6 +12936,7 @@ def main():
     # plugins command  (parser built in hermes_cli/subcommands/plugins.py)
     # =========================================================================
     build_plugins_parser(subparsers, cmd_plugins=cmd_plugins)
+    build_personal_parser(subparsers)
 
     # =========================================================================
     # Plugin CLI commands — dynamically registered by memory/general plugins.

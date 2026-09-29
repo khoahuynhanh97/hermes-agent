@@ -115,21 +115,20 @@ timed out.
 
 ## Known runtime gaps
 
-The core modules exist and pass real startup/readiness/turn/replay/shutdown
-smoke coverage. These optional declared runners do not exist yet:
+The MCP runner, durable worker, and Telegram runner now have importable entry
+points at `hermes_personal.capabilities.mcp_runner`,
+`hermes_personal.workflows.worker`, and
+`hermes_personal.runtime.telegram_runner`. Enable each process only when its
+configuration and external dependency are ready; process existence alone does
+not establish live provider readiness. `/api/turn` and `/api/omni/turn` are
+mounted on the canonical Gateway and proxied by the App API.
 
-- `hermes_personal.capabilities.mcp_runner`
-- `hermes_personal.workflows.worker`
-- `hermes_personal.gateway.platforms.telegram_runner`
-
-Use `runtime-config.local.yaml.example` to disable those services. Enabling one
-of them is expected to fail its process start/readiness check rather than report
-false health. `/api/turn` and `/api/omni/turn` are mounted on the canonical
-Gateway and proxied by the App API.
-
-Additional production gaps remain: application-level rate/body limits are not
-implemented, and the production static digest is required by configuration but
-is not yet checked by the App API process. (Note: HP-006 budget reservation and HP-007 durable outbox delivery with lease/backoff/quarantine are closed).
+`hermes_personal.application.middleware` implements request body and in-memory
+rate limits. The rate limiter is process local, so it is not a shared quota
+across multiple Gateway processes. The App API verifies a configured static
+bundle digest at startup (`hermes_personal.api.server`). HP-006 budget
+reservation and HP-007 durable outbox delivery with lease, backoff, and
+quarantine are closed; actual provider spend still requires reconciliation.
 
 ## Future distributed infrastructure
 

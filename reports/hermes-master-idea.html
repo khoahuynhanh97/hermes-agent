@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hermes — Master Idea & Product Vision</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Font Google -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Plus Jakarta Sans', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            brand: {
+              50: '#f0fdfa',
+              100: '#ccfbf1',
+              500: '#14b8a6',
+              600: '#0d9488',
+              700: '#0f766e',
+            },
+            accent: {
+              500: '#6366f1',
+              600: '#4f46e5',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      background-color: #0b0f19;
+      color: #f1f5f9;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+    .card-base {
+      background: #111827;
+      border: 1px solid #1f2937;
+      border-radius: 1rem;
+    }
+    .card-highlight {
+      background: #111827;
+      border: 1px solid #374151;
+      border-radius: 1rem;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.2rem 0.65rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.025em;
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col antialiased selection:bg-teal-500 selection:text-white">
+
+  <!-- TOP HEADER -->
+  <header class="border-b border-slate-800 bg-slate-950/90 backdrop-blur sticky top-0 z-50">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-teal-400 to-indigo-500 flex items-center justify-center text-white font-black text-lg shadow-lg shadow-teal-500/20">
+          ⚡
+        </div>
+        <div>
+          <h1 class="text-base font-extrabold text-white tracking-tight flex items-center gap-2">
+            HERMES
+            <span class="badge bg-teal-500/10 text-teal-400 border border-teal-500/30">MASTER IDEA</span>
+          </h1>
+        </div>
+      </div>
+      <div class="text-xs text-slate-400 font-medium">
+        Product Vision & Idea Blueprint
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN CONTAINER -->
+  <main class="max-w-5xl mx-auto px-4 sm:px-6 py-10 space-y-12 flex-1 w-full">
+
+    <!-- 1. MASTER IDEA -->
+    <section class="card-highlight p-6 sm:p-8 space-y-4 border-teal-500/30 relative overflow-hidden">
+      <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-teal-500/10 border border-teal-500/30 text-teal-400 text-xs font-bold uppercase tracking-wider">
+        1. Master Idea
+      </div>
+      
+      <p class="text-xl sm:text-2xl font-bold text-white leading-snug">
+        Hermes là một trợ lý AI cá nhân duy nhất có khả năng học từ nội dung người dùng cung cấp và sử dụng kiến thức đó để hỗ trợ nghiên cứu, sáng tạo nội dung và sản xuất video.
+      </p>
+
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 text-xs text-slate-300">
+        <div class="flex items-center gap-2 bg-slate-900/80 p-3 rounded-lg border border-slate-800">
+          <span class="text-teal-400 text-base">👤</span>
+          <span><strong>Một trợ lý duy nhất</strong> đối với người dùng.</span>
+        </div>
+        <div class="flex items-center gap-2 bg-slate-900/80 p-3 rounded-lg border border-slate-800">
+          <span class="text-indigo-400 text-base">🧩</span>
+          <span><strong>Nhiều skills & tools</strong> hỗ trợ phía sau.</span>
+        </div>
+        <div class="flex items-center gap-2 bg-slate-900/80 p-3 rounded-lg border border-slate-800">
+          <span class="text-amber-400 text-base">🚀</span>
+          <span><strong>Mở rộng năng lực</strong> linh hoạt trong tương lai.</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- SƠ ĐỒ TRUNG TÂM (DIAGRAM: < 30 GIÂY HIỂU NGAY) -->
+    <section class="card-base p-6 text-center space-y-4 bg-slate-950/60 border-slate-800">
+      <h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider">Mô Hình Vận Hành Tổng Thể</h3>
+      
+      <div class="flex flex-col items-center justify-center gap-2 font-mono text-xs sm:text-sm text-slate-200">
+        <div class="px-4 py-2 rounded-lg bg-slate-900 border border-slate-700 text-teal-300 font-bold">
+          4 Interaction Channels (Telegram • Web • CLI • API)
+        </div>
+        <span class="text-slate-500">↓</span>
+        <div class="px-5 py-2.5 rounded-lg bg-indigo-950/80 border border-indigo-500/50 text-indigo-200 font-bold text-sm sm:text-base">
+          One Hermes Personal Assistant
+        </div>
+        <span class="text-slate-500">↓</span>
+        <div class="px-4 py-2 rounded-lg bg-slate-900 border border-slate-700 text-amber-300 font-bold">
+          Knowledge Base + Video Factory
+        </div>
+        <span class="text-slate-500">↓</span>
+        <div class="px-4 py-2 rounded-lg bg-slate-900 border border-slate-700 text-slate-300">
+          Skills (Playbooks) + Tools / MCP (Capabilities)
+        </div>
+        <span class="text-slate-500">↓</span>
+        <div class="px-4 py-2 rounded-lg bg-emerald-950/80 border border-emerald-500/50 text-emerald-300 font-bold">
+          Knowledge Artifacts + Video Artifacts
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. CÁCH NGƯỜI DÙNG GIAO TIẾP (4 INTERACTION CHANNELS) -->
+    <section class="space-y-4">
+      <div class="flex items-center gap-2">
+        <span class="w-6 h-6 rounded-md bg-teal-500/20 text-teal-400 font-bold text-xs flex items-center justify-center">2</span>
+        <h3 class="text-lg font-bold text-white">Cách Người Dùng Giao Tiếp (4 Interaction Channels)</h3>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
+        <div class="card-base p-4 space-y-2">
+          <div class="text-xl">📱</div>
+          <h4 class="font-bold text-white text-sm">Telegram</h4>
+          <p class="text-slate-400">Giao việc di động, nhận thông báo tiến độ và thực hiện xác nhận (approval) nhanh chóng mọi lúc mọi nơi.</p>
+        </div>
+
+        <div class="card-base p-4 space-y-2">
+          <div class="text-xl">💻</div>
+          <h4 class="font-bold text-white text-sm">Web Dashboard</h4>
+          <p class="text-slate-400">Theo dõi tiến độ trực quan, duyệt kịch bản, xem trước storyboard hình ảnh và nghiệm thu video hoàn thiện.</p>
+        </div>
+
+        <div class="card-base p-4 space-y-2">
+          <div class="text-xl">⌨️</div>
+          <h4 class="font-bold text-white text-sm">CLI (Terminal)</h4>
+          <p class="text-slate-400">Sử dụng và kiểm thử trực tiếp trên máy tính cá nhân, hỗ trợ viết kịch bản tự động hóa và thao tác dòng lệnh.</p>
+        </div>
+
+        <div class="card-base p-4 space-y-2">
+          <div class="text-xl">🔌</div>
+          <h4 class="font-bold text-white text-sm">API</h4>
+          <p class="text-slate-400">Cổng kết nối tiêu chuẩn dành cho các hệ thống automation, ứng dụng mở rộng hoặc webhook từ bên ngoài.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. KNOWLEDGE BASE -->
+    <section class="card-base p-6 sm:p-7 space-y-5">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center gap-2">
+          <span class="w-6 h-6 rounded-md bg-teal-500/20 text-teal-400 font-bold text-xs flex items-center justify-center">3</span>
+          <h3 class="text-lg font-bold text-white">Knowledge Base</h3>
+        </div>
+        <span class="text-xs text-teal-400 font-semibold">Tự học & Tái sử dụng tri thức</span>
+      </div>
+
+      <p class="text-sm text-slate-300 leading-relaxed">
+        Knowledge Base giúp Hermes học từ nội dung người dùng cung cấp và sử dụng lại kiến thức phù hợp trong công việc sau này.
+      </p>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+        <!-- Input -->
+        <div class="bg-slate-900/90 p-4 rounded-xl border border-slate-800 space-y-2">
+          <h4 class="font-bold text-teal-400 uppercase tracking-wider">Dữ Liệu Đầu Vào (Input)</h4>
+          <ul class="space-y-1.5 text-slate-300 list-disc list-inside">
+            <li>URL video hoặc bài viết</li>
+            <li>File tài liệu hoặc văn bản gửi trực tiếp</li>
+            <li>Nội dung mẫu cần học</li>
+            <li>Yêu cầu học tổng quát hoặc theo mục tiêu cụ thể (như CTA)</li>
+          </ul>
+        </div>
+
+        <!-- Skills ban đầu -->
+        <div class="bg-slate-900/90 p-4 rounded-xl border border-slate-800 space-y-2">
+          <h4 class="font-bold text-indigo-400 uppercase tracking-wider">Các Skill Ban Đầu</h4>
+          <ul class="space-y-1.5 text-slate-300">
+            <li><code class="text-teal-300 font-mono">/hoc</code>: Học và lưu kiến thức tổng quát</li>
+            <li><code class="text-teal-300 font-mono">/hoc_kien_thuc</code>: Alias rõ nghĩa của /hoc</li>
+            <li><code class="text-teal-300 font-mono">/hoc_cta</code>: Học cấu trúc CTA & chuyển đổi</li>
+            <li class="text-slate-400 italic">Mở rộng sau: /hoc_content hoặc dạng khác</li>
+          </ul>
+        </div>
+
+        <!-- Output -->
+        <div class="bg-slate-900/90 p-4 rounded-xl border border-slate-800 space-y-2">
+          <h4 class="font-bold text-amber-400 uppercase tracking-wider">Kết Quả Đầu Ra (Output)</h4>
+          <ul class="space-y-1.5 text-slate-300 list-disc list-inside">
+            <li>Nội dung / transcript gốc & bản tóm tắt</li>
+            <li>Kiến thức và nguyên tắc rút ra</li>
+            <li>CTA & content patterns đúc kết</li>
+            <li>Nguồn tham khảo & artifacts liên quan</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Flow đơn giản -->
+      <div class="p-3 bg-slate-950 rounded-lg border border-slate-800/80 text-xs font-mono text-slate-300">
+        <span class="text-teal-400 font-bold">Flow:</span> Input ➔ Lấy nội dung ➔ Tạo transcript / Extract text ➔ Phân tích ➔ Tạo knowledge candidate ➔ Người dùng xác nhận khi cần ➔ Lưu để sử dụng lại.
+      </div>
+
+      <!-- Phân biệt 3 khái niệm -->
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 text-xs">
+        <div class="p-2.5 rounded-lg bg-slate-900 border border-slate-800">
+          <strong class="text-teal-400 block mb-0.5">Knowledge</strong>
+          <span class="text-slate-400">Thông tin và hiểu biết Hermes đã học được từ nội dung.</span>
+        </div>
+        <div class="p-2.5 rounded-lg bg-slate-900 border border-slate-800">
+          <strong class="text-indigo-400 block mb-0.5">Skill</strong>
+          <span class="text-slate-400">Hướng dẫn từng bước giúp Hermes biết cách làm một nhiệm vụ.</span>
+        </div>
+        <div class="p-2.5 rounded-lg bg-slate-900 border border-slate-800">
+          <strong class="text-amber-400 block mb-0.5">Memory</strong>
+          <span class="text-slate-400">Dữ liệu ghi nhớ về người dùng hoặc tiến trình làm việc.</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. VIDEO FACTORY -->
+    <section class="card-base p-6 sm:p-7 space-y-5">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center gap-2">
+          <span class="w-6 h-6 rounded-md bg-teal-500/20 text-teal-400 font-bold text-xs flex items-center justify-center">4</span>
+          <h3 class="text-lg font-bold text-white">Video Factory</h3>
+        </div>
+        <span class="text-xs text-teal-400 font-semibold">Từ Product-Intelligence đến video sẵn sàng đăng TikTok thủ công</span>
+      </div>
+
+      <p class="text-sm text-slate-300 leading-relaxed">
+        Video Factory tiếp nhận dữ liệu sản phẩm hằng ngày từ <strong>Product-Intelligence</strong>, qua kiểm định chất lượng hình ảnh (Image QC), tạo kịch bản/storyboard, sinh video AI từng phân cảnh, kiểm định video (Video QC) và xuất bản trọn gói để người dùng đăng TikTok thủ công.
+      </p>
+
+      <!-- 4 Nhóm Input -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+        <div class="bg-slate-900/80 p-3.5 rounded-xl border border-slate-800 space-y-1.5">
+          <strong class="text-teal-400 block">1. Product-Intelligence Feed</strong>
+          <ul class="text-slate-300 space-y-1 list-disc list-inside text-[11px]">
+            <li>Sản phẩm từ daily scout (READY batch)</li>
+            <li>Ảnh gốc đã tải & hash SHA-256</li>
+            <li>Thông tin brand, model, selling points</li>
+          </ul>
+        </div>
+
+        <div class="bg-slate-900/80 p-3.5 rounded-xl border border-slate-800 space-y-1.5">
+          <strong class="text-indigo-400 block">2. Goal & Platform</strong>
+          <ul class="text-slate-300 space-y-1 list-disc list-inside text-[11px]">
+            <li>Video ngắn dọc (9:16, 720×1280)</li>
+            <li>TikTok / Reels / Shorts</li>
+            <li>Mục tiêu giới thiệu & chuyển đổi</li>
+          </ul>
+        </div>
+
+        <div class="bg-slate-900/80 p-3.5 rounded-xl border border-slate-800 space-y-1.5">
+          <strong class="text-amber-400 block">3. References & QC Policy</strong>
+          <ul class="text-slate-300 space-y-1 list-disc list-inside text-[11px]">
+            <li>Image QC ≥80 (Gemini Vision)</li>
+            <li>Cấm watermark, shop branding, marketplace UI</li>
+            <li>Kiến thức & CTA từ Knowledge Base</li>
+          </ul>
+        </div>
+
+        <div class="bg-slate-900/80 p-3.5 rounded-xl border border-slate-800 space-y-1.5">
+          <strong class="text-purple-400 block">4. Production & Budget</strong>
+          <ul class="text-slate-300 space-y-1 list-disc list-inside text-[11px]">
+            <li>Ngân sách $10/sản phẩm, $100/campaign</li>
+            <li>Google Flow là provider ưu tiên cho render tự động; Vertex AI API là phương án dự phòng khi Flow không đủ credit cho kế hoạch render</li>
+            <li>Người dùng có thể chỉ định rõ provider cho một workflow</li>
+            <li>Checkpoint từng scene chống phát sinh chi phí trùng</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Quyết định sản phẩm 2026-09-25; ngưỡng và mô hình cụ thể chờ chủ sở hữu chốt. -->
+      <div class="p-4 bg-indigo-950/40 rounded-xl border border-indigo-500/30 space-y-2 text-xs text-slate-300">
+        <h4 class="font-bold text-indigo-200">Chính sách provider &amp; credit cần hiện thực</h4>
+        <p>Mặc định ưu tiên Google Flow. Trước lần render trả phí đầu tiên, Hermes phải kiểm tra số dư credit thực tế, model, giá credit trên mỗi lần tạo, số cảnh và phần dự phòng cho cảnh cần làm lại; chỉ chọn Flow nếu đủ cho kế hoạch đã duyệt. Nếu không đủ, chọn Vertex AI API trước khi bắt đầu, trong giới hạn ngân sách tiền đã được cấp quyền. Yêu cầu chỉ định provider của người dùng có ưu tiên cao hơn chính sách mặc định; khi provider được chỉ định không đủ điều kiện, dừng và báo người dùng quyết định. Một operation đã được provider chấp nhận phải tiếp tục reconcile/poll đúng provider đã ghim, không tự nộp lại hoặc chuyển provider giữa chừng.</p>
+        <p>Giả định gói Google AI Pro của chủ sở hữu: 50 credit Flow mỗi ngày cộng thêm 1.000 credit mỗi chu kỳ tháng. Đây là hai nguồn credit, không phải trần cố định 50 credit/ngày; credit hằng ngày và credit tháng chưa dùng không chuyển sang kỳ kế tiếp. Mức 10–20 credit là ví dụ cho <em>một lần tạo clip</em> tùy model, không phải toàn bộ video nhiều cảnh; một yêu cầu có thể tạo nhiều clip và tính credit cho từng clip. Hermes phải dùng số dư và giá hiển thị thực tế, không suy ra từ hạn mức danh nghĩa. <a class="text-indigo-300 underline" href="https://support.google.com/flow/answer/16526234?hl=en">Nguồn: Google Flow Help</a>.</p>
+        <p>Mục tiêu vận hành là cố gắng tạo 3–5 <em>video quảng cáo hoàn chỉnh</em> mỗi ngày từ sản phẩm Product Intelligence, tính chung Google Flow và Vertex AI; đây là mục tiêu best effort, không phải cam kết sản lượng. Tác vụ hằng ngày nhận tối đa 5 sản phẩm hợp lệ mới và báo lỗi nếu nhận được dưới 3. Sau đó mỗi sản phẩm vẫn phải qua QC, đủ ngân sách và năm bước duyệt; thiếu sản phẩm, credit hoặc provider thì báo lý do và có thể kết thúc ngày với ít video hơn. Chính sách mong muốn là Flow ưu tiên, Vertex bù khi Flow không đủ điều kiện trước khi nộp cảnh trả phí; lựa chọn model Flow theo từng cảnh và kiểm tra credit tự động vẫn là phần cần hoàn thiện.</p>
+        <p>Lời dẫn tiếng Việt trong Scene Plan đã duyệt được đưa vào prompt tạo cảnh để AI thử tạo voiceover. Audio là tùy chọn: nếu clip hợp lệ nhưng không có tiếng, Hermes vẫn ghép, QC và xuất MP4 không lời để chủ sở hữu thêm tiếng sau. Không tự gọi lại provider trả phí chỉ vì thiếu audio; metadata phải phản ánh trạng thái âm thanh thực của MP4.</p>
+        <p class="text-amber-200">Cần chốt: số cảnh/thời lượng và chất lượng tối thiểu cho mỗi video; mức dự phòng làm lại; điều kiện tự chuyển sang Vertex và trần chi phí Vertex. Các con số credit của Google có thể thay đổi.</p>
+      </div>
+
+      <!-- Flow cấp cao -->
+      <div class="p-3 bg-slate-950 rounded-lg border border-slate-800/80 text-xs font-mono text-slate-300 leading-relaxed">
+        <span class="text-teal-400 font-bold">Production Flow:</span> Daily Feed (PI) ➔ Research ➔ Resource Pack ➔ Image QC ➔ <span class="text-amber-300">[Gate 1: Product Lock]</span> ➔ Creative Brief ➔ <span class="text-amber-300">[Gate 2: Brief]</span> ➔ Scene Plan ➔ <span class="text-amber-300">[Gate 3: Scene Plan]</span> ➔ Storyboard ➔ <span class="text-amber-300">[Gate 4: Storyboard + Cost Auth]</span> ➔ Scene Render (Veo) ➔ Compose (PyAV) ➔ Video QC ➔ <span class="text-amber-300">[Gate 5: Final Video]</span> ➔ Export Package ➔ Đăng TikTok thủ công.
+      </div>
+
+      <!-- Output & Phê duyệt -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+        <div class="bg-slate-900/90 p-4 rounded-xl border border-slate-800 space-y-1.5">
+          <h4 class="font-bold text-white">Gói Xuất Bản Hoàn Chỉnh (Export Package)</h4>
+          <p class="text-slate-300">File video MP4 dọc chuẩn 720×1280 (H.264), file <code>caption.txt</code> bám đúng thông tin sản phẩm (không bịa thông số/ưu đãi), và file <code>metadata.json</code> lưu trọn vẹn lịch sử chứng thực (provenance) của cả 5 cổng duyệt và QC reports.</p>
+        </div>
+
+        <div class="bg-slate-900/90 p-4 rounded-xl border border-teal-500/30 space-y-1.5">
+          <h4 class="font-bold text-teal-300">5 Cổng Duyệt Bắt Buộc (HITL Gates)</h4>
+          <p class="text-slate-300 leading-relaxed">
+            Người dùng luôn giữ quyền quyết định qua 5 cổng kiểm soát: Khóa sản phẩm (Product Lock) ➔ Kịch bản (Brief) ➔ Phân cảnh (Scene Plan) ➔ Storyboard + Cấp quyền chi phí (Cost Auth) ➔ Nghiệm thu video (Final Approval). QC tự động chỉ đóng vai trò điều kiện cần, không bao giờ tự động duyệt thay con người. State, approvals, QC reports, budget reservations và provider operation IDs được lưu bền vững để resume/idempotent; lỗi có thể phục hồi dừng tại <code>WaitingForOperator</code>. TikTok posting vẫn thủ công.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5. SKILLS -->
+    <section class="card-base p-6 sm:p-7 space-y-5">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center gap-2">
+          <span class="w-6 h-6 rounded-md bg-teal-500/20 text-teal-400 font-bold text-xs flex items-center justify-center">5</span>
+          <h3 class="text-lg font-bold text-white">Skills</h3>
+        </div>
+        <span class="text-xs text-slate-400">Playbooks hướng dẫn thực hiện</span>
+      </div>
+
+      <p class="text-sm text-slate-300">
+        Skill là playbook giúp Hermes biết cách thực hiện một loại nhiệm vụ theo quy trình chuẩn.
+      </p>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+        <div class="p-3.5 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
+          <strong class="text-teal-400 block text-xs uppercase tracking-wider">Knowledge Skills</strong>
+          <ul class="text-slate-300 space-y-1">
+            <li>• Knowledge learning</li>
+            <li>• CTA learning</li>
+            <li>• Content pattern learning</li>
+          </ul>
+        </div>
+
+        <div class="p-3.5 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
+          <strong class="text-indigo-400 block text-xs uppercase tracking-wider">Product Research</strong>
+          <ul class="text-slate-300 space-y-1">
+            <li>• Product discovery</li>
+            <li>• Market & competitor research</li>
+            <li>• Resource pack creation</li>
+          </ul>
+        </div>
+
+        <div class="p-3.5 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
+          <strong class="text-amber-400 block text-xs uppercase tracking-wider">Content Planning</strong>
+          <ul class="text-slate-300 space-y-1">
+            <li>• Offer & angle strategy</li>
+            <li>• Brief creation & script writing</li>
+            <li>• Visual & storyboard planning</li>
+          </ul>
+        </div>
+
+        <div class="p-3.5 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
+          <strong class="text-purple-400 block text-xs uppercase tracking-wider">Production Skills</strong>
+          <ul class="text-slate-300 space-y-1">
+            <li>• Image generation procedure</li>
+            <li>• Voice / audio preparation</li>
+            <li>• Video production, QA & export</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="p-3 bg-slate-950 rounded-lg border border-slate-800 text-xs text-slate-400 italic">
+        💡 <strong>Ghi chú:</strong> Capability nào cần reasoning độc lập có thể được nâng thành specialist agent trong spec tương lai.
+      </div>
+    </section>
+
+    <!-- 6. TOOLS VÀ MCP -->
+    <section class="card-base p-6 sm:p-7 space-y-5">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center gap-2">
+          <span class="w-6 h-6 rounded-md bg-teal-500/20 text-teal-400 font-bold text-xs flex items-center justify-center">6</span>
+          <h3 class="text-lg font-bold text-white">Tools và MCP</h3>
+        </div>
+        <span class="text-xs text-slate-400">Khả năng thao tác với thế giới bên ngoài</span>
+      </div>
+
+      <!-- Phân định 4 khái niệm -->
+      <div class="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
+        <div class="p-3 bg-slate-900 rounded-lg border border-slate-800">
+          <span class="text-teal-400 font-bold block mb-1">Skill</span>
+          <span class="text-slate-300">Cho Hermes biết <em>phải làm như thế nào</em>.</span>
+        </div>
+        <div class="p-3 bg-slate-900 rounded-lg border border-slate-800">
+          <span class="text-indigo-400 font-bold block mb-1">Tool / MCP</span>
+          <span class="text-slate-300">Cho Hermes <em>khả năng thực hiện hành động thực tế</em>.</span>
+        </div>
+        <div class="p-3 bg-slate-900 rounded-lg border border-slate-800">
+          <span class="text-amber-400 font-bold block mb-1">Workflow</span>
+          <span class="text-slate-300">Nối nhiều bước thành <em>một quy trình liền mạch</em>.</span>
+        </div>
+        <div class="p-3 bg-slate-900 rounded-lg border border-slate-800">
+          <span class="text-purple-400 font-bold block mb-1">Agent</span>
+          <span class="text-slate-300">Chỉ cần ở các bước cần <em>suy luận (reasoning) độc lập</em>.</span>
+        </div>
+      </div>
+
+      <!-- Các nhóm tích hợp -->
+      <div class="space-y-2">
+        <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider">Các Nhóm Tích Hợp Dự Kiến</h4>
+        
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs text-slate-300">
+          <div class="p-3 bg-slate-950 rounded-lg border border-slate-800/80">
+            <strong class="text-white block mb-1">Web / Search</strong>
+            <span>Tìm sản phẩm, thị trường và nội dung tham khảo.</span>
+          </div>
+          <div class="p-3 bg-slate-950 rounded-lg border border-slate-800/80">
+            <strong class="text-white block mb-1">Media Ingestion</strong>
+            <span>Tải hoặc đọc video, audio, trang web và tài liệu.</span>
+          </div>
+          <div class="p-3 bg-slate-950 rounded-lg border border-slate-800/80">
+            <strong class="text-white block mb-1">Speech / Transcription</strong>
+            <span>Chuyển đổi âm thanh / video thành văn bản (transcript).</span>
+          </div>
+          <div class="p-3 bg-slate-950 rounded-lg border border-slate-800/80">
+            <strong class="text-white block mb-1">Image Generation</strong>
+            <span>Tạo hoặc chỉnh sửa hình ảnh phân cảnh và storyboard.</span>
+          </div>
+          <div class="p-3 bg-slate-950 rounded-lg border border-slate-800/80">
+            <strong class="text-white block mb-1">Video Generation</strong>
+            <span>Gọi các provider sinh video khi có yêu cầu.</span>
+          </div>
+          <div class="p-3 bg-slate-950 rounded-lg border border-slate-800/80">
+            <strong class="text-white block mb-1">Audio / TTS</strong>
+            <span>Tạo voice-over, lồng nhạc hoặc xử lý âm thanh.</span>
+          </div>
+          <div class="p-3 bg-slate-950 rounded-lg border border-slate-800/80">
+            <strong class="text-white block mb-1">Media Processing</strong>
+            <span>Ghép nối video, thêm phụ đề, resize khung hình và export.</span>
+          </div>
+          <div class="p-3 bg-slate-950 rounded-lg border border-slate-800/80">
+            <strong class="text-white block mb-1">Storage / Publishing</strong>
+            <span>Lưu trữ artifacts hoặc chuyển sang nền tảng xuất bản.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="text-[11px] text-slate-400">
+        <em>* Trạng thái hiện tại: Product Video đã xuất được video hình bằng Vertex AI cho một workflow; nhánh Google Flow chưa hoàn tất workflow live. Tác vụ Windows bắt đầu tối đa 5 workflow/ngày từ batch READY và báo thiếu nếu dưới 3, nhưng chưa bảo đảm 3–5 MP4 hoàn chỉnh. Khi trạng thái tạo clip của Flow chưa rõ, Hermes giữ provider đã ghim và dừng để đối soát. Prompt đã được nối với lời dẫn được duyệt; chưa có lượt render live chứng minh MP4 mới có tiếng. MP4 cũ vẫn không lời. Master Idea không mở rộng thành hệ thống distributed hay auto-publishing.</em>
+      </div>
+    </section>
+
+    <!-- 7. HAI USER JOURNEYS CHÍNH -->
+    <section class="space-y-4">
+      <div class="flex items-center gap-2">
+        <span class="w-6 h-6 rounded-md bg-teal-500/20 text-teal-400 font-bold text-xs flex items-center justify-center">7</span>
+        <h3 class="text-lg font-bold text-white">Hai User Journeys Chính</h3>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+        
+        <!-- Journey A -->
+        <div class="card-base p-5 space-y-3 border-teal-500/30">
+          <div class="flex items-center gap-2">
+            <span class="badge bg-teal-500/20 text-teal-300">JOURNEY A</span>
+            <h4 class="font-bold text-white text-sm">Học Kiến Thức</h4>
+          </div>
+
+          <div class="p-3 rounded-lg bg-slate-950 border border-slate-800 font-mono text-[11px] text-teal-300">
+            <strong>User:</strong> "/hoc_cta &lt;video-url&gt;"
+          </div>
+
+          <div class="space-y-1.5 text-slate-300 leading-relaxed">
+            <strong class="text-white block font-mono text-[11px]">Hermes phản hồi:</strong>
+            <p>1. Đọc nội dung & tải video từ URL.</p>
+            <p>2. Tạo bản transcript văn bản.</p>
+            <p>3. Phân tích cấu trúc CTA và công thức chuyển đổi.</p>
+            <p>4. Trình bày kiến thức học được cho người dùng.</p>
+            <p>5. Lưu kiến thức vào Knowledge Base khi được phép.</p>
+            <p>6. Tự động dùng lại kiến thức này khi viết nội dung tương tự sau này.</p>
+          </div>
+        </div>
+
+        <!-- Journey B -->
+        <div class="card-base p-5 space-y-3 border-indigo-500/30">
+          <div class="flex items-center gap-2">
+            <span class="badge bg-indigo-500/20 text-indigo-300">JOURNEY B</span>
+            <h4 class="font-bold text-white text-sm">Tạo Video AI Từ Sản Phẩm Daily</h4>
+          </div>
+
+          <div class="p-3 rounded-lg bg-slate-950 border border-slate-800 font-mono text-[11px] text-indigo-300">
+            <strong>User:</strong> "hermes personal video start --auto --limit 1"
+          </div>
+
+          <div class="space-y-1.5 text-slate-300 leading-relaxed">
+            <strong class="text-white block font-mono text-[11px]">Hermes thực thi qua 5 cổng duyệt:</strong>
+            <p>1. Lấy sản phẩm từ READY batch của Product-Intelligence & chạy Image QC (≥80).</p>
+            <p>2. <span class="text-amber-300 font-bold">[Gate 1]</span> Dừng tại Product Lock để người dùng xác nhận thông tin & ảnh gốc.</p>
+            <p>3. <span class="text-amber-300 font-bold">[Gate 2 & 3]</span> Tạo Creative Brief và Scene Plan, người dùng duyệt kịch bản.</p>
+            <p>4. <span class="text-amber-300 font-bold">[Gate 4]</span> Tạo Storyboard chi tiết, người dùng duyệt & cấp quyền chi phí (Cost Auth).</p>
+            <p>5. Render từng cảnh (Veo), ghép video (PyAV), chạy Video QC kiểm định chất lượng.</p>
+            <p>6. <span class="text-amber-300 font-bold">[Gate 5]</span> Người dùng xem toàn bộ video và duyệt Final Approval.</p>
+            <p>7. Xuất file MP4 dọc + caption.txt + metadata.json để người dùng đăng TikTok thủ công.</p>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- 8. PHẠM VI MASTER IDEA -->
+    <section class="card-base p-6 sm:p-7 space-y-5 border-slate-800">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center gap-2">
+          <span class="w-6 h-6 rounded-md bg-teal-500/20 text-teal-400 font-bold text-xs flex items-center justify-center">8</span>
+          <h3 class="text-lg font-bold text-white">Phạm Vi Master Idea & Các Quyết Định Để Lại</h3>
+        </div>
+      </div>
+
+      <!-- 3 Nguyên tắc sản phẩm -->
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+        <div class="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-1">
+          <strong class="text-teal-400 block font-bold">1. Một Trợ Lý Duy Nhất</strong>
+          <span class="text-slate-300">Người dùng chỉ tương tác với duy nhất một Hermes thông minh.</span>
+        </div>
+        <div class="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-1">
+          <strong class="text-indigo-400 block font-bold">2. Hai Năng Lực Chính</strong>
+          <span class="text-slate-300">Tập trung hoàn thiện Knowledge Base và Video Factory.</span>
+        </div>
+        <div class="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-1">
+          <strong class="text-amber-400 block font-bold">3. Con Người Giữ Quyền Quyết Định</strong>
+          <span class="text-slate-300">Xác nhận tại các bước quan trọng hoặc tốn kém ngân sách.</span>
+        </div>
+      </div>
+
+      <!-- Khung: Những điều Master Idea chưa quyết định -->
+      <div class="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-2.5 text-xs">
+        <div class="flex items-center gap-2 text-slate-400 font-bold uppercase tracking-wider text-[11px]">
+          <span>📌</span> Các Quyết Định Kỹ Thuật Chưa Chốt Ở Master Idea (Dành Cho Spec / Plan):
+        </div>
+        
+          <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 text-[11px] text-slate-400">
+            <div class="p-2 rounded bg-slate-900/60 border border-slate-800/80">• Knowledge Base future data layout</div>
+            <div class="p-2 rounded bg-slate-900/60 border border-slate-800/80">• General Hermes process topology</div>
+            <div class="p-2 rounded bg-slate-900/60 border border-slate-800/80">• Future multi-user / multi-machine scale</div>
+            <div class="p-2 rounded bg-slate-900/60 border border-slate-800/80">• Future specialist-agent boundaries</div>
+            <div class="p-2 rounded bg-slate-900/60 border border-slate-800/80">• Future plugin/provider catalog</div>
+            <div class="p-2 rounded bg-slate-900/60 border border-slate-800/80">• Product Video source: PI READY feed</div>
+            <div class="p-2 rounded bg-slate-900/60 border border-slate-800/80">• Product Video: SQLite + 5 HITL gates</div>
+            <div class="p-2 rounded bg-slate-900/60 border border-slate-800/80">• Product Video: QC, budget, resume, export</div>
+          </div>
+        
+        <p class="text-[11px] text-slate-500 italic pt-1">
+          * Các quyết định Product Video đã được chuẩn hóa trong Product Video Master Spec/Plan; các mục còn lại chỉ áp dụng cho năng lực Hermes tương lai.
+        </p>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- FOOTER -->
+  <footer class="border-t border-slate-800 bg-slate-950 py-6 text-center text-xs text-slate-500 font-mono">
+    Hermes Personal Agent • Master Idea & Product Vision • Canonical Blueprint
+  </footer>
+
+</body>
+</html>

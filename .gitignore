@@ -27,6 +27,7 @@ act/
 .uv-cache/
 compose.hermes.local.yml
 export*
+!hermes_personal/integrations/video_factory/export_package.py
 __pycache__/model_tools.cpython-310.pyc
 __pycache__/web_tools.cpython-310.pyc
 logs/
@@ -128,8 +129,14 @@ website/static/api/skills-meta.json
 website/static/api/automation-blueprints-index.json
 models-dev-upstream/
 
-# Local editor / agent tooling (machine-specific; keep in global config, not the repo)
-.codex/
+# Local editor / agent tooling (machine-specific; keep in global config, not the repo).
+# Repository governance entrypoints are the narrow exception; config, credentials,
+# caches, and all other machine-local Codex state remain ignored.
+.codex/*
+!.codex/README.md
+!.codex/rules/
+.codex/rules/*
+!.codex/rules/hermes-personal-architecture.md
 .cursor/
 .gemini/
 .zed/
@@ -140,6 +147,12 @@ config/mcporter.json
 hermes_cli/tui_dist/*
 hermes_cli/scripts/
 docs/superpowers/*
+# The Product Video master documents are maintained source artifacts, not
+# per-session plans. Keep these two canonical files versioned.
+!docs/superpowers/specs/
+!docs/superpowers/plans/
+!docs/superpowers/specs/product-video-master-spec.md
+!docs/superpowers/plans/product-video-master-plan.md
 # Working directory for the Hermes Agent's session state (~/.hermes/ at runtime;
 # also created in-repo when an agent operates in this checkout). Plans, audit
 # logs, and per-session caches are never artifacts of the codebase.

@@ -59,11 +59,22 @@ export function OmniChatPage() {
   };
 
   const handleApprove = async (event: HermesEvent) => {
+    // Use event.approval_id as the target — this is the ApprovalRequest ID the backend
+    // resolves via ApprovalService.get_request(). Fall back to workflow_id if approval_id
+    // is absent (backend also accepts workflow_id and resolves pending_approval_id from the
+    // aggregate). Never use turn_id/event_id — those don't map to approval records.
+    // Pass expected_version: null so the backend skips the stale-version guard (the UI
+    // does not track workflow version; the backend enforces idempotency via approval_id).
+    const targetId = event.approval_id ?? event.workflow_id;
+    if (!targetId) {
+      console.error('Approval event missing both approval_id and workflow_id — cannot approve', event);
+      return;
+    }
     try {
       await submitCommand({
         command_type: 'approve',
-        target_id: event.turn_id || event.event_id,
-        expected_version: 1,
+        target_id: targetId,
+        expected_version: null,
         payload: { reason: 'Operator approved via Omni UI' },
       });
     } catch (err) {
@@ -107,10 +118,13 @@ export function OmniChatPage() {
           <div className="text-sm font-semibold text-amber-300">Pending Operator Approvals</div>
           {pendingApprovals.map((appr) => (
             <div key={appr.event_id} className="flex justify-between items-center text-xs text-amber-200">
-              <span>Approval requested for {appr.turn_id}</span>
+              <span>
+                Approval{appr.approval_id ? ` ${appr.approval_id}` : ''} for workflow{' '}
+                {appr.workflow_id ?? appr.turn_id}
+              </span>
               <button
                 type="button"
-                disabled={isSubmitting}
+                disabled={isSubmitting || (!appr.approval_id && !appr.workflow_id)}
                 onClick={() => void handleApprove(appr)}
                 className="px-3 py-1 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded font-medium"
               >

@@ -33,7 +33,7 @@ class ProductIntelligenceClient:
         self,
         owner_user_id: str = "user",
         *,
-        fake: bool = False,
+        fake: bool = True,
         mcp_client: Any = None,
     ) -> None:
         self.owner_user_id = owner_user_id

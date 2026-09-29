@@ -98,6 +98,21 @@ def test_duplicate_reserve_same_key_digest(engine):
     assert alloc1.idempotency_key == alloc2.idempotency_key
 
 
+def test_retry_reactivates_released_attempt_before_commit(engine):
+    first = engine.reserve_budget(
+        "chanA", 200, idempotency_key="brief-key", attempt_id="brief-attempt"
+    )
+    engine.release_budget(first)
+
+    retry = engine.reserve_budget(
+        "chanA", 200, idempotency_key="brief-key", attempt_id="brief-attempt"
+    )
+    assert retry.reservation_id == first.reservation_id
+    assert retry.state == "reserved"
+    engine.commit_budget(retry)
+    assert engine.get_allocated("chanA") == 200
+
+
 # 7. Same key with different amount/digest raises conflict
 def test_same_key_different_amount_digest_conflict(engine):
     engine.reserve_budget("chanA", 200, idempotency_key="key-123")

@@ -43,6 +43,9 @@ class BudgetAllocation:
     policy_version: int = 1
     policy_snapshot_json: str = "{}"
     external_reference: str | None = None
+    campaign_id: str = ""
+    authorization_id: str = ""
+    attempt_id: str = ""
     created_at: str | None = None
     updated_at: str | None = None
 
@@ -98,6 +101,9 @@ def _row_to_allocation(row: sqlite3.Row) -> BudgetAllocation:
         policy_version=row["policy_version"] if "policy_version" in row.keys() else 1,
         policy_snapshot_json=row["policy_snapshot_json"] if "policy_snapshot_json" in row.keys() else "{}",
         external_reference=row["external_reference"],
+        campaign_id=row["campaign_id"] if "campaign_id" in row.keys() else "",
+        authorization_id=row["authorization_id"] if "authorization_id" in row.keys() else "",
+        attempt_id=row["attempt_id"] if "attempt_id" in row.keys() else "",
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -165,6 +171,10 @@ class BudgetRepository:
         capability_id: str = "general",
         operation_input_digest: str = "",
         external_reference: str | None = None,
+        campaign_id: str = "",
+        campaign_max: int | None = None,
+        authorization_id: str = "",
+        attempt_id: str = "",
         schema_version: int = 1,
     ) -> BudgetAllocation:
         if amount <= 0:
@@ -190,6 +200,14 @@ class BudgetRepository:
         try:
             with self._connection:
                 self._connection.execute("BEGIN IMMEDIATE")
+
+                if attempt_id:
+                    attempt_row = self._connection.execute(
+                        "SELECT * FROM budget_reservation WHERE attempt_id = ?",
+                        (attempt_id,),
+                    ).fetchone()
+                    if attempt_row is not None and attempt_row["state"] != "released":
+                        return _row_to_allocation(attempt_row)
 
                 if effective_key:
                     row = self._connection.execute(
@@ -242,6 +260,18 @@ class BudgetRepository:
                 if total_used + amount > policy.max_total:
                     raise BudgetError("total budget exceeds max_total")
 
+                if campaign_id and campaign_max is not None:
+                    campaign_used = self._connection.execute(
+                        """
+                        SELECT COALESCE(SUM(amount), 0) AS total
+                        FROM budget_reservation
+                        WHERE campaign_id = ? AND state IN ('reserved', 'committed')
+                        """,
+                        (campaign_id,),
+                    ).fetchone()["total"]
+                    if campaign_used + amount > campaign_max:
+                        raise BudgetError("campaign budget exceeds max_total")
+
                 if effective_key and row is not None and row["state"] == "released":
                     now_iso = datetime.now(timezone.utc).isoformat()
                     self._connection.execute(
@@ -271,8 +301,9 @@ class BudgetRepository:
                     INSERT INTO budget_reservation (
                       reservation_id, owner_user_id, scope_id, channel, amount, currency,
                       idempotency_key, request_digest, state, capability_id, operation_input_digest,
-                      policy_id, policy_version, policy_snapshot_json, external_reference, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?, ?, ?, ?, ?, ?)
+                      policy_id, policy_version, policy_snapshot_json, external_reference, campaign_id,
+                      authorization_id, attempt_id, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         res_id,
@@ -289,6 +320,9 @@ class BudgetRepository:
                         policy.policy_version,
                         policy_snapshot,
                         external_reference,
+                        campaign_id,
+                        authorization_id,
+                        attempt_id,
                         now_iso,
                         now_iso,
                     ),
@@ -309,6 +343,9 @@ class BudgetRepository:
                     policy_version=policy.policy_version,
                     policy_snapshot_json=policy_snapshot,
                     external_reference=external_reference,
+                    campaign_id=campaign_id,
+                    authorization_id=authorization_id,
+                    attempt_id=attempt_id,
                     created_at=now_iso,
                     updated_at=now_iso,
                 )
@@ -410,31 +447,64 @@ class BudgetRepository:
     def get_allocated(
         self,
         owner_user_id: str = "default-owner",
-        scope_id: str = "default-scope",
+        scope_id: str | None = None,
         channel: str | None = None,
     ) -> dict[str, int] | int:
         try:
             if channel:
-                row = self._connection.execute(
-                    """
-                    SELECT COALESCE(SUM(amount), 0) AS total
-                    FROM budget_reservation
-                    WHERE owner_user_id = ? AND scope_id = ? AND channel = ? AND state = 'committed'
-                    """,
-                    (owner_user_id, scope_id, channel),
-                ).fetchone()
+                if scope_id is not None:
+                    row = self._connection.execute(
+                        """
+                        SELECT COALESCE(SUM(amount), 0) AS total
+                        FROM budget_reservation
+                        WHERE owner_user_id = ? AND scope_id = ? AND channel = ? AND state = 'committed'
+                        """,
+                        (owner_user_id, scope_id, channel),
+                    ).fetchone()
+                else:
+                    row = self._connection.execute(
+                        """
+                        SELECT COALESCE(SUM(amount), 0) AS total
+                        FROM budget_reservation
+                        WHERE owner_user_id = ? AND channel = ? AND state = 'committed'
+                        """,
+                        (owner_user_id, channel),
+                    ).fetchone()
                 return row["total"] if row else 0
 
-            rows = self._connection.execute(
-                """
-                SELECT channel, COALESCE(SUM(amount), 0) AS total
-                FROM budget_reservation
-                WHERE owner_user_id = ? AND scope_id = ? AND state = 'committed'
-                GROUP BY channel
-                """,
-                (owner_user_id, scope_id),
-            ).fetchall()
+            if scope_id is not None:
+                rows = self._connection.execute(
+                    """
+                    SELECT channel, COALESCE(SUM(amount), 0) AS total
+                    FROM budget_reservation
+                    WHERE owner_user_id = ? AND scope_id = ? AND state = 'committed'
+                    GROUP BY channel
+                    """,
+                    (owner_user_id, scope_id),
+                ).fetchall()
+            else:
+                rows = self._connection.execute(
+                    """
+                    SELECT channel, COALESCE(SUM(amount), 0) AS total
+                    FROM budget_reservation
+                    WHERE owner_user_id = ? AND state = 'committed'
+                    GROUP BY channel
+                    """,
+                    (owner_user_id,),
+                ).fetchall()
             return {row["channel"]: row["total"] for row in rows}
+        except (sqlite3.Error, sqlite3.OperationalError) as ex:
+            raise BudgetError(f"Budget database failure: {ex}") from ex
+
+    def get_reservation(self, reservation_id: str) -> BudgetAllocation | None:
+        try:
+            row = self._connection.execute(
+                "SELECT * FROM budget_reservation WHERE reservation_id = ?",
+                (reservation_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            return _row_to_allocation(row)
         except (sqlite3.Error, sqlite3.OperationalError) as ex:
             raise BudgetError(f"Budget database failure: {ex}") from ex
 
@@ -470,23 +540,47 @@ class BudgetEngine:
         channel: str,
         amount: int,
         idempotency_key: str | None = None,
+        owner_user_id: str | None = None,
         currency: str = "USD",
         capability_id: str = "general",
         operation_input_digest: str = "",
         external_reference: str | None = None,
+        campaign_id: str = "",
+        campaign_max: int | None = None,
+        scope_max: int | None = None,
+        authorization_id: str = "",
+        attempt_id: str = "",
+        scope_id: str | None = None,
     ) -> BudgetAllocation:
+        effective_policy = self.policy
+        if scope_max is not None:
+            if scope_max <= 0:
+                raise BudgetError("scope_max must be positive")
+            effective_policy = BudgetPolicy(
+                max_total=scope_max,
+                per_channel={channel: scope_max},
+                policy_id=f"{self.policy.policy_id}:scope",
+                policy_version=self.policy.policy_version,
+            )
         return self.repository.reserve_budget(
-            self.policy,
+            effective_policy,
             channel,
             amount,
             idempotency_key=idempotency_key,
-            owner_user_id=self.owner_user_id,
-            scope_id=self.scope_id,
+            owner_user_id=owner_user_id or self.owner_user_id,
+            scope_id=self.scope_id if scope_id is None else scope_id,
             currency=currency,
             capability_id=capability_id,
             operation_input_digest=operation_input_digest,
             external_reference=external_reference,
+            campaign_id=campaign_id,
+            campaign_max=campaign_max,
+            authorization_id=authorization_id,
+            attempt_id=attempt_id,
         )
+
+    def get_reservation(self, reservation_id: str) -> BudgetAllocation | None:
+        return self.repository.get_reservation(reservation_id)
 
     def commit_budget(self, allocation: BudgetAllocation) -> None:
         self.repository.commit_budget(allocation)
@@ -494,9 +588,16 @@ class BudgetEngine:
     def release_budget(self, allocation: BudgetAllocation) -> None:
         self.repository.release_budget(allocation)
 
-    def get_allocated(self, channel: str | None = None) -> dict[str, int] | int:
+    def get_allocated(
+        self,
+        channel: str | None = None,
+        owner_user_id: str | None = None,
+        scope_id: str | None = None,
+    ) -> dict[str, int] | int:
         return self.repository.get_allocated(
-            self.owner_user_id, self.scope_id, channel
+            owner_user_id or self.owner_user_id,
+            scope_id,
+            channel,
         )
 
 
@@ -527,11 +628,36 @@ def check_budget(channel: str, amount: int) -> None:
 
 
 def reserve_budget(
-    channel: str, amount: int, idempotency_key: str | None = None
+    channel: str,
+    amount: int,
+    idempotency_key: str | None = None,
+    owner_user_id: str | None = None,
+    *,
+    scope_id: str | None = None,
+    capability_id: str = "general",
+    operation_input_digest: str = "",
+    external_reference: str | None = None,
+    campaign_id: str = "",
+    campaign_max: int | None = None,
+    scope_max: int | None = None,
+    authorization_id: str = "",
+    attempt_id: str = "",
 ) -> BudgetAllocation:
     if _default_engine is None:
         raise BudgetError("default engine not initialized")
-    return _default_engine.reserve_budget(channel, amount, idempotency_key)
+    return _default_engine.reserve_budget(
+        channel, amount, idempotency_key=idempotency_key, owner_user_id=owner_user_id,
+        scope_id=scope_id, capability_id=capability_id,
+        operation_input_digest=operation_input_digest, external_reference=external_reference,
+        campaign_id=campaign_id, campaign_max=campaign_max, scope_max=scope_max,
+        authorization_id=authorization_id, attempt_id=attempt_id,
+    )
+
+
+def get_reservation(reservation_id: str) -> BudgetAllocation | None:
+    if _default_engine is None:
+        return None
+    return _default_engine.get_reservation(reservation_id)
 
 
 def commit_budget(allocation: BudgetAllocation) -> None:
@@ -546,7 +672,15 @@ def release_budget(allocation: BudgetAllocation) -> None:
     _default_engine.release_budget(allocation)
 
 
-def get_allocated_budget(channel: str | None = None) -> dict[str, int] | int:
+def get_allocated_budget(
+    channel: str | None = None,
+    owner_user_id: str | None = None,
+    scope_id: str | None = None,
+) -> dict[str, int] | int:
     if _default_engine is None:
         return 0 if channel else {}
-    return _default_engine.get_allocated(channel)
+    return _default_engine.get_allocated(
+        channel=channel,
+        owner_user_id=owner_user_id,
+        scope_id=scope_id,
+    )

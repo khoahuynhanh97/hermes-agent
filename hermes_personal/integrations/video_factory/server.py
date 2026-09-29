@@ -1,4 +1,5 @@
 """F1-F5 Video Factory MCP Server with canonical tools and Hermes wire compatibility."""
+
 from __future__ import annotations
 
 import json
@@ -7,6 +8,7 @@ import logging
 import os
 import sqlite3
 import sys
+from collections.abc import Mapping
 
 logger = logging.getLogger(__name__)
 from dataclasses import asdict, replace
@@ -16,12 +18,22 @@ from pathlib import Path
 from typing import Any
 from typing_extensions import TypedDict
 
+
+class RenderProviderConfigurationError(ValueError):
+    """Expected, non-secret configuration failure for Product Video render."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 def _normalize_file_path(path_or_url: str | Path) -> Path:
     from hermes_personal.product_video.storage.layout import get_workspace_layout
+
     try:
         ws = get_workspace_layout()
         return ws.resolve_path(path_or_url)
@@ -29,6 +41,7 @@ def _normalize_file_path(path_or_url: str | Path) -> Path:
         s = str(path_or_url).strip()
         if s.startswith("file://"):
             from urllib.parse import unquote, urlparse
+
             parsed = urlparse(s)
             raw = unquote(parsed.path)
             netloc = unquote(parsed.netloc)
@@ -36,17 +49,25 @@ def _normalize_file_path(path_or_url: str | Path) -> Path:
                 raw = f"{netloc}/{raw}"
             elif netloc:
                 raw = f"{netloc}{raw}"
-            if len(raw) >= 3 and raw[0] in ("/", "\\") and raw[2] == ":" and raw[1].isalpha():
+            if (
+                len(raw) >= 3
+                and raw[0] in ("/", "\\")
+                and raw[2] == ":"
+                and raw[1].isalpha()
+            ):
                 raw = raw[1:]
             return Path(raw).resolve()
         return Path(s).resolve()
+
 
 try:
     from mcp.server.fastmcp import FastMCP
 except ImportError:
     from mcp.server import MCPServer as FastMCP
 
-from hermes_personal.integrations.video_factory.repository import SQLiteVideoFactoryRepository
+from hermes_personal.integrations.video_factory.repository import (
+    SQLiteVideoFactoryRepository,
+)
 from hermes_personal.integrations.video_factory.service import VideoFactoryService
 from hermes_personal.integrations.video_factory.composer import (
     InvalidVideoArtifact,
@@ -64,15 +85,72 @@ from hermes_personal.integrations.video_factory.scene_renderer import (
     SceneRenderRuntime,
     compile_grounded_scene_request,
 )
+from hermes_personal.integrations.video_factory.capacity import (
+    ProviderCapacityStore,
+    configured_capacity,
+    process_lease_owner,
+)
+from hermes_personal.integrations.video_factory.ports import (
+    OFFICIAL_PRODUCT_VIDEO_PROVIDER_KINDS,
+    validate_product_video_render_provider,
+)
+from hermes_personal.integrations.video_factory.provider_selection import (
+    ProviderSelectionError,
+    VideoProviderSelector,
+    validate_reconciled_result,
+)
+from hermes_personal.integrations.video_factory.scene_validator import (
+    validate_scene_output,
+)
 from hermes_personal.integrations.video_factory.domain import (
-    AssetReference, Claim, ClaimStatus, CreativeBrief, FinalApprovalStatus,
-    FrameGenerationStatus, FramePrompt, GeneratedScene, ProjectStatus, RawIdea,
-    ResourceIdentity, ResourcePack, Scene, ScenePlan, Storyboard,
-    StoryboardApprovalStatus, StoryboardFrame, Timeline, TimelineClip,
-    TimelineStatus, VideoFactoryProject, VideoGenerationStatus, VideoPrompt,
+    AssetReference,
+    Claim,
+    ClaimStatus,
+    CreativeBrief,
+    FinalApprovalStatus,
+    FrameGenerationStatus,
+    FramePrompt,
+    GeneratedScene,
+    ProjectStatus,
+    RawIdea,
+    ResourceIdentity,
+    ResourcePack,
+    Scene,
+    ScenePlan,
+    Storyboard,
+    StoryboardApprovalStatus,
+    StoryboardFrame,
+    Timeline,
+    TimelineClip,
+    TimelineStatus,
+    VideoFactoryProject,
+    VideoGenerationStatus,
+    VideoPrompt,
 )
 
 mcp = FastMCP("video-factory")
+
+
+def _invalidate_final_approval(
+    srv: VideoFactoryService,
+    owner_user_id: str,
+    project_id: str,
+    reason: str,
+) -> None:
+    """Centralized downstream invalidation of Final Approval on clip or composite tampering."""
+    if not owner_user_id or not project_id:
+        return
+    proj = srv.get_project(owner_user_id, project_id)
+    if proj.final_approval == FinalApprovalStatus.APPROVED:
+        srv.repository.save(
+            replace(
+                proj,
+                final_approval=FinalApprovalStatus.PENDING,
+                final_approval_notes=reason,
+                updated_at=_now(),
+            )
+        )
+
 
 # Delivery spec: 9:16 portrait (720x1280), H.264, 24fps.
 # This expectation is enforced fail-closed at every export call via validate_export().
@@ -99,7 +177,19 @@ _NO_SOURCE_BRANDING_NEGATIVE_PROMPT = (
     "rating badge, social handle, shipping label, unrelated brand mark, source-store branding"
 )
 
-_INTERNAL_OR_GENERIC_NAME_PREFIXES = ("pack_", "pack-", "snap_", "snap-", "rp_", "rp-", "proj_", "proj-", "proj", "pv-", "wf_")
+_INTERNAL_OR_GENERIC_NAME_PREFIXES = (
+    "pack_",
+    "pack-",
+    "snap_",
+    "snap-",
+    "rp_",
+    "rp-",
+    "proj_",
+    "proj-",
+    "proj",
+    "pv-",
+    "wf_",
+)
 _GENERIC_PRODUCT_NAMES = {
     "sản phẩm công nghệ tiện ích",
     "sản phẩm công nghệ",
@@ -140,7 +230,9 @@ def _merge_negative_prompt(existing: Any = None) -> str:
     return ", ".join(merged)
 
 
-def _render_safe_prompt(base_prompt: str, identity: str = "", extra_constraints: str = "") -> str:
+def _render_safe_prompt(
+    base_prompt: str, identity: str = "", extra_constraints: str = ""
+) -> str:
     pieces = [base_prompt.strip()]
     if identity.strip():
         pieces.append(f"Approved product identity: {identity.strip()}.")
@@ -186,6 +278,7 @@ def _db_path() -> Path:
 
 def _workspace_path() -> Path:
     from hermes_personal.product_video.storage.layout import get_workspace_layout
+
     return get_workspace_layout().root
 
 
@@ -208,7 +301,6 @@ def _service() -> VideoFactoryService:
         return _custom_service
     repo = SQLiteVideoFactoryRepository(_db_path())
     return VideoFactoryService(repo)
-
 
 
 class VideoFactoryProjectSummary(TypedDict):
@@ -298,18 +390,26 @@ def _identity(value: dict[str, Any] | None) -> ResourceIdentity | None:
     return ResourceIdentity(**data)
 
 
-def _pack(value: dict[str, Any], owner_user_id: str, allow_locked: bool = False) -> ResourcePack:
+def _pack(
+    value: dict[str, Any], owner_user_id: str, allow_locked: bool = False
+) -> ResourcePack:
     data = dict(value)
     data["owner_user_id"] = owner_user_id
-    data["product_references"] = tuple(_asset(item) for item in data.get("product_references", []))
-    data["character_references"] = tuple(_asset(item) for item in data.get("character_references", []))
+    data["product_references"] = tuple(
+        _asset(item) for item in data.get("product_references", [])
+    )
+    data["character_references"] = tuple(
+        _asset(item) for item in data.get("character_references", [])
+    )
     if not allow_locked:
         data["locked_at"] = None
         data["locked_product_identity"] = None
         data["locked_character_identity"] = None
     else:
         data["locked_product_identity"] = _identity(data.get("locked_product_identity"))
-        data["locked_character_identity"] = _identity(data.get("locked_character_identity"))
+        data["locked_character_identity"] = _identity(
+            data.get("locked_character_identity")
+        )
     return ResourcePack(**data)
 
 
@@ -322,9 +422,19 @@ def _idea(value: dict[str, Any]) -> RawIdea:
 def _brief(value: dict[str, Any]) -> CreativeBrief:
     data = dict(value)
     allowed = {
-        "objective", "target_audience", "core_message", "tone", "pace", "cta",
-        "content_blocks", "verified_selling_points", "restrictions",
-        "required_content", "platform", "aspect_ratio", "target_duration_seconds",
+        "objective",
+        "target_audience",
+        "core_message",
+        "tone",
+        "pace",
+        "cta",
+        "content_blocks",
+        "verified_selling_points",
+        "restrictions",
+        "required_content",
+        "platform",
+        "aspect_ratio",
+        "target_duration_seconds",
     }
     unknown = sorted(set(data) - allowed)
     if unknown:
@@ -333,12 +443,19 @@ def _brief(value: dict[str, Any]) -> CreativeBrief:
             f"{', '.join(unknown)}. Allowed fields: {', '.join(sorted(allowed))}"
         )
     required = (
-        "objective", "target_audience", "core_message", "tone", "pace", "cta",
+        "objective",
+        "target_audience",
+        "core_message",
+        "tone",
+        "pace",
+        "cta",
         "content_blocks",
     )
     missing = [key for key in required if not data.get(key)]
     if missing:
-        raise ValueError("creative_brief missing required fields: " + ", ".join(missing))
+        raise ValueError(
+            "creative_brief missing required fields: " + ", ".join(missing)
+        )
 
     for key in required[:-1]:
         data[key] = str(data[key]).strip()
@@ -346,7 +463,9 @@ def _brief(value: dict[str, Any]) -> CreativeBrief:
     if not isinstance(content_blocks, (list, tuple)) or not all(
         isinstance(item, str) and item.strip() for item in content_blocks
     ):
-        raise ValueError("creative_brief content_blocks must be a non-empty list of strings")
+        raise ValueError(
+            "creative_brief content_blocks must be a non-empty list of strings"
+        )
     data["content_blocks"] = tuple(content_blocks)
 
     for key in ("restrictions", "required_content"):
@@ -354,12 +473,20 @@ def _brief(value: dict[str, Any]) -> CreativeBrief:
 
     vsp = []
     for item in data.get("verified_selling_points", []):
-        if not isinstance(item, dict) or not item.get("claim") or not item.get("status"):
-            raise ValueError("creative_brief verified_selling_points entries require claim and canonical status")
+        if (
+            not isinstance(item, dict)
+            or not item.get("claim")
+            or not item.get("status")
+        ):
+            raise ValueError(
+                "creative_brief verified_selling_points entries require claim and canonical status"
+            )
         try:
             status = ClaimStatus(item["status"])
         except (TypeError, ValueError) as exc:
-            raise ValueError("creative_brief verified_selling_points contains an invalid status") from exc
+            raise ValueError(
+                "creative_brief verified_selling_points contains an invalid status"
+            ) from exc
         vsp.append(
             Claim(
                 claim=str(item["claim"]).strip(),
@@ -394,14 +521,18 @@ def _storyboard_frame(value: dict[str, Any]) -> StoryboardFrame:
     data = dict(value)
     data["required_resource_ids"] = tuple(data.get("required_resource_ids", []))
     data["prompt"] = _frame_prompt(data.get("prompt"))
-    data["generation_status"] = FrameGenerationStatus(data.get("generation_status", "planned"))
+    data["generation_status"] = FrameGenerationStatus(
+        data.get("generation_status", "planned")
+    )
     return StoryboardFrame(**data)
 
 
 def _storyboard(value: dict[str, Any]) -> Storyboard:
     data = dict(value)
     data["frames"] = tuple(_storyboard_frame(item) for item in data.get("frames", []))
-    data["approval_status"] = StoryboardApprovalStatus(data.get("approval_status", "pending"))
+    data["approval_status"] = StoryboardApprovalStatus(
+        data.get("approval_status", "pending")
+    )
     return Storyboard(**data)
 
 
@@ -415,7 +546,9 @@ def _video_prompt(value: dict[str, Any]) -> VideoPrompt:
 def _generated_scene(value: dict[str, Any]) -> GeneratedScene:
     data = dict(value)
     data["video_prompt"] = _video_prompt(data["video_prompt"])
-    data["generation_status"] = VideoGenerationStatus(data.get("generation_status", "pending"))
+    data["generation_status"] = VideoGenerationStatus(
+        data.get("generation_status", "pending")
+    )
     return GeneratedScene(**data)
 
 
@@ -438,6 +571,7 @@ def _timeline(value: dict[str, Any]) -> Timeline | None:
 # 17 CANONICAL PUBLIC MCP TOOLS
 # ---------------------------------------------------------------------------
 
+
 def video_project_create(owner_user_id: str, project_id: str = "") -> dict[str, Any]:
     """Create a new Video Factory project for an owner."""
     srv = _service()
@@ -454,17 +588,24 @@ def video_project_get(owner_user_id: str, project_id: str) -> dict[str, Any]:
     return _result(_service().get_project(owner_user_id, project_id))
 
 
-def resource_pack_save(owner_user_id: str, project_id: str, resource_pack: ResourcePackInput) -> dict[str, Any]:
+def resource_pack_save(
+    owner_user_id: str, project_id: str, resource_pack: ResourcePackInput
+) -> dict[str, Any]:
     """Save a Resource Pack with product references and identity description."""
     srv = _service()
     pack = _pack(resource_pack, owner_user_id)
     # If external reference files exist on disk, ingest them into canonical workspace layout
     from hermes_personal.product_video.storage.layout import get_workspace_layout
+
     ws = get_workspace_layout()
     ingested_prod_refs = []
     for ref in pack.product_references:
         uri = str(ref.uri).strip()
-        if uri and not uri.startswith("asset://") and not uri.startswith(("http://", "https://", "s3://")):
+        if (
+            uri
+            and not uri.startswith("asset://")
+            and not uri.startswith(("http://", "https://", "s3://"))
+        ):
             clean_path = _normalize_file_path(uri)
             if not clean_path.is_file() or clean_path.stat().st_size == 0:
                 return {
@@ -477,7 +618,11 @@ def resource_pack_save(owner_user_id: str, project_id: str, resource_pack: Resou
                 dest, sha, size = ws.ingest_reference(project_id, clean_path)
             except Exception as exc:
                 err_str = str(exc)
-                code = "UNTRUSTED_REFERENCE_SOURCE" if "UNTRUSTED_REFERENCE_SOURCE" in err_str or "outside" in err_str else "INVALID_IMAGE_ARTIFACT"
+                code = (
+                    "UNTRUSTED_REFERENCE_SOURCE"
+                    if "UNTRUSTED_REFERENCE_SOURCE" in err_str or "outside" in err_str
+                    else "INVALID_IMAGE_ARTIFACT"
+                )
                 return {
                     "ok": False,
                     "status": "failed",
@@ -547,6 +692,7 @@ def resource_pack_lock(
 
     if project is not None and project.resource_pack is not None:
         from hermes_personal.product_video.storage.layout import get_workspace_layout
+
         ws = get_workspace_layout()
         for ref in project.resource_pack.product_references:
             u = str(ref.uri).strip()
@@ -574,7 +720,9 @@ def resource_pack_lock(
         expected_artifact_id = project.resource_pack.id
         if project.resource_pack.locked_at is not None:
             try:
-                expected_artifact_version = max(1, int(project.resource_pack.version) - 1)
+                expected_artifact_version = max(
+                    1, int(project.resource_pack.version) - 1
+                )
             except (TypeError, ValueError):
                 expected_artifact_version = project.resource_pack.version
         else:
@@ -591,12 +739,27 @@ def resource_pack_lock(
         expected_artifact_version=expected_artifact_version,
     )
     if not ok:
-        return {"ok": False, "status": "failed", "error": err, "code": "OPERATOR_APPROVAL_REQUIRED"}
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": err,
+            "code": "OPERATOR_APPROVAL_REQUIRED",
+        }
 
     if project is None:
-        return {"ok": False, "status": "failed", "error": "PROJECT_NOT_FOUND", "code": "PROJECT_NOT_FOUND"}
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": "PROJECT_NOT_FOUND",
+            "code": "PROJECT_NOT_FOUND",
+        }
     if project.resource_pack is None:
-        return {"ok": False, "status": "failed", "error": "RESOURCE_PACK_REQUIRED", "code": "RESOURCE_PACK_REQUIRED"}
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": "RESOURCE_PACK_REQUIRED",
+            "code": "RESOURCE_PACK_REQUIRED",
+        }
 
     # Bind the approved bytes to the locked pack before any downstream
     # storyboard/render operation can resolve references.
@@ -604,7 +767,9 @@ def resource_pack_lock(
         manifest_by_id = {
             str(item.get("asset_id")): item
             for item in eligible_reference_manifest
-            if isinstance(item, dict) and item.get("asset_id") and item.get("eligible") is True
+            if isinstance(item, dict)
+            and item.get("asset_id")
+            and item.get("eligible") is True
         }
         updated_refs = []
         for ref in project.resource_pack.product_references:
@@ -614,23 +779,49 @@ def resource_pack_lock(
                 metadata.update({
                     "qc_eligible": True,
                     "qc_sha256": str(item.get("sha256") or "").removeprefix("sha256:"),
-                    "provenance": item.get("provenance") or metadata.get("provenance") or "product_intelligence",
+                    "provenance": item.get("provenance")
+                    or metadata.get("provenance")
+                    or "product_intelligence",
                 })
             updated_refs.append(replace(ref, metadata=metadata))
-        updated_pack = replace(project.resource_pack, product_references=tuple(updated_refs))
-        project = srv.repository.save(replace(project, resource_pack=updated_pack, resource_version=project.resource_version + 1, updated_at=_now()))
+        updated_pack = replace(
+            project.resource_pack, product_references=tuple(updated_refs)
+        )
+        project = srv.repository.save(
+            replace(
+                project,
+                resource_pack=updated_pack,
+                resource_version=project.resource_version + 1,
+                updated_at=_now(),
+            )
+        )
 
     # Replay idempotency: if already locked with matching identity, return current project cleanly
     if project.resource_pack.locked_at is not None:
         if project.resource_pack.locked_product_identity == p_id and (
-            (character_identity is None and project.resource_pack.locked_character_identity is None)
-            or (character_identity is not None and project.resource_pack.locked_character_identity == _identity(character_identity))
+            (
+                character_identity is None
+                and project.resource_pack.locked_character_identity is None
+            )
+            or (
+                character_identity is not None
+                and project.resource_pack.locked_character_identity
+                == _identity(character_identity)
+            )
         ):
             return _result(project)
-        return {"ok": False, "status": "failed", "error": "RESOURCE_IDENTITY_LOCKED", "code": "RESOURCE_IDENTITY_LOCKED"}
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": "RESOURCE_IDENTITY_LOCKED",
+            "code": "RESOURCE_IDENTITY_LOCKED",
+        }
 
-    return _result(srv.lock_resource_pack(owner_user_id, project_id, p_id, _identity(character_identity)))
-
+    return _result(
+        srv.lock_resource_pack(
+            owner_user_id, project_id, p_id, _identity(character_identity)
+        )
+    )
 
 
 def resource_pack_unlock(owner_user_id: str, project_id: str) -> dict[str, Any]:
@@ -638,18 +829,26 @@ def resource_pack_unlock(owner_user_id: str, project_id: str) -> dict[str, Any]:
     return _result(_service().unlock_resource_pack(owner_user_id, project_id))
 
 
-def raw_idea_save(owner_user_id: str, project_id: str, raw_idea: dict[str, Any]) -> dict[str, Any]:
+def raw_idea_save(
+    owner_user_id: str, project_id: str, raw_idea: dict[str, Any]
+) -> dict[str, Any]:
     """Save raw idea seed text for a project."""
     return _result(_service().save_raw_idea(owner_user_id, project_id, _idea(raw_idea)))
 
 
-def creative_brief_save(owner_user_id: str, project_id: str, creative_brief: CreativeBriefInput) -> dict[str, Any]:
+def creative_brief_save(
+    owner_user_id: str, project_id: str, creative_brief: CreativeBriefInput
+) -> dict[str, Any]:
     """Save a Creative Brief using objective, target_audience, core_message,
     tone, pace, cta, and content_blocks. Optional fields are
     verified_selling_points, restrictions, required_content, platform,
     aspect_ratio, and target_duration_seconds.
     """
-    return _result(_service().save_creative_brief(owner_user_id, project_id, _brief(creative_brief)))
+    return _result(
+        _service().save_creative_brief(
+            owner_user_id, project_id, _brief(creative_brief)
+        )
+    )
 
 
 def creative_brief_get(owner_user_id: str, project_id: str) -> dict[str, Any]:
@@ -704,62 +903,110 @@ def _verify_operator_approval(
     Single-read, fail-closed verification of all identity bindings.
     """
     if not approval_request_id or not approval_request_id.strip():
-        return False, f"OPERATOR_APPROVAL_REQUIRED: {gate} approval requires a verified operator decision from ApprovalService (missing approval_request_id)"
+        return (
+            False,
+            f"OPERATOR_APPROVAL_REQUIRED: {gate} approval requires a verified operator decision from ApprovalService (missing approval_request_id)",
+        )
     svc = _approval_service()
     if svc is None:
         return False, "APPROVAL_SERVICE_UNAVAILABLE: Cannot access approval store"
     try:
         req = svc.get_request(approval_request_id.strip())
     except KeyError:
-        return False, f"APPROVAL_REQUEST_NOT_FOUND: Approval request '{approval_request_id}' not found"
+        return (
+            False,
+            f"APPROVAL_REQUEST_NOT_FOUND: Approval request '{approval_request_id}' not found",
+        )
     except Exception as exc:
         return False, f"APPROVAL_VERIFICATION_ERROR: {exc}"
 
     if req.status.value != "approved":
-        return False, f"APPROVAL_NOT_GRANTED: Approval request '{approval_request_id}' is in state '{req.status.value}', expected 'approved'"
+        return (
+            False,
+            f"APPROVAL_NOT_GRANTED: Approval request '{approval_request_id}' is in state '{req.status.value}', expected 'approved'",
+        )
 
     req_owner = req.payload.get("owner_user_id") or req.payload.get("owner_id")
     if not req_owner or req_owner != owner_user_id:
-        return False, f"OWNER_MISMATCH: Approval request owner '{req_owner}' does not match '{owner_user_id}'"
+        return (
+            False,
+            f"OWNER_MISMATCH: Approval request owner '{req_owner}' does not match '{owner_user_id}'",
+        )
 
     req_proj = req.payload.get("project_id")
     if not req_proj or req_proj != project_id:
-        return False, f"PROJECT_MISMATCH: Approval request project '{req_proj}' does not match '{project_id}'"
+        return (
+            False,
+            f"PROJECT_MISMATCH: Approval request project '{req_proj}' does not match '{project_id}'",
+        )
 
     if workflow_id:
         req_wf = req.payload.get("workflow_id")
         if req_wf and req_wf != workflow_id:
-            return False, f"WORKFLOW_MISMATCH: Approval request workflow '{req_wf}' does not match '{workflow_id}'"
+            return (
+                False,
+                f"WORKFLOW_MISMATCH: Approval request workflow '{req_wf}' does not match '{workflow_id}'",
+            )
     elif req.payload.get("workflow_id"):
         req_wf = req.payload.get("workflow_id")
-        if req_wf != project_id and not str(req_wf).startswith("wf_") and not str(req_wf).startswith("proj_"):
-            return False, f"WORKFLOW_MISMATCH: Approval request workflow '{req_wf}' does not match '{project_id}'"
+        if (
+            req_wf != project_id
+            and not str(req_wf).startswith("wf_")
+            and not str(req_wf).startswith("proj_")
+        ):
+            return (
+                False,
+                f"WORKFLOW_MISMATCH: Approval request workflow '{req_wf}' does not match '{project_id}'",
+            )
 
     if workflow_version is not None:
         req_wf_ver = req.payload.get("workflow_version")
         if req_wf_ver is not None and req_wf_ver != workflow_version:
-            return False, f"WORKFLOW_VERSION_MISMATCH: Approval request workflow version '{req_wf_ver}' does not match expected '{workflow_version}'"
+            return (
+                False,
+                f"WORKFLOW_VERSION_MISMATCH: Approval request workflow version '{req_wf_ver}' does not match expected '{workflow_version}'",
+            )
 
     req_gate = req.payload.get("gate", "")
     if req_gate != gate:
-        return False, f"GATE_MISMATCH: Approval request gate '{req_gate}' does not match expected gate '{gate}'"
+        return (
+            False,
+            f"GATE_MISMATCH: Approval request gate '{req_gate}' does not match expected gate '{gate}'",
+        )
 
     req_art_id = req.payload.get("artifact_id")
     if req_art_id:
+        final_prefixes = ("render_", "art_composite_", "timeline_")
         if not expected_artifact_id or (
             req_art_id != expected_artifact_id
-            and not (gate == "AwaitingFinalApproval" and str(req_art_id).startswith("render_") and str(expected_artifact_id).startswith("render_"))
-            and not (gate == "AwaitingBriefApproval" and str(req_art_id).startswith("brief_") and str(expected_artifact_id).startswith("brief_"))
+            and not (
+                gate == "AwaitingFinalApproval"
+                and any(str(req_art_id).startswith(p) for p in final_prefixes)
+                and any(str(expected_artifact_id).startswith(p) for p in final_prefixes)
+            )
+            and not (
+                gate == "AwaitingBriefApproval"
+                and str(req_art_id).startswith("brief_")
+                and str(expected_artifact_id).startswith("brief_")
+            )
         ):
-            return False, f"ARTIFACT_MISMATCH: Approval request artifact '{req_art_id}' does not match expected artifact '{expected_artifact_id}'"
+            return (
+                False,
+                f"ARTIFACT_MISMATCH: Approval request artifact '{req_art_id}' does not match expected artifact '{expected_artifact_id}'",
+            )
 
     req_art_ver = req.payload.get("artifact_version")
     if req_art_ver is not None:
-        if expected_artifact_version is None or req_art_ver != expected_artifact_version:
-            return False, f"ARTIFACT_VERSION_MISMATCH: Approval request artifact version {req_art_ver} does not match {expected_artifact_version}"
+        if (
+            expected_artifact_version is None
+            or req_art_ver != expected_artifact_version
+        ):
+            return (
+                False,
+                f"ARTIFACT_VERSION_MISMATCH: Approval request artifact version {req_art_ver} does not match {expected_artifact_version}",
+            )
 
     return True, ""
-
 
 
 def creative_brief_approve(
@@ -786,8 +1033,12 @@ def creative_brief_approve(
     expected_artifact_id = ""
     expected_artifact_version = None
     if project is not None and project.creative_brief is not None:
-        expected_artifact_id = getattr(project.creative_brief, "brief_id", None) or f"brief_{project_id}"
-        expected_artifact_version = project.brief_version if project.brief_version is not None else 1
+        expected_artifact_id = (
+            getattr(project.creative_brief, "brief_id", None) or f"brief_{project_id}"
+        )
+        expected_artifact_version = (
+            project.brief_version if project.brief_version is not None else 1
+        )
 
     ok, err = _verify_operator_approval(
         owner_user_id=owner_user_id,
@@ -800,7 +1051,12 @@ def creative_brief_approve(
         expected_artifact_version=expected_artifact_version,
     )
     if not ok:
-        return {"ok": False, "status": "failed", "error": err, "code": "OPERATOR_APPROVAL_REQUIRED"}
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": err,
+            "code": "OPERATOR_APPROVAL_REQUIRED",
+        }
 
     if project is None:
         raise ValueError("PROJECT_NOT_FOUND")
@@ -814,9 +1070,13 @@ def creative_brief_approve(
     return _result(srv.approve_creative_brief(owner_user_id, project_id))
 
 
-def scene_plan_save(owner_user_id: str, project_id: str, scene_plan: dict[str, Any]) -> dict[str, Any]:
+def scene_plan_save(
+    owner_user_id: str, project_id: str, scene_plan: dict[str, Any]
+) -> dict[str, Any]:
     """Save Scene Plan with structured scenes."""
-    return _result(_service().save_scene_plan(owner_user_id, project_id, _scene_plan(scene_plan)))
+    return _result(
+        _service().save_scene_plan(owner_user_id, project_id, _scene_plan(scene_plan))
+    )
 
 
 def scene_plan_get(owner_user_id: str, project_id: str) -> dict[str, Any]:
@@ -851,8 +1111,12 @@ def scene_plan_approve(
     expected_artifact_id = ""
     expected_artifact_version = None
     if project is not None and project.scene_plan is not None:
-        expected_artifact_id = getattr(project.scene_plan, "scene_plan_id", None) or f"scene_{project_id}"
-        expected_artifact_version = project.scene_version if project.scene_version is not None else 1
+        expected_artifact_id = (
+            getattr(project.scene_plan, "scene_plan_id", None) or f"scene_{project_id}"
+        )
+        expected_artifact_version = (
+            project.scene_version if project.scene_version is not None else 1
+        )
 
     ok, err = _verify_operator_approval(
         owner_user_id=owner_user_id,
@@ -865,7 +1129,12 @@ def scene_plan_approve(
         expected_artifact_version=expected_artifact_version,
     )
     if not ok:
-        return {"ok": False, "status": "failed", "error": err, "code": "OPERATOR_APPROVAL_REQUIRED"}
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": err,
+            "code": "OPERATOR_APPROVAL_REQUIRED",
+        }
 
     if project is None:
         raise ValueError("PROJECT_NOT_FOUND")
@@ -898,7 +1167,11 @@ def storyboard_generate(owner_user_id: str, project_id: str) -> dict[str, Any]:
             else project.resource_pack.primary_product_asset_id
         )
     ref_asset_ids = (primary_asset_id,) if primary_asset_id else ()
-    product_identity = project.resource_pack.product_identity_description if project.resource_pack else ""
+    product_identity = (
+        project.resource_pack.product_identity_description
+        if project.resource_pack
+        else ""
+    )
     for idx, scene in enumerate(project.scene_plan.scenes, start=1):
         prompt_str = f"{scene.title}. {scene.main_action}. {scene.content or scene.start_state}".strip()
         frames.append(
@@ -915,14 +1188,21 @@ def storyboard_generate(owner_user_id: str, project_id: str) -> dict[str, Any]:
                 context=scene.context,
                 camera_intention=scene.camera_intention,
                 prompt=FramePrompt(
-                    positive_prompt=_render_safe_prompt(prompt_str, identity=product_identity),
+                    positive_prompt=_render_safe_prompt(
+                        prompt_str, identity=product_identity
+                    ),
                     negative_constraints=_NO_SOURCE_BRANDING_NEGATIVE_PROMPT,
                     product_identity_constraints=product_identity,
                     reference_asset_ids=ref_asset_ids,
                 ),
             )
         )
-    sb = Storyboard(storyboard_id=f"sb_{project_id}", project_id=project_id, frames=tuple(frames))
+    sb = Storyboard(
+        storyboard_id=f"sb_{project_id}",
+        project_id=project_id,
+        frames=tuple(frames),
+        source_scene_version=project.scene_version,
+    )
     return _result(_service().save_storyboard(owner_user_id, project_id, sb))
 
 
@@ -939,7 +1219,11 @@ def export_submit(owner_user_id: str, project_id: str) -> dict[str, Any]:
     project = _service().get_project(owner_user_id, project_id)
     if not project.timeline:
         raise ValueError("TIMELINE_NOT_FOUND")
-    return _result(_service().update_timeline_status(owner_user_id, project_id, TimelineStatus.RENDERING))
+    return _result(
+        _service().update_timeline_status(
+            owner_user_id, project_id, TimelineStatus.RENDERING
+        )
+    )
 
 
 def storyboard_approve(
@@ -981,7 +1265,12 @@ def storyboard_approve(
         expected_artifact_version=expected_artifact_version,
     )
     if not ok:
-        return {"ok": False, "status": "failed", "error": err, "code": "OPERATOR_APPROVAL_REQUIRED"}
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": err,
+            "code": "OPERATOR_APPROVAL_REQUIRED",
+        }
 
     if project is None:
         raise ValueError("PROJECT_NOT_FOUND")
@@ -1020,7 +1309,11 @@ def final_video_approve(
     expected_artifact_id = ""
     expected_artifact_version = None
     if project is not None:
-        expected_artifact_id = project.draft_video_asset_id or (project.timeline.timeline_id if project.timeline else f"render_{project_id}")
+        expected_artifact_id = (
+            project.draft_video_asset_id
+            or (f"art_composite_{project_id}_v{project.timeline.version}" if project.timeline else None)
+            or (project.timeline.timeline_id if project.timeline else f"render_{project_id}")
+        )
         expected_artifact_version = project.timeline.version if project.timeline else 1
 
     ok, err = _verify_operator_approval(
@@ -1034,7 +1327,12 @@ def final_video_approve(
         expected_artifact_version=expected_artifact_version,
     )
     if not ok:
-        return {"ok": False, "status": "failed", "error": err, "code": "OPERATOR_APPROVAL_REQUIRED"}
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": err,
+            "code": "OPERATOR_APPROVAL_REQUIRED",
+        }
 
     if project is None:
         raise ValueError("PROJECT_NOT_FOUND")
@@ -1063,7 +1361,6 @@ def final_video_approve(
     return _result(srv.approve_final_video(owner_user_id, project_id, notes=notes))
 
 
-
 def video_factory_runtime_info() -> dict[str, Any]:
     """Return runtime diagnostic paths and configuration info."""
     db_file = _db_path()
@@ -1080,6 +1377,7 @@ def video_factory_runtime_info() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # HERMES WIRE TOOLS COMPATIBILITY ADAPTERS
 # ---------------------------------------------------------------------------
+
 
 def _unpack_payload(data: dict[str, Any] | None) -> dict[str, Any]:
     """Safely unpack JSON string 'payload' if present in data, preserving structured fields and raising explicit errors on corrupt JSON."""
@@ -1098,7 +1396,9 @@ def _unpack_payload(data: dict[str, Any] | None) -> dict[str, Any]:
                         if k != "result" and (k not in res or not res[k]):
                             res[k] = v
             except json.JSONDecodeError as exc:
-                raise ValueError(f"INVALID_PAYLOAD: Corrupt JSON payload string: {exc}") from exc
+                raise ValueError(
+                    f"INVALID_PAYLOAD: Corrupt JSON payload string: {exc}"
+                ) from exc
     return res
 
 
@@ -1116,7 +1416,15 @@ def create_brief(
     """
     cfg = dict(brief_config or {})
 
-    required = ("objective", "target_audience", "core_message", "tone", "pace", "cta", "content_blocks")
+    required = (
+        "objective",
+        "target_audience",
+        "core_message",
+        "tone",
+        "pace",
+        "cta",
+        "content_blocks",
+    )
     missing = [k for k in required if not str(cfg.get(k, "")).strip()]
     if missing:
         return {
@@ -1155,7 +1463,11 @@ def create_brief(
         }
 
     try:
-        clean_cfg = {k: v for k, v in cfg.items() if k not in ("project_id", "resource_pack", "brief_id", "research_dossier")}
+        clean_cfg = {
+            k: v
+            for k, v in cfg.items()
+            if k not in ("project_id", "resource_pack", "brief_id", "research_dossier")
+        }
         brief = _brief(clean_cfg)
         saved_project = srv.save_creative_brief(owner_user_id, proj_id, brief)
         brief_id = cfg.get("brief_id") or f"brief_{product_id or proj_id}"
@@ -1227,9 +1539,9 @@ def create_scene_plan(
     if not scenes_data and b_data.get("content_blocks"):
         scenes_data = [
             {
-                "scene_id": f"scene_{i+1}",
+                "scene_id": f"scene_{i + 1}",
                 "order": i + 1,
-                "title": f"Scene {i+1}",
+                "title": f"Scene {i + 1}",
                 "objective": f"Show {block}",
                 "content": str(block),
                 "main_action": "Demonstrate product",
@@ -1362,7 +1674,12 @@ def create_storyboard(
     try:
         frames_data = frames or sp_data.get("frames")
         if frames_data and isinstance(frames_data, (list, tuple)):
-            sb = _storyboard({"storyboard_id": f"sb_{proj_id}", "project_id": proj_id, "frames": frames_data})
+            sb = _storyboard({
+                "storyboard_id": f"sb_{proj_id}",
+                "project_id": proj_id,
+                "frames": frames_data,
+                "source_scene_version": project.scene_version,
+            })
             saved_project = srv.save_storyboard(owner_user_id, proj_id, sb)
         else:
             storyboard_generate(owner_user_id, proj_id)
@@ -1402,38 +1719,168 @@ def _video_provider(
     """Lazy provider constructor.
 
     Never mints tokens or performs I/O at import time.
-    Returns None if provider is unconfigured or unavailable.
+    Returns None if no official provider is configured.
     """
     if provider_override is not None:
-        return provider_override
+        if isinstance(provider_override, Mapping):
+            return provider_override
+        try:
+            return validate_product_video_render_provider(provider_override)
+        except ValueError as exc:
+            raise RenderProviderConfigurationError(
+                "INVALID_RENDER_PROVIDER",
+                f"configured Product Video provider is invalid: {exc}",
+            ) from exc
 
-    # Provider selection is behavioral configuration and therefore belongs in
-    # config.yaml. Credentials remain profile-scoped secrets resolved by the
-    # Vertex adapter.
+    # Keep both configured adapters available so durable operations can always
+    # resolve their original provider. Selection for a new operation happens
+    # separately, before its first paid submission.
     try:
         from hermes_cli.config import load_config
 
         cfg = load_config()
         vf_cfg = cfg.get("video_factory") if isinstance(cfg, dict) else {}
-        provider_name = (
-            str(vf_cfg.get("provider", "")).strip().lower()
-            if isinstance(vf_cfg, dict)
-            else ""
-        )
+        vf_cfg = vf_cfg if isinstance(vf_cfg, dict) else {}
     except Exception:
-        provider_name = ""
+        vf_cfg = {}
 
-    # If google_vertex is configured or vertex credentials exist
-    if provider_name in ("google_vertex", "vertex", "vertex_ai"):
-        try:
-            from hermes_personal.integrations.video_factory.vertex_provider import VertexVideoProvider
+    configured_order = vf_cfg.get("render_providers")
+    if configured_order is not None:
+        if (
+            not isinstance(configured_order, list)
+            or not configured_order
+            or any(not isinstance(kind, str) or not kind.strip() for kind in configured_order)
+        ):
+            raise RenderProviderConfigurationError(
+                "INVALID_RENDER_PROVIDER_ORDER",
+                "render_providers must be a nonempty list of provider names",
+            )
+        provider_names = [kind.strip().lower() for kind in configured_order]
+        if len(provider_names) != len(set(provider_names)):
+            raise RenderProviderConfigurationError(
+                "INVALID_RENDER_PROVIDER_ORDER", "render_providers contains a duplicate",
+            )
+    else:
+        provider_name = str(vf_cfg.get("render_provider", "")).strip().lower()
+        provider_names = [provider_name] if provider_name else []
 
-            ws = Path(output_dir) if output_dir else _workspace_path()
-            return VertexVideoProvider(output_dir=ws)
-        except Exception:
-            return None
+    if not provider_names:
+        return None
+    if any(name not in OFFICIAL_PRODUCT_VIDEO_PROVIDER_KINDS for name in provider_names):
+        allowed = ", ".join(sorted(OFFICIAL_PRODUCT_VIDEO_PROVIDER_KINDS))
+        raise RenderProviderConfigurationError(
+            "UNSUPPORTED_RENDER_PROVIDER",
+            f"render providers must be one of: {allowed}",
+        )
+    providers: dict[str, Any] = {}
+    ws = Path(output_dir) if output_dir else _workspace_path()
+    for name in provider_names:
+        if name == "google_flow":
+            try:
+                from hermes_personal.integrations.video_factory.google_flow_provider import GoogleFlowPlaywrightProvider
 
-    return None
+                providers[name] = validate_product_video_render_provider(
+                    GoogleFlowPlaywrightProvider.from_config(output_dir=ws)
+                )
+            except ModuleNotFoundError:
+                raise RenderProviderConfigurationError(
+                    "GOOGLE_FLOW_ADAPTER_NOT_INSTALLED", "Google Flow adapter is not installed"
+                ) from None
+        else:
+            try:
+                from hermes_personal.integrations.video_factory.vertex_provider import VertexVideoProvider
+
+                vertex_cfg = vf_cfg.get("vertex_ai") or {}
+                vertex_cfg = vertex_cfg if isinstance(vertex_cfg, dict) else {}
+                providers[name] = validate_product_video_render_provider(
+                    VertexVideoProvider(
+                        location=str(vertex_cfg.get("location") or "us-central1"),
+                        model=str(vertex_cfg.get("model") or "veo-3.1-generate-001"),
+                        output_dir=ws,
+                    )
+                )
+            except ModuleNotFoundError:
+                raise RenderProviderConfigurationError(
+                    "VERTEX_AI_ADAPTER_NOT_INSTALLED", "Vertex AI video adapter is not installed"
+                ) from None
+    if configured_order is not None:
+        return providers
+    selected = providers[provider_names[0]]
+    if provider_names[0] == "google_flow" and not selected.is_available():
+        raise RenderProviderConfigurationError(
+            "GOOGLE_FLOW_UNAVAILABLE",
+            "Google Flow requires an authenticated, reconcilable browser session",
+        )
+    return selected
+
+
+def _provider_for_operation(
+    provider_source: Any,
+    operation: dict[str, Any],
+    *,
+    provider_kind: str | None = None,
+) -> tuple[Any | None, str | None]:
+    """Resolve the exact official provider pinned to a durable operation."""
+    if provider_source is None:
+        return None, "no live video render provider configured or active"
+    durable_kind = str(operation.get("provider_kind") or "").strip()
+    if durable_kind and durable_kind not in OFFICIAL_PRODUCT_VIDEO_PROVIDER_KINDS:
+        return None, f"unsupported durable Product Video provider pin {durable_kind!r}"
+    if isinstance(provider_source, Mapping):
+        if durable_kind and durable_kind in provider_source:
+            provider_source = provider_source[durable_kind]
+        elif not durable_kind and provider_kind in provider_source:
+            provider_source = provider_source[provider_kind]
+        elif not durable_kind and len(provider_source) == 1:
+            provider_source = next(iter(provider_source.values()))
+        else:
+            return None, (
+                "configured Product Video provider registry is missing the durable "
+                f"provider {durable_kind!r}"
+                if durable_kind
+                else "durable provider kind is required when multiple providers are configured"
+            )
+
+    known_kind = getattr(provider_source, "provider_kind", None)
+    if isinstance(known_kind, str):
+        known_kind = known_kind.strip()
+    if durable_kind and known_kind and known_kind != durable_kind:
+        return (
+            None,
+            f"configured Product Video provider kind {known_kind!r} does not match durable pin {durable_kind!r}",
+        )
+    if provider_kind is not None and known_kind and str(provider_kind).strip() != known_kind:
+        return None, "explicit provider_kind does not match resolved provider identity"
+
+    try:
+        provider_source = validate_product_video_render_provider(provider_source)
+    except ValueError as exc:
+        return None, f"configured Product Video provider is invalid: {exc}"
+
+    if operation.get("provider_operation_id") and not durable_kind:
+        return (
+            None,
+            "legacy operation has a provider operation ID but no durable provider kind",
+        )
+    return provider_source, None
+
+
+def _select_render_provider(provider_source: Any, requested_kind: str = "") -> Any:
+    """Select only before submission; persisted operations use _provider_for_operation."""
+    if not isinstance(provider_source, Mapping):
+        selected_kind = str(getattr(provider_source, "provider_kind", "") or "").strip()
+        if requested_kind and requested_kind != selected_kind:
+            raise ProviderSelectionError(f"requested provider {requested_kind!r} is not configured")
+        return provider_source
+    selector = VideoProviderSelector(
+        provider_source,
+        preferred_provider_kind=requested_kind or None,
+        allow_pre_submit_fallback=not bool(requested_kind),
+    )
+    selected = selector.select_initial()
+    if requested_kind and selected.kind != requested_kind:
+        raise ProviderSelectionError(f"requested provider {requested_kind!r} is unavailable")
+    return selected.provider
 
 
 def render(
@@ -1464,7 +1911,11 @@ def render(
     params = dict(render_params or {})
     if admission_context:
         params.setdefault("admission_context", admission_context)
-    proj_id = project_id.strip() or sb_data.get("project_id", "") or params.get("project_id", "")
+    proj_id = (
+        project_id.strip()
+        or sb_data.get("project_id", "")
+        or params.get("project_id", "")
+    )
 
     # 1. Check for active_job_id resume (no-resubmit guarantee)
     active_job_id = params.get("active_job_id") or params.get("job_id")
@@ -1547,6 +1998,7 @@ def render(
     alloc_scope: str | None = None
     try:
         from hermes_personal.workflows.budgets import get_reservation
+
         alloc = get_reservation(reservation_id)
         if alloc is not None:
             alloc_state = alloc.state
@@ -1560,11 +2012,12 @@ def render(
             _budget_db_path = _canonical_approval_db_path()
             if _budget_db_path.exists():
                 from hermes_personal.storage.sqlite import connect as _connect_sqlite
+
                 _bconn = _connect_sqlite(_budget_db_path)
                 _bconn.row_factory = sqlite3.Row
                 _brow = _bconn.execute(
                     "SELECT state, owner_user_id, scope_id FROM budget_reservation WHERE reservation_id = ?",
-                    (reservation_id,)
+                    (reservation_id,),
                 ).fetchone()
                 if _brow:
                     alloc_state = _brow["state"]
@@ -1587,8 +2040,14 @@ def render(
             "error": f"OWNER_MISMATCH: Budget reservation owner '{alloc_owner}' does not match '{owner_user_id}'",
             "code": "ADMISSION_REQUIRED",
         }
-    admitted_workflow_id = str((params.get("admission_context") or {}).get("workflow_id") or "")
-    if alloc_scope and alloc_scope not in (proj_id, admitted_workflow_id, "default-scope"):
+    admitted_workflow_id = str(
+        (params.get("admission_context") or {}).get("workflow_id") or ""
+    )
+    if alloc_scope and alloc_scope not in (
+        proj_id,
+        admitted_workflow_id,
+        "default-scope",
+    ):
         return {
             "ok": False,
             "status": "failed",
@@ -1602,10 +2061,16 @@ def render(
             return manifest
         for ref in project.resource_pack.product_references:
             metadata = dict(ref.metadata or {})
-            if not any(key in metadata for key in ("qc_eligible", "qc_sha256", "sha256")):
+            if not any(
+                key in metadata for key in ("qc_eligible", "qc_sha256", "sha256")
+            ):
                 continue
-            digest = str(metadata.get("qc_sha256") or metadata.get("sha256") or "").removeprefix("sha256:")
-            eligible = metadata.get("qc_eligible") is True or metadata.get("eligible") is True
+            digest = str(
+                metadata.get("qc_sha256") or metadata.get("sha256") or ""
+            ).removeprefix("sha256:")
+            eligible = (
+                metadata.get("qc_eligible") is True or metadata.get("eligible") is True
+            )
             manifest[ref.asset_id] = {
                 "asset_id": ref.asset_id,
                 "uri": ref.uri,
@@ -1629,13 +2094,25 @@ def render(
                 fallback_ref_images.append(str(prod_ref["uri"]))
 
     # 4. Resolve video provider
-    video_prov = _video_provider(provider_override=provider)
-    if video_prov is None:
+    try:
+        provider_source = _video_provider(provider_override=provider)
+    except RenderProviderConfigurationError as exc:
+        return {"ok": False, "status": "failed", "error": str(exc), "code": exc.code}
+    if provider_source is None:
         return {
             "ok": False,
             "status": "failed",
             "error": "PROVIDER_UNAVAILABLE: No live video render provider configured or active",
             "code": "VF_PROVIDER_UNAVAILABLE",
+        }
+    try:
+        video_prov = _select_render_provider(
+            provider_source, str(params.get("provider_kind") or "").strip()
+        )
+    except (ProviderSelectionError, ValueError) as exc:
+        return {
+            "ok": False, "status": "failed", "code": "PROVIDER_UNAVAILABLE",
+            "error": f"PROVIDER_UNAVAILABLE: {exc}",
         }
 
     from hermes_personal.integrations.video_factory.ports import VideoGenerationRequest
@@ -1672,13 +2149,25 @@ def render(
                 "code": "SCENE_COUNT_MISMATCH",
             }
     frames_to_render = tuple(sorted(project.storyboard.frames, key=lambda f: f.order))
-    product_identity = project.resource_pack.product_identity_description if project.resource_pack else ""
-    package_keyframes = {
-        str(item.get("scene_id")): item
-        for item in sb_data.get("generated_keyframes", [])
-        if isinstance(item, dict) and item.get("scene_id")
-    }
-    script_payload = sb_data.get("script") if isinstance(sb_data.get("script"), dict) else {}
+    product_identity = (
+        project.resource_pack.product_identity_description
+        if project.resource_pack
+        else ""
+    )
+    package_keyframes: dict[tuple[str, str], dict[str, Any]] = {}
+    for item in sb_data.get("generated_keyframes", []):
+        if not isinstance(item, dict) or not item.get("scene_id"):
+            continue
+        role = str(item.get("frame_role") or "start").lower()
+        if role not in {"start", "end"}:
+            return {"ok": False, "status": "failed", "code": "INVALID_KEYFRAME_ROLE", "error": "INVALID_KEYFRAME_ROLE"}
+        binding = (str(item["scene_id"]), role)
+        if binding in package_keyframes:
+            return {"ok": False, "status": "failed", "code": "DUPLICATE_KEYFRAME_ROLE", "error": "DUPLICATE_KEYFRAME_ROLE"}
+        package_keyframes[binding] = item
+    script_payload = (
+        sb_data.get("script") if isinstance(sb_data.get("script"), dict) else {}
+    )
     script_scenes = script_payload.get("scenes") or sb_data.get("scenes") or []
     script_by_scene = {
         str(item.get("scene_id")): item
@@ -1688,16 +2177,23 @@ def render(
     package_v2 = sb_data.get("schema_version") == "storyboard-package-v2"
     keyframe_qc_receipt = sb_data.get("keyframe_qc_receipt")
     if package_v2:
-        from hermes_personal.product_video.creative.storyboard import storyboard_package_digest
+        from hermes_personal.product_video.creative.storyboard import (
+            storyboard_package_digest,
+        )
 
-        if str(sb_data.get("package_digest") or "") != storyboard_package_digest(sb_data):
+        if str(sb_data.get("package_digest") or "") != storyboard_package_digest(
+            sb_data
+        ):
             return {
                 "ok": False,
                 "status": "failed",
                 "error": "STORYBOARD_PACKAGE_CHANGED: script, prompt, reference, or keyframe changed after QC",
                 "code": "STORYBOARD_PACKAGE_CHANGED",
             }
-        if len(package_keyframes) != len(frames_to_render):
+        scene_ids = {frame.scene_id for frame in frames_to_render}
+        if any((scene_id, "start") not in package_keyframes for scene_id in scene_ids) or any(
+            scene_id not in scene_ids for scene_id, _role in package_keyframes
+        ):
             return {
                 "ok": False,
                 "status": "failed",
@@ -1715,7 +2211,9 @@ def render(
                 "code": "KEYFRAME_QC_REQUIRED",
             }
     else:
-        legacy_references = list(params.get("reference_image_paths") or fallback_ref_images)
+        legacy_references = list(
+            params.get("reference_image_paths") or fallback_ref_images
+        )
         if any(not str(value).startswith("asset://") for value in legacy_references):
             return {
                 "ok": False,
@@ -1734,6 +2232,7 @@ def render(
 
     # Pre-persist RenderBatch (status='running') and all planned scene operations before paid provider calls
     from hermes_personal.integrations.video_factory.domain import RenderBatch
+
     render_batch = RenderBatch(
         render_batch_id=durable_batch_id,
         owner_user_id=owner_user_id,
@@ -1746,16 +2245,15 @@ def render(
         created_at=_now(),
         updated_at=_now(),
     )
-    if hasattr(srv.repository, "save_render_batch"):
-        srv.repository.save_render_batch(render_batch)
-
     # Pre-compile requests and pre-persist planned operations
     compiled_requests: list[tuple[Any, VideoGenerationRequest]] = []
     for frame in frames_to_render:
         scene_spec = script_by_scene.get(frame.scene_id, {})
         f_prompt = (
-            getattr(frame.prompt, "positive_prompt", "") or getattr(frame.prompt, "prompt", "")
-            if frame.prompt else ""
+            getattr(frame.prompt, "positive_prompt", "")
+            or getattr(frame.prompt, "prompt", "")
+            if frame.prompt
+            else ""
         )
         if scene_spec:
             f_prompt = (
@@ -1773,23 +2271,40 @@ def render(
                 "Do not render any readable text, captions, CTA, watermark, seller name, shop name, "
                 "marketplace UI, URL, price, or unrelated logo; text will be added in post-production."
             )
+            narration = str(scene_spec.get("narration") or "").strip()
+            if narration:
+                f_prompt += (
+                    f' If audio is supported, speak this exact Vietnamese narration as an off-screen voiceover: "{narration}". '
+                    "Do not add subtitles, extra claims, or other spoken words."
+                )
         if not f_prompt:
-            f_prompt = f"{frame.label}. {frame.subject_action}. {frame.visual_state}".strip()
+            f_prompt = (
+                f"{frame.label}. {frame.subject_action}. {frame.visual_state}".strip()
+            )
         if not f_prompt and project.creative_brief:
             f_prompt = project.creative_brief.core_message
 
         f_refs: list[str] = []
         selected_asset_ids: list[str] = []
-        generated_keyframe = package_keyframes.get(frame.scene_id)
+        generated_keyframe = package_keyframes.get((frame.scene_id, "start"))
+        generated_end_keyframe = package_keyframes.get((frame.scene_id, "end"))
         generated_keyframe_sha = ""
         if generated_keyframe:
-            generated_keyframe_sha = str(generated_keyframe.get("sha256") or "").removeprefix("sha256:")
+            generated_keyframe_sha = str(
+                generated_keyframe.get("sha256") or ""
+            ).removeprefix("sha256:")
             f_refs.append(str(generated_keyframe.get("image_path") or ""))
         elif params.get("reference_image_paths"):
             f_refs.extend(params["reference_image_paths"])
         elif frame.prompt and getattr(frame.prompt, "reference_asset_ids", None):
-            selected_asset_ids = [str(asset_id) for asset_id in frame.prompt.reference_asset_ids]
-            missing_ids = [asset_id for asset_id in selected_asset_ids if asset_id not in approved_manifest]
+            selected_asset_ids = [
+                str(asset_id) for asset_id in frame.prompt.reference_asset_ids
+            ]
+            missing_ids = [
+                asset_id
+                for asset_id in selected_asset_ids
+                if asset_id not in approved_manifest
+            ]
             if missing_ids:
                 if approved_manifest:
                     return {
@@ -1800,14 +2315,25 @@ def render(
                     }
                 # Compatibility for old symbolic asset:// fixtures. A real
                 # local file still must match an eligible manifest below.
-                refs_by_id = {
-                    ref.asset_id: ref.uri
-                    for ref in project.resource_pack.product_references
-                    if ref.asset_id in missing_ids
-                } if project.resource_pack else {}
-                f_refs.extend(refs_by_id[asset_id] for asset_id in selected_asset_ids if asset_id in refs_by_id)
+                refs_by_id = (
+                    {
+                        ref.asset_id: ref.uri
+                        for ref in project.resource_pack.product_references
+                        if ref.asset_id in missing_ids
+                    }
+                    if project.resource_pack
+                    else {}
+                )
+                f_refs.extend(
+                    refs_by_id[asset_id]
+                    for asset_id in selected_asset_ids
+                    if asset_id in refs_by_id
+                )
             else:
-                f_refs.extend(approved_manifest[asset_id]["uri"] for asset_id in selected_asset_ids)
+                f_refs.extend(
+                    approved_manifest[asset_id]["uri"]
+                    for asset_id in selected_asset_ids
+                )
         if not f_refs:
             f_refs.extend(fallback_ref_images)
 
@@ -1822,8 +2348,16 @@ def render(
                     valid_refs.append(img_p)
             else:
                 p = _normalize_file_path(img_p)
-                current_sha = compute_file_sha256(p) if p.is_file() and p.stat().st_size > 0 else ""
-                if generated_keyframe and current_sha and current_sha == generated_keyframe_sha:
+                current_sha = (
+                    compute_file_sha256(p)
+                    if p.is_file() and p.stat().st_size > 0
+                    else ""
+                )
+                if (
+                    generated_keyframe
+                    and current_sha
+                    and current_sha == generated_keyframe_sha
+                ):
                     valid_refs.append(str(p))
                     continue
                 matched = next(
@@ -1854,22 +2388,29 @@ def render(
             valid_refs = valid_refs[:1]
             selected_asset_ids = selected_asset_ids[:1]
 
-        provider_model = getattr(video_prov, "model", "")
+        provider_model = "configured-multi-provider" if isinstance(provider_source, Mapping) else getattr(video_prov, "model", "")
         if not isinstance(provider_model, str) or not provider_model.strip():
             provider_model = video_prov.__class__.__name__
-        operation_material = "|".join(
-            (
-                str(idempotency_key or ""),
-                str(sb_data.get("package_digest") or ""),
-                proj_id,
-                frame.scene_id,
-                provider_model,
-            )
+        operation_material = "|".join((
+            str(idempotency_key or ""),
+            str(sb_data.get("package_digest") or ""),
+            proj_id,
+            frame.scene_id,
+            provider_model,
+        ))
+        req_id = (
+            "video-scene-"
+            + hashlib.sha256(operation_material.encode()).hexdigest()[:24]
         )
-        req_id = "video-scene-" + hashlib.sha256(operation_material.encode()).hexdigest()[:24]
 
-        frame_negative = getattr(frame.prompt, "negative_constraints", "") if frame.prompt else ""
-        frame_identity = getattr(frame.prompt, "product_identity_constraints", "") if frame.prompt else ""
+        frame_negative = (
+            getattr(frame.prompt, "negative_constraints", "") if frame.prompt else ""
+        )
+        frame_identity = (
+            getattr(frame.prompt, "product_identity_constraints", "")
+            if frame.prompt
+            else ""
+        )
         provider_options = dict(params.get("provider_options") or {})
         provider_options["negativePrompt"] = _merge_negative_prompt(
             provider_options.get("negativePrompt") or frame_negative
@@ -1913,16 +2454,23 @@ def render(
             aspect_ratio=aspect_ratio,
             reference_image_paths=tuple(valid_refs),
             provider_options=provider_options,
+            request_audio=bool(str(scene_spec.get("narration") or "").strip()),
         )
 
         if package_v2:
             try:
                 req = compile_grounded_scene_request(
                     owner_user_id=owner_user_id,
-                    workflow_id=str(sb_data.get("workflow_id") or params.get("workflow_id") or (kwargs or {}).get("workflow_id") or "").strip(),
+                    workflow_id=str(
+                        sb_data.get("workflow_id")
+                        or params.get("workflow_id")
+                        or (kwargs or {}).get("workflow_id")
+                        or ""
+                    ).strip(),
                     project_id=proj_id,
                     scene=scene_spec,
                     keyframe=generated_keyframe or {},
+                    end_keyframe=generated_end_keyframe,
                     keyframe_qc_receipt=keyframe_qc_receipt,
                     package_digest=str(sb_data.get("package_digest") or ""),
                     product_identity=product_identity,
@@ -1948,16 +2496,23 @@ def render(
 
         compiled_requests.append((frame, req))
 
+    # Persist only after every scene and both role bindings have validated.
+    if hasattr(srv.repository, "save_render_batch"):
+        srv.repository.save_render_batch(render_batch)
+
     # Transactionally pre-persist all operations in 'planned' status
     op_conn = sqlite3.connect(_db_path())
     try:
         op_store = SceneRenderOperationStore(op_conn)
         for frame, req in compiled_requests:
-            op_store.mark_planned(req, render_batch_id=durable_batch_id, scene_order=frame.order)
+            op_store.mark_planned(
+                req, render_batch_id=durable_batch_id, scene_order=frame.order
+            )
     finally:
         op_conn.close()
 
     # Now execute submissions via runtime
+    waiting_for_capacity = False
     for frame, req in compiled_requests:
         try:
             operation_connection = sqlite3.connect(_db_path())
@@ -1965,17 +2520,26 @@ def render(
                 op_store = SceneRenderOperationStore(operation_connection)
                 runtime = SceneRenderRuntime(
                     store=op_store,
-                    provider=video_prov,
+                    provider=provider_source,
+                    preferred_provider_kind=str(params.get("provider_kind") or "").strip() or None,
+                    allow_pre_submit_fallback=not bool(params.get("provider_kind")),
+                    capacity_store=ProviderCapacityStore(operation_connection),
+                    capacity_limit=None,
                 )
                 result = runtime.run(req)
             finally:
                 operation_connection.close()
-            if result.status in ("submitted", "running", "completed") and result.provider_operation_id:
+            if (
+                result.status in ("submitted", "running", "completed")
+                and result.provider_operation_id
+            ):
                 submitted_op_ids.append(result.provider_operation_id)
+            elif result.error_code == "PROVIDER_CAPACITY_WAIT":
+                waiting_for_capacity = True
             else:
                 return {
                     "ok": False,
-                    "status": "failed",
+                    "status": "waiting_capacity" if result.error_code == "PROVIDER_CAPACITY_WAIT" else "failed",
                     "error": f"RENDER_SUBMIT_FAILED: Frame {frame.frame_id} failed: {result.error_message or result.error_code}",
                     "code": result.error_code or "RENDER_SUBMIT_FAILED",
                 }
@@ -1987,7 +2551,7 @@ def render(
                 "code": "RENDER_SUBMIT_FAILED",
             }
 
-    if not submitted_op_ids:
+    if not submitted_op_ids and not waiting_for_capacity:
         return {
             "ok": False,
             "status": "failed",
@@ -2006,7 +2570,9 @@ def render(
                 scene_id=frame.scene_id,
                 video_prompt=VideoPrompt(
                     scene_id=frame.scene_id,
-                    duration_seconds=int(scene_spec.get("duration_seconds") or duration),
+                    duration_seconds=int(
+                        scene_spec.get("duration_seconds") or duration
+                    ),
                     start_visual_state=scene_spec.get("start_state", ""),
                     end_visual_state=scene_spec.get("end_state", ""),
                     subject_action=scene_spec.get("subject_action", ""),
@@ -2045,6 +2611,7 @@ def render(
 def get_job_status(
     job_id: str,
     provider: Any | None = None,
+    provider_kind: str | None = None,
 ) -> dict[str, Any]:
     """Hermes wire compatibility adapter for polling asynchronous video job status."""
     if not job_id or not str(job_id).strip():
@@ -2055,69 +2622,182 @@ def get_job_status(
             "code": "MISSING_JOB_ID",
         }
 
-    video_prov = _video_provider(provider_override=provider)
-    if video_prov is None:
-        return {
-            "ok": False,
-            "status": "failed",
-            "job_id": job_id,
-            "error": "PROVIDER_UNAVAILABLE: No live video render provider configured or active",
-            "code": "VF_PROVIDER_UNAVAILABLE",
-        }
-
     # Handle durable render batch
     if job_id.startswith("batch_"):
         srv = _service()
-        batch = srv.repository.get_render_batch(job_id) if hasattr(srv.repository, "get_render_batch") else None
+        batch = (
+            srv.repository.get_render_batch(job_id)
+            if hasattr(srv.repository, "get_render_batch")
+            else None
+        )
         from hermes_personal.product_video.storage.layout import get_workspace_layout
-        from hermes_personal.integrations.video_factory.domain import VideoFactoryArtifact, Timeline, TimelineClip, TimelineStatus
+        from hermes_personal.integrations.video_factory.domain import (
+            VideoFactoryArtifact,
+            Timeline,
+            TimelineClip,
+            TimelineStatus,
+        )
+
         ws = get_workspace_layout()
+        op_store = SceneRenderOperationStore(_db_path())
+        capacity_store = ProviderCapacityStore(op_store.connection)
+
+        def acquire_poll_capacity(
+            operation_id: str, provider_instance: Any, kind: str, *, lookup_only: bool = False
+        ) -> bool:
+            return capacity_store.try_acquire(
+                provider_kind=kind,
+                operation_id=operation_id,
+                lease_owner=process_lease_owner(),
+                limit=configured_capacity(kind),
+                profile_id=str(getattr(provider_instance, "profile_id", "") or ""),
+                reconciled_takeover=not lookup_only,
+                reconciliation_only=lookup_only,
+            )
+
+        def fail_batch(
+            *,
+            code: str,
+            error: str,
+            operation_id: str = "",
+            persist_operation_failure: bool = False,
+        ) -> dict[str, Any]:
+            if operation_id and persist_operation_failure:
+                op_store.mark_integrity_failed(
+                    operation_id,
+                    error_code=code,
+                    error_message=error,
+                )
+                failed_op = op_store.get(operation_id)
+                if failed_op and failed_op.get("provider_kind"):
+                    capacity_store.release_terminal(failed_op["provider_kind"], operation_id)
+            durable_batch = (
+                srv.repository.get_render_batch(job_id)
+                if hasattr(srv.repository, "get_render_batch")
+                else None
+            )
+            if durable_batch is not None and hasattr(
+                srv.repository, "save_render_batch"
+            ):
+                srv.repository.save_render_batch(
+                    replace(durable_batch, status="failed", updated_at=_now())
+                )
+            proj_id = (
+                durable_batch.project_id
+                if durable_batch
+                else (batch.project_id if batch else "")
+            )
+            owner_id = (
+                durable_batch.owner_user_id
+                if durable_batch
+                else (batch.owner_user_id if batch else "default-owner")
+            )
+            if proj_id:
+                try:
+                    _invalidate_final_approval(
+                        srv, owner_id, proj_id, f"Batch {job_id} failed: {code}"
+                    )
+                except Exception as exc:
+                    return {
+                        "ok": False,
+                        "status": "failed",
+                        "job_id": job_id,
+                        "error": f"FINAL_APPROVAL_INVALIDATION_FAILED: Failed to invalidate approval: {exc}",
+                        "code": "FINAL_APPROVAL_INVALIDATION_FAILED",
+                    }
+
+            return {
+                "ok": False,
+                "status": "failed",
+                "job_id": job_id,
+                "error": error,
+                "code": code,
+            }
 
         if batch is not None and batch.status == "completed":
-            comp_path = ws.get_composite_dir(batch.project_id, batch.version) / "draft.mp4"
+            comp_path = (
+                ws.get_composite_dir(batch.project_id, batch.version) / "draft.mp4"
+            )
             valid_reuse = False
             if comp_path.is_file() and comp_path.stat().st_size > 0:
                 comp_sha = compute_file_sha256(comp_path)
-                if batch.composite_artifact_id and hasattr(srv.repository, "get_artifact"):
+                if batch.composite_artifact_id and hasattr(
+                    srv.repository, "get_artifact"
+                ):
                     try:
-                        art = srv.repository.get_artifact(batch.composite_artifact_id, owner_user_id=batch.owner_user_id)
-                        if art and art.sha256 == comp_sha:
+                        art = srv.repository.get_artifact(
+                            batch.composite_artifact_id,
+                            owner_user_id=batch.owner_user_id,
+                        )
+                        if (
+                            art
+                            and art.owner_user_id == batch.owner_user_id
+                            and art.project_id == batch.project_id
+                            and art.version == batch.version
+                            and art.sha256 == comp_sha
+                        ):
                             prov = (art.provider_metadata or {}).get("provenance") or {}
                             op_conn = sqlite3.connect(_db_path())
                             op_conn.row_factory = sqlite3.Row
                             try:
                                 rows = op_conn.execute(
-                                    "SELECT scene_id, request_digest, output_path, output_sha256 "
-                                    "FROM video_factory_scene_operation WHERE render_batch_id = ? ORDER BY scene_order ASC",
+                                    "SELECT scene_id, request_digest, output_path, output_sha256, provider_kind "
+                                    "FROM video_factory_scene_operation AS op WHERE op.render_batch_id = ? "
+                                    "AND op.attempt = (SELECT MAX(other.attempt) FROM video_factory_scene_operation AS other "
+                                    "WHERE other.render_batch_id = op.render_batch_id AND other.scene_id = op.scene_id) "
+                                    "ORDER BY op.scene_order ASC",
                                     (job_id,),
                                 ).fetchall()
                                 cur_ops = [dict(r) for r in rows]
                             finally:
                                 op_conn.close()
 
-                            if cur_ops and prov:
-                                prov_scene_ids = prov.get("scene_ids", [])
-                                prov_req_digests = prov.get("request_digests", [])
-                                prov_clip_digests = prov.get("clip_digests", [])
-                                cur_scene_ids = [o["scene_id"] for o in cur_ops]
-                                cur_req_digests = [o.get("request_digest") for o in cur_ops]
-                                cur_clip_digests = [o.get("output_sha256") for o in cur_ops]
+                            prov_scene_ids = prov.get("scene_ids")
+                            prov_req_digests = prov.get("request_digests")
+                            prov_clip_digests = prov.get("clip_digests")
+                            cur_scene_ids = [o["scene_id"] for o in cur_ops]
+                            cur_req_digests = [
+                                o.get("request_digest") for o in cur_ops
+                            ]
+                            cur_clip_digests = [
+                                o.get("output_sha256") for o in cur_ops
+                            ]
 
-                                if (
-                                    prov_scene_ids == cur_scene_ids
-                                    and prov_req_digests == cur_req_digests
-                                    and prov_clip_digests == cur_clip_digests
-                                ):
-                                    clips_intact = True
-                                    for o in cur_ops:
-                                        p_clip = Path(o.get("output_path", ""))
-                                        if not p_clip.is_file() or compute_file_sha256(p_clip) != o.get("output_sha256"):
-                                            clips_intact = False
-                                            break
-                                    if clips_intact:
-                                        comp_probe = probe_video(comp_path, decode_all=True)
-                                        if comp_probe.frame_count >= 1 and abs((comp_probe.width / comp_probe.height) - (9.0 / 16.0)) <= 0.08:
-                                            valid_reuse = True
+                            if (
+                                cur_ops
+                                and isinstance(prov_scene_ids, list)
+                                and isinstance(prov_req_digests, list)
+                                and isinstance(prov_clip_digests, list)
+                                and len(prov_scene_ids) == len(cur_scene_ids)
+                                and len(prov_scene_ids) > 0
+                                and prov_scene_ids == cur_scene_ids
+                                and prov_req_digests == cur_req_digests
+                                and prov_clip_digests == cur_clip_digests
+                            ):
+                                clips_intact = True
+                                for o in cur_ops:
+                                    p_clip = Path(o.get("output_path", ""))
+                                    if (
+                                        not p_clip.is_file()
+                                        or p_clip.stat().st_size == 0
+                                        or compute_file_sha256(p_clip)
+                                        != (o.get("output_sha256") or "").removeprefix("sha256:")
+                                    ):
+                                        clips_intact = False
+                                        break
+                                if clips_intact:
+                                    comp_probe = probe_video(
+                                        comp_path, decode_all=True
+                                    )
+                                    if (
+                                        comp_probe.frame_count >= 1
+                                        and abs(
+                                            (comp_probe.width / comp_probe.height)
+                                            - (9.0 / 16.0)
+                                        )
+                                        <= 0.08
+                                    ):
+                                        valid_reuse = True
                     except Exception:
                         valid_reuse = False
 
@@ -2132,7 +2812,18 @@ def get_job_status(
                     "output_url": f"file://{comp_path.resolve()}",
                     "file_path": str(comp_path.resolve()),
                     "file_size": comp_path.stat().st_size,
+                    "owner_user_id": batch.owner_user_id if batch else owner_id,
+                    "project_id": batch.project_id if batch else proj_id,
+                    "workflow_id": batch.workflow_id if batch else "",
+                    "artifact_id": (
+                        batch.composite_artifact_id
+                        if batch and batch.composite_artifact_id
+                        else comp_art_id
+                    ),
+                    "artifact_version": batch.version if batch else version,
+                    "version": batch.version if batch else version,
                     "sha256": comp_sha,
+                    "scene_provider_kinds": [o["provider_kind"] for o in cur_ops],
                 }
 
         # Query all scene operations for this batch
@@ -2140,7 +2831,10 @@ def get_job_status(
         op_conn.row_factory = sqlite3.Row
         try:
             cur = op_conn.execute(
-                "SELECT * FROM video_factory_scene_operation WHERE render_batch_id = ? ORDER BY scene_order ASC",
+                "SELECT * FROM video_factory_scene_operation AS op WHERE op.render_batch_id = ? "
+                "AND op.attempt = (SELECT MAX(other.attempt) FROM video_factory_scene_operation AS other "
+                "WHERE other.render_batch_id = op.render_batch_id AND other.scene_id = op.scene_id) "
+                "ORDER BY op.scene_order ASC",
                 (job_id,),
             )
             scene_ops = [dict(r) for r in cur.fetchall()]
@@ -2148,115 +2842,280 @@ def get_job_status(
             op_conn.close()
 
         if not scene_ops:
-            return {
-                "ok": False,
-                "status": "failed",
-                "job_id": job_id,
-                "error": f"NO_OPERATIONS: No scene operations registered for batch {job_id}",
-                "code": "VF_NO_OPERATIONS",
-            }
+            return fail_batch(
+                code="VF_NO_OPERATIONS",
+                error=f"NO_OPERATIONS: No scene operations registered for batch {job_id}",
+            )
 
         # Validate batch operation count, unique scene IDs, and contiguous scene_order 1..N
         if batch and batch.scene_count > 0 and len(scene_ops) != batch.scene_count:
-            return {
-                "ok": False,
-                "status": "failed",
-                "job_id": job_id,
-                "error": f"OPERATION_COUNT_MISMATCH: Batch expects {batch.scene_count} scene operations, found {len(scene_ops)}",
-                "code": "OPERATION_COUNT_MISMATCH",
-            }
+            return fail_batch(
+                code="OPERATION_COUNT_MISMATCH",
+                error=(
+                    f"OPERATION_COUNT_MISMATCH: Batch expects {batch.scene_count} "
+                    f"scene operations, found {len(scene_ops)}"
+                ),
+            )
         scene_ids = [op["scene_id"] for op in scene_ops]
         if len(scene_ids) != len(set(scene_ids)):
-            return {
-                "ok": False,
-                "status": "failed",
-                "job_id": job_id,
-                "error": "DUPLICATE_SCENE_ID: Batch contains duplicate scene IDs",
-                "code": "DUPLICATE_SCENE_ID",
-            }
+            return fail_batch(
+                code="DUPLICATE_SCENE_ID",
+                error="DUPLICATE_SCENE_ID: Batch contains duplicate scene IDs",
+            )
         orders = [op.get("scene_order", 0) for op in scene_ops]
         if sorted(orders) != list(range(1, len(orders) + 1)):
-            return {
-                "ok": False,
-                "status": "failed",
-                "job_id": job_id,
-                "error": "NON_CONTIGUOUS_SCENE_ORDER: Scene operations must have contiguous orders 1..N",
-                "code": "NON_CONTIGUOUS_SCENE_ORDER",
-            }
+            return fail_batch(
+                code="NON_CONTIGUOUS_SCENE_ORDER",
+                error="NON_CONTIGUOUS_SCENE_ORDER: Scene operations must have contiguous orders 1..N",
+            )
 
         completed_paths: list[Path] = []
-        for op in scene_ops:
+        video_provider_source: Any | None = None
+        for op_index, op in enumerate(scene_ops):
             op_status = op["status"]
-            op_output = op["output_path"]
-            stored_sha = op.get("output_sha256")
-            prov_op_id = op["provider_operation_id"]
+            op_output = op.get("output_path") or ""
+            stored_sha = op.get("output_sha256") or ""
+            prov_op_id = op.get("provider_operation_id") or ""
+            op_id = op.get("operation_id", "")
+            scene_id = op.get("scene_id", "")
 
             if op_status == "completed":
+                # A terminal row without a validation digest is corrupt. Do not
+                # attempt to repair it through a terminal no-op finalizer.
+                if not stored_sha:
+                    return fail_batch(
+                        code="SCENE_DIGEST_MISSING",
+                        error=f"SCENE_DIGEST_MISSING: Completed scene {scene_id} has empty digest",
+                        operation_id=op_id,
+                        persist_operation_failure=True,
+                    )
                 if not op_output:
-                    return {
-                        "ok": False,
-                        "status": "failed",
-                        "job_id": job_id,
-                        "error": f"SCENE_DIGEST_MISSING: Completed scene {op['scene_id']} is missing output path",
-                        "code": "SCENE_DIGEST_MISSING",
-                    }
+                    return fail_batch(
+                        code="SCENE_OUTPUT_MISSING",
+                        error=f"SCENE_OUTPUT_MISSING: Completed scene {scene_id} is missing output path",
+                        operation_id=op_id,
+                        persist_operation_failure=True,
+                    )
                 p_out = Path(op_output)
                 if not p_out.is_file() or p_out.stat().st_size == 0:
-                    return {
-                        "ok": False,
-                        "status": "failed",
-                        "job_id": job_id,
-                        "error": f"FILE_NOT_FOUND: Completed scene file missing or empty: {op_output}",
-                        "code": "FILE_NOT_FOUND",
-                    }
-                disk_sha = compute_file_sha256(p_out)
-                stored_sha = op.get("output_sha256") or ""
-                
-                # Validate using the operation store's finalization method
-                # This replaces the direct SQL update and backfilling
-                if not stored_sha or disk_sha != stored_sha.removeprefix("sha256:"):
-                    # Need to validate and finalize
-                    from hermes_personal.integrations.video_factory.scene_renderer import SceneRenderOperationStore
-                    from hermes_personal.integrations.video_factory.ports import VideoGenerationResult
-                    
-                    op_store = SceneRenderOperationStore(_db_path())
-                    provider_result = VideoGenerationResult(
-                        request_id=op.get("operation_id", ""),
-                        status="completed",
-                        provider_operation_id=prov_op_id,
-                        video_path=op_output,
+                    return fail_batch(
+                        code="SCENE_OUTPUT_MISSING",
+                        error=f"SCENE_OUTPUT_MISSING: Completed scene file missing or empty: {op_output}",
+                        operation_id=op_id,
+                        persist_operation_failure=True,
                     )
-                    
-                    # This validates and transitions state
-                    final_state = op_store.finalize_provider_result(op.get("operation_id", ""), provider_result)
-                    
-                    # Check if validation succeeded
-                    if final_state["status"] != "completed":
-                        return {
-                            "ok": False,
-                            "status": "failed",
-                            "job_id": job_id,
-                            "error": f"SCENE_VALIDATION_FAILED: {op['scene_id']} - {final_state.get('error_message', 'unknown validation error')}",
-                            "code": final_state.get("error_code", "SCENE_VALIDATION_FAILED"),
-                        }
-                    
-                    # Validation passed - get the validated digest
-                    stored_sha = final_state.get("output_sha256") or ""
-                    if stored_sha:
-                        stored_sha = stored_sha if stored_sha.startswith("sha256:") else f"sha256:{stored_sha}"
-                
-                if stored_sha and disk_sha != stored_sha.removeprefix("sha256:"):
-                    return {
-                        "ok": False,
-                        "status": "failed",
-                        "job_id": job_id,
-                        "error": f"SCENE_DIGEST_MISMATCH: Scene clip {op['scene_id']} was modified on disk",
-                        "code": "SCENE_DIGEST_MISMATCH",
-                    }
+                disk_sha = compute_file_sha256(p_out)
+                if disk_sha != stored_sha.removeprefix("sha256:"):
+                    _invalidate_final_approval(
+                        srv,
+                        op.get("owner_user_id")
+                        or (batch.owner_user_id if batch else "default-owner"),
+                        op.get("project_id") or (batch.project_id if batch else ""),
+                        f"Invalidated due to clip digest mismatch on {scene_id}",
+                    )
+                    return fail_batch(
+                        code="SCENE_DIGEST_MISMATCH",
+                        error=f"SCENE_DIGEST_MISMATCH: Scene clip {scene_id} was modified on disk",
+                        operation_id=op_id,
+                        persist_operation_failure=True,
+                    )
+                expected_duration = float(op.get("expected_duration_seconds") or 0)
+                expected_aspect = str(op.get("expected_aspect_ratio") or "")
+                if expected_duration <= 0 or not expected_aspect:
+                    return fail_batch(
+                        code="VALIDATION_CONTRACT_MISSING",
+                        error=(
+                            f"VALIDATION_CONTRACT_MISSING: Completed scene {scene_id} "
+                            "has no durable validation contract"
+                        ),
+                        operation_id=op_id,
+                        persist_operation_failure=True,
+                    )
+                try:
+                    validation = validate_scene_output(
+                        output_path=p_out,
+                        expected_duration=expected_duration,
+                        expected_aspect_ratio=expected_aspect,
+                        duration_tolerance=0.5,
+                    )
+                except ValueError as exc:
+                    _invalidate_final_approval(
+                        srv,
+                        op.get("owner_user_id")
+                        or (batch.owner_user_id if batch else "default-owner"),
+                        op.get("project_id") or (batch.project_id if batch else ""),
+                        f"Invalidated due to validation failure on {scene_id}",
+                    )
+                    return fail_batch(
+                        code="VALIDATION_FAILED",
+                        error=f"SCENE_VALIDATION_FAILED: {scene_id} - {exc}",
+                        operation_id=op_id,
+                        persist_operation_failure=True,
+                    )
                 completed_paths.append(p_out)
                 continue
 
+            if op_status == "failed":
+                return fail_batch(
+                    code=op.get("error_code") or "SCENE_FAILED",
+                    error=(
+                        f"SCENE_FAILED: {scene_id} - "
+                        f"{op.get('error_message') or 'durable scene operation is failed'}"
+                    ),
+                )
+
+            if op_status == "planned":
+                try:
+                    planned_request = op_store.request_from_record(op)
+                    if video_provider_source is None:
+                        video_provider_source = _video_provider(provider_override=provider)
+                    if video_provider_source is None:
+                        raise ValueError("selected provider is unavailable")
+                    planned_result = SceneRenderRuntime(
+                        store=op_store,
+                        provider=video_provider_source,
+                        preferred_provider_kind=provider_kind,
+                        allow_pre_submit_fallback=not bool(provider_kind),
+                        capacity_store=capacity_store,
+                        capacity_limit=None,
+                    ).run(planned_request)
+                except (ValueError, RenderProviderConfigurationError) as exc:
+                    return {
+                        "ok": False, "status": "reconciliation_required", "job_id": job_id,
+                        "code": "RECONCILIATION_REQUIRED", "error": str(exc),
+                    }
+                if planned_result.error_code == "PROVIDER_CAPACITY_WAIT":
+                    return {"ok": True, "status": "running", "job_id": job_id, "id": job_id}
+                if planned_result.status == "completed":
+                    return get_job_status(job_id, provider=provider, provider_kind=provider_kind)
+                if planned_result.status in {"submitted", "running"} and planned_result.provider_operation_id:
+                    return {"ok": True, "status": "running", "job_id": job_id, "id": job_id}
+                return fail_batch(
+                    code=planned_result.error_code or "SCENE_FAILED",
+                    error=planned_result.error_message or "planned scene submit failed",
+                )
+
+            if video_provider_source is None:
+                try:
+                    video_provider_source = _video_provider(provider_override=provider)
+                except RenderProviderConfigurationError as exc:
+                    return {
+                        "ok": False,
+                        "status": "reconciliation_required",
+                        "job_id": job_id,
+                        "id": job_id,
+                        "error": str(exc),
+                        "code": "RECONCILIATION_REQUIRED",
+                    }
+
+            # A submitting checkpoint without an operation ID is the crash
+            # window between provider acceptance and durable checkpointing. It
+            # must be reconciled through the pinned provider, never reported as
+            # indefinitely running and never resubmitted here.
             if not prov_op_id:
+                if op_status != "submitting":
+                    return {
+                        "ok": False,
+                        "status": "reconciliation_required",
+                        "job_id": job_id,
+                        "id": job_id,
+                        "error": (
+                            f"RECONCILIATION_REQUIRED: Scene {scene_id} is in "
+                            f"status {op_status!r} without a provider operation ID"
+                        ),
+                        "code": "RECONCILIATION_REQUIRED",
+                    }
+                video_prov, provider_error = _provider_for_operation(
+                    video_provider_source, op,
+                    provider_kind=None if op.get("provider_kind") else provider_kind,
+                )
+                if video_prov is None:
+                    return {
+                        "ok": False,
+                        "status": "reconciliation_required",
+                        "job_id": job_id,
+                        "id": job_id,
+                        "error": (
+                            "RECONCILIATION_REQUIRED: "
+                            f"{provider_error or 'pinned provider is unavailable'}"
+                        ),
+                        "code": "RECONCILIATION_REQUIRED",
+                    }
+                lookup = getattr(video_prov, "lookup_by_request_id", None)
+                if not callable(lookup):
+                    return {
+                        "ok": False,
+                        "status": "reconciliation_required",
+                        "job_id": job_id,
+                        "id": job_id,
+                        "error": (
+                            "RECONCILIATION_REQUIRED: pinned provider does not "
+                            "support request-id reconciliation"
+                        ),
+                        "code": "RECONCILIATION_REQUIRED",
+                    }
+                if not acquire_poll_capacity(
+                    op_id, video_prov, str(op.get("provider_kind") or ""), lookup_only=True
+                ):
+                    return {"ok": True, "status": "running", "job_id": job_id,
+                            "id": job_id, "code": "PROVIDER_CAPACITY_WAIT"}
+                try:
+                    reconciled = lookup(op_id)
+                except Exception as exc:
+                    reconciled = None
+                    provider_error = str(exc)
+                try:
+                    reconciled = validate_reconciled_result(
+                        expected_request_id=op_id,
+                        durable_provider_kind=str(op.get("provider_kind") or ""),
+                        result=reconciled,
+                    )
+                except ProviderSelectionError as exc:
+                    return {
+                        "ok": False,
+                        "status": "reconciliation_required",
+                        "job_id": job_id,
+                        "id": job_id,
+                        "error": (
+                            "RECONCILIATION_REQUIRED: "
+                            f"{exc}"
+                        ),
+                        "code": "RECONCILIATION_REQUIRED",
+                    }
+                try:
+                    op_store.bind_provider_operation_id(
+                        op_id, reconciled.provider_operation_id
+                    )
+                    capacity_store.bind_provider_operation(
+                        str(op.get("provider_kind") or ""), op_id,
+                        reconciled.provider_operation_id,
+                    )
+                    final_state = op_store.finalize_provider_result(op_id, reconciled)
+                except ValueError as exc:
+                    return {
+                        "ok": False,
+                        "status": "reconciliation_required",
+                        "job_id": job_id,
+                        "id": job_id,
+                        "error": f"RECONCILIATION_REQUIRED: {exc}",
+                        "code": "RECONCILIATION_REQUIRED",
+                    }
+                if final_state.get("status") == "completed":
+                    capacity_store.release_terminal(str(op.get("provider_kind") or ""), op_id)
+                    return get_job_status(
+                        job_id,
+                        provider=provider,
+                        provider_kind=provider_kind,
+                    )
+                if final_state.get("status") == "failed":
+                    capacity_store.release_terminal(str(op.get("provider_kind") or ""), op_id)
+                    return fail_batch(
+                        code=final_state.get("error_code") or "SCENE_FAILED",
+                        error=(
+                            f"SCENE_FAILED: {scene_id} - "
+                            f"{final_state.get('error_message') or 'reconciled provider operation failed'}"
+                        ),
+                    )
                 return {
                     "ok": True,
                     "status": "running",
@@ -2264,6 +3123,39 @@ def get_job_status(
                     "id": job_id,
                 }
 
+            video_prov, provider_error = _provider_for_operation(
+                video_provider_source, op,
+                provider_kind=None if op.get("provider_kind") else provider_kind,
+            )
+            if video_prov is None:
+                legacy_provider = bool(
+                    provider_error
+                    and provider_error.startswith(
+                        "LEGACY_PROVIDER_RECONCILIATION_REQUIRED"
+                    )
+                )
+                return {
+                    "ok": False,
+                    "status": (
+                        "reconciliation_required" if legacy_provider else "failed"
+                    ),
+                    "job_id": job_id,
+                    "error": f"PROVIDER_UNAVAILABLE: {provider_error or 'No live video render provider configured or active'}",
+                    "code": (
+                        "LEGACY_PROVIDER_RECONCILIATION_REQUIRED"
+                        if legacy_provider
+                        else "VF_PROVIDER_SELECTION_MISSING"
+                    ),
+                }
+
+            if not acquire_poll_capacity(
+                op_id, video_prov, str(op.get("provider_kind") or "")
+            ):
+                return {"ok": True, "status": "running", "job_id": job_id,
+                        "id": job_id, "code": "PROVIDER_CAPACITY_WAIT"}
+            capacity_store.bind_provider_operation(
+                str(op.get("provider_kind") or ""), op_id, prov_op_id
+            )
             sub_res = video_prov.get_status(prov_op_id)
             if sub_res.status == "running":
                 return {
@@ -2272,45 +3164,77 @@ def get_job_status(
                     "job_id": job_id,
                     "id": job_id,
                 }
+
             if sub_res.status == "failed":
-                if batch is not None and hasattr(srv.repository, "save_render_batch"):
-                    srv.repository.save_render_batch(replace(batch, status="failed", updated_at=_now()))
-                return {
-                    "ok": False,
-                    "status": "failed",
-                    "job_id": job_id,
-                    "error": sub_res.error_message or f"Scene operation {prov_op_id} failed with code {sub_res.error_code}",
-                    "code": sub_res.error_code or "VF_JOB_FAILED",
-                }
-            if sub_res.status == "completed" and sub_res.video_path:
-                p = Path(sub_res.video_path)
-                if p.is_file() and p.stat().st_size > 0:
-                    completed_paths.append(p)
-                    # Update operation in database
-                    op_conn = sqlite3.connect(_db_path())
-                    try:
-                        with op_conn:
-                            op_conn.execute(
-                                "UPDATE video_factory_scene_operation SET status = 'completed', output_path = ?, output_sha256 = ?, updated_at = CURRENT_TIMESTAMP WHERE operation_id = ?",
-                                (str(p.resolve()), compute_file_sha256(p), op["operation_id"]),
-                            )
-                    finally:
-                        op_conn.close()
-                else:
+                if sub_res.error_code == "RECONCILIATION_REQUIRED":
                     return {
-                        "ok": False,
-                        "status": "failed",
-                        "job_id": job_id,
-                        "error": f"EMPTY_OUTPUT: Generated scene file for {prov_op_id} is missing or empty",
-                        "code": "VF_EMPTY_OUTPUT",
+                        "ok": False, "status": "reconciliation_required", "job_id": job_id,
+                        "id": job_id, "code": "RECONCILIATION_REQUIRED",
+                        "error": sub_res.error_message or "Provider session cannot poll the pinned operation",
                     }
-            else:
-                return {
-                    "ok": True,
-                    "status": "running",
-                    "job_id": job_id,
-                    "id": job_id,
-                }
+                final_state = op_store.finalize_provider_result(op_id, sub_res)
+                capacity_store.release_terminal(str(op.get("provider_kind") or ""), op_id)
+                durable_state = op_store.get(op_id) or final_state
+                return fail_batch(
+                    code=durable_state.get("error_code")
+                    or sub_res.error_code
+                    or "SCENE_FAILED",
+                    error=(
+                        f"SCENE_FAILED: {scene_id} - "
+                        f"{durable_state.get('error_message') or sub_res.error_message or 'unknown error'}"
+                    ),
+                )
+
+            if sub_res.status == "completed":
+                try:
+                    op_store.finalize_provider_result(op_id, sub_res)
+                    capacity_store.release_terminal(str(op.get("provider_kind") or ""), op_id)
+                except ValueError as exc:
+                    return fail_batch(
+                        code="FINALIZATION_FAILED",
+                        error=f"FINALIZATION_FAILED: {scene_id} - {exc}",
+                        operation_id=op_id,
+                        persist_operation_failure=True,
+                    )
+                durable_state = op_store.get(op_id)
+                if durable_state is None:
+                    return fail_batch(
+                        code="OPERATION_NOT_FOUND",
+                        error=f"OPERATION_NOT_FOUND: {op_id}",
+                    )
+                scene_ops[op_index] = durable_state
+                durable_sha = durable_state.get("output_sha256") or ""
+                if durable_state.get("status") != "completed" or not durable_sha:
+                    return fail_batch(
+                        code=durable_state.get("error_code") or "FINALIZATION_FAILED",
+                        error=(
+                            f"SCENE_VALIDATION_FAILED: {scene_id} - "
+                            f"{durable_state.get('error_message') or 'validation did not produce completed state'}"
+                        ),
+                    )
+                durable_output = durable_state.get("output_path") or ""
+                p_out = Path(durable_output)
+                if (
+                    not p_out.is_file()
+                    or p_out.stat().st_size == 0
+                    or compute_file_sha256(p_out) != durable_sha.removeprefix("sha256:")
+                ):
+                    return fail_batch(
+                        code="SCENE_DIGEST_MISMATCH",
+                        error=f"SCENE_DIGEST_MISMATCH: Finalized scene {scene_id} is not intact",
+                        operation_id=op_id,
+                        persist_operation_failure=True,
+                    )
+                completed_paths.append(p_out)
+                continue
+
+            # Any other status (unknown, etc.)
+            return fail_batch(
+                code="SCENE_UNKNOWN_STATUS",
+                error=f"SCENE_UNKNOWN_STATUS: {scene_id} - {sub_res.status}",
+                operation_id=op_id,
+                persist_operation_failure=True,
+            )
 
         # All scenes completed -> build timeline and composite in canonical workspace layout
         proj_id = batch.project_id if batch else scene_ops[0]["project_id"]
@@ -2325,10 +3249,17 @@ def get_job_status(
         canonical_clips: list[Path] = []
         timeline_clips: list[TimelineClip] = []
         updated_scenes_list: list[GeneratedScene] = []
-        for idx, (op, raw_clip_path) in enumerate(zip(scene_ops, completed_paths), start=1):
+        for idx, (op, raw_clip_path) in enumerate(
+            zip(scene_ops, completed_paths), start=1
+        ):
             scene_id = op["scene_id"]
-            dest_clip_path = ws.get_rendered_clip_path(proj_id, version, scene_id, attempt=1)
-            if not dest_clip_path.is_file() or compute_file_sha256(dest_clip_path) != compute_file_sha256(raw_clip_path):
+            attempt = int(op.get("attempt") or 1)
+            dest_clip_path = ws.get_rendered_clip_path(
+                proj_id, version, scene_id, attempt=attempt
+            )
+            if not dest_clip_path.is_file() or compute_file_sha256(
+                dest_clip_path
+            ) != compute_file_sha256(raw_clip_path):
                 ws.atomic_copy(raw_clip_path, dest_clip_path)
 
             clip_sha = compute_file_sha256(dest_clip_path)
@@ -2363,6 +3294,8 @@ def get_job_status(
 
             canonical_clips.append(dest_clip_path)
             clip_art_id = f"art_clip_{proj_id}_v{version}_{scene_id}"
+            if attempt > 1:
+                clip_art_id += f"_a{attempt}"
             if hasattr(srv.repository, "save_artifact"):
                 srv.repository.save_artifact(
                     VideoFactoryArtifact(
@@ -2373,7 +3306,7 @@ def get_job_status(
                         kind="clip",
                         scene_id=scene_id,
                         version=version,
-                        attempt=1,
+                        attempt=attempt,
                         relative_path=ws.to_relative_path(dest_clip_path),
                         sha256=clip_sha,
                         size=dest_clip_path.stat().st_size,
@@ -2415,121 +3348,183 @@ def get_job_status(
                     generation_job_id=job_id,
                     provider_operation_id=op.get("provider_operation_id"),
                     version=version,
-                    created_at=existing_gs.created_at if existing_gs and existing_gs.created_at else _now(),
+                    created_at=existing_gs.created_at
+                    if existing_gs and existing_gs.created_at
+                    else _now(),
                     updated_at=_now(),
                 )
             )
 
+        comp_art_id = f"art_composite_{proj_id}_v{version}"
+        stored_comp_art = (
+            srv.repository.get_artifact(comp_art_id, owner_user_id=owner_id)
+            if hasattr(srv.repository, "get_artifact")
+            else None
+        )
         need_rebuild = not comp_path.is_file() or comp_path.stat().st_size == 0
         if not need_rebuild:
-            try:
-                comp_probe = probe_video(comp_path, decode_all=True)
-                if comp_probe.frame_count < 1 or abs((comp_probe.width / comp_probe.height) - (9.0 / 16.0)) > 0.08:
-                    need_rebuild = True
-            except Exception:
+            current_comp_sha = compute_file_sha256(comp_path)
+            if (
+                stored_comp_art is None
+                or stored_comp_art.owner_user_id != owner_id
+                or stored_comp_art.project_id != proj_id
+                or stored_comp_art.version != version
+                or stored_comp_art.sha256 != current_comp_sha
+            ):
                 need_rebuild = True
+            else:
+                prov = (stored_comp_art.provider_metadata or {}).get("provenance") or {}
+                prov_scene_ids = prov.get("scene_ids")
+                prov_req_digests = prov.get("request_digests")
+                prov_clip_digests = prov.get("clip_digests")
+                cur_scene_ids = [o["scene_id"] for o in scene_ops]
+                cur_req_digests = [o.get("request_digest") for o in scene_ops]
+                cur_clip_digests = [o.get("output_sha256") for o in scene_ops]
+                if (
+                    not isinstance(prov_scene_ids, list)
+                    or not isinstance(prov_req_digests, list)
+                    or not isinstance(prov_clip_digests, list)
+                    or len(prov_scene_ids) != len(cur_scene_ids)
+                    or len(prov_scene_ids) == 0
+                    or prov_scene_ids != cur_scene_ids
+                    or prov_req_digests != cur_req_digests
+                    or prov_clip_digests != cur_clip_digests
+                ):
+                    need_rebuild = True
+                else:
+                    try:
+                        comp_probe = probe_video(comp_path, decode_all=True)
+                        if (
+                            comp_probe.frame_count < 1
+                            or abs((comp_probe.width / comp_probe.height) - (9.0 / 16.0))
+                            > 0.08
+                        ):
+                            need_rebuild = True
+                    except Exception:
+                        need_rebuild = True
 
         if need_rebuild:
             staging_comp = comp_dir / ".draft_staging.mp4"
             try:
-                concatenate_videos(canonical_clips, staging_comp, target_width=720, target_height=1280, target_fps=24)
+                concatenate_videos(
+                    canonical_clips,
+                    staging_comp,
+                    target_width=720,
+                    target_height=1280,
+                    target_fps=24,
+                )
                 # Verify staging composite decodability before promotion
                 comp_probe = probe_video(staging_comp, decode_all=True)
-                if comp_probe.frame_count < 1 or abs((comp_probe.width / comp_probe.height) - (9.0 / 16.0)) > 0.08:
+                if (
+                    comp_probe.frame_count < 1
+                    or abs((comp_probe.width / comp_probe.height) - (9.0 / 16.0)) > 0.08
+                ):
                     if staging_comp.exists():
                         staging_comp.unlink(missing_ok=True)
-                    return {
-                        "ok": False,
-                        "status": "failed",
-                        "job_id": job_id,
-                        "error": "INVALID_COMPOSITE_GEOMETRY: Composite failed 9:16 geometry or decode validation",
-                        "code": "INVALID_COMPOSITE_GEOMETRY",
-                    }
+                    return fail_batch(
+                        code="INVALID_COMPOSITE_GEOMETRY",
+                        error="INVALID_COMPOSITE_GEOMETRY: Composite failed 9:16 geometry or decode validation",
+                    )
+            except Exception as exc:
+                if staging_comp.exists():
+                    staging_comp.unlink(missing_ok=True)
+                return fail_batch(
+                    code="COMPOSITION_FAILED",
+                    error=f"COMPOSITION_FAILED: {exc}",
+                )
+
+            # Invalidate Final Approval BEFORE promoting replacement composite
+            try:
+                _invalidate_final_approval(
+                    srv, owner_id, proj_id, "Invalidated due to composite rebuild"
+                )
+            except Exception as exc:
+                if staging_comp.exists():
+                    staging_comp.unlink(missing_ok=True)
+                return fail_batch(
+                    code="FINAL_APPROVAL_INVALIDATION_FAILED",
+                    error=f"FINAL_APPROVAL_INVALIDATION_FAILED: Failed to persist approval invalidation: {exc}",
+                )
+
+            # Atomic promote only after decodability and invalidation succeed
+            try:
                 os.replace(staging_comp, comp_path)
             except Exception as exc:
                 if staging_comp.exists():
                     staging_comp.unlink(missing_ok=True)
-                return {
-                    "ok": False,
-                    "status": "failed",
-                    "job_id": job_id,
-                    "error": f"COMPOSITION_FAILED: {exc}",
-                    "code": "COMPOSITION_FAILED",
-                }
-
-            # If composite was rebuilt, invalidate any prior final approval
-            proj = srv.get_project(owner_id, proj_id)
-            if proj.final_approval == FinalApprovalStatus.APPROVED:
-                srv.repository.save(
-                    replace(
-                        proj,
-                        final_approval=FinalApprovalStatus.PENDING,
-                        final_approval_notes="Invalidated due to composite rebuild",
-                        updated_at=_now(),
-                    )
+                return fail_batch(
+                    code="COMPOSITE_PROMOTION_FAILED",
+                    error=f"COMPOSITE_PROMOTION_FAILED: Failed to promote staging composite: {exc}",
                 )
 
         composite_sha = compute_file_sha256(comp_path)
-        comp_art_id = f"art_composite_{proj_id}_v{version}"
         comp_provenance = {
             "scene_ids": [o["scene_id"] for o in scene_ops],
             "request_digests": [o.get("request_digest") for o in scene_ops],
             "clip_digests": [o.get("output_sha256") for o in scene_ops],
+            "provider_kinds": [o.get("provider_kind") for o in scene_ops],
         }
-        if hasattr(srv.repository, "save_artifact"):
-            srv.repository.save_artifact(
-                VideoFactoryArtifact(
-                    artifact_id=comp_art_id,
-                    owner_user_id=owner_id,
-                    workflow_id=batch.workflow_id if batch else "",
-                    project_id=proj_id,
-                    kind="composite",
-                    version=version,
-                    attempt=1,
-                    relative_path=ws.to_relative_path(comp_path),
-                    sha256=composite_sha,
-                    size=comp_path.stat().st_size,
-                    mime_type="video/mp4",
-                    status="active",
-                    provider_metadata={"provenance": comp_provenance},
-                    created_at=_now(),
-                    updated_at=_now(),
+        try:
+            if hasattr(srv.repository, "save_artifact"):
+                srv.repository.save_artifact(
+                    VideoFactoryArtifact(
+                        artifact_id=comp_art_id,
+                        owner_user_id=owner_id,
+                        workflow_id=batch.workflow_id if batch else "",
+                        project_id=proj_id,
+                        kind="composite",
+                        version=version,
+                        attempt=1,
+                        relative_path=ws.to_relative_path(comp_path),
+                        sha256=composite_sha,
+                        size=comp_path.stat().st_size,
+                        mime_type="video/mp4",
+                        status="active",
+                        provider_metadata={"provenance": comp_provenance},
+                        created_at=_now(),
+                        updated_at=_now(),
+                    )
                 )
-            )
 
-        timeline_art_id = f"art_timeline_{proj_id}_v{version}"
-        timeline_obj = Timeline(
-            timeline_id=f"timeline_{proj_id}_v{version}",
-            project_id=proj_id,
-            clips=tuple(timeline_clips),
-            status=TimelineStatus.COMPLETED,
-            version=version,
-            created_at=_now(),
-            updated_at=_now(),
-        )
-
-        # Update project timeline and generated scenes BEFORE marking batch completed
-        proj = srv.get_project(owner_id, proj_id)
-        srv.repository.save(
-            replace(
-                proj,
-                generated_scenes=tuple(updated_scenes_list),
-                timeline=timeline_obj,
-                status=ProjectStatus.TIMELINE_READY,
+            timeline_art_id = f"art_timeline_{proj_id}_v{version}"
+            timeline_obj = Timeline(
+                timeline_id=f"timeline_{proj_id}_v{version}",
+                project_id=proj_id,
+                clips=tuple(timeline_clips),
+                status=TimelineStatus.COMPLETED,
+                version=version,
+                created_at=_now(),
                 updated_at=_now(),
             )
-        )
 
-        if batch is not None and hasattr(srv.repository, "save_render_batch"):
-            srv.repository.save_render_batch(
+            # Update project timeline and generated scenes BEFORE marking batch completed
+            proj = srv.get_project(owner_id, proj_id)
+            srv.repository.save(
                 replace(
-                    batch,
-                    status="completed",
-                    completed_scene_count=len(completed_paths),
-                    timeline_artifact_id=timeline_art_id,
-                    composite_artifact_id=comp_art_id,
+                    proj,
+                    generated_scenes=tuple(updated_scenes_list),
+                    timeline=timeline_obj,
+                    draft_video_asset_id=comp_art_id,
+                    status=ProjectStatus.DRAFT_VIDEO_READY,
                     updated_at=_now(),
                 )
+            )
+
+            if batch is not None and hasattr(srv.repository, "save_render_batch"):
+                srv.repository.save_render_batch(
+                    replace(
+                        batch,
+                        status="completed",
+                        completed_scene_count=len(completed_paths),
+                        timeline_artifact_id=timeline_art_id,
+                        composite_artifact_id=comp_art_id,
+                        updated_at=_now(),
+                    )
+                )
+        except Exception as exc:
+            return fail_batch(
+                code="METADATA_PERSISTENCE_FAILED",
+                error=f"METADATA_PERSISTENCE_FAILED: Failed to persist completion metadata: {exc}",
             )
 
         return {
@@ -2542,121 +3537,27 @@ def get_job_status(
             "output_url": f"file://{comp_path.resolve()}",
             "file_path": str(comp_path.resolve()),
             "file_size": comp_path.stat().st_size,
+            "owner_user_id": batch.owner_user_id if batch else owner_id,
+            "project_id": batch.project_id if batch else proj_id,
+            "workflow_id": batch.workflow_id if batch else "",
+            "artifact_id": (
+                batch.composite_artifact_id
+                if batch and batch.composite_artifact_id
+                else comp_art_id
+            ),
+            "artifact_version": batch.version if batch else version,
+            "version": batch.version if batch else version,
             "sha256": composite_sha,
+            "scene_provider_kinds": [o.get("provider_kind") for o in scene_ops],
         }
 
-    # Handle multi-scene composite job (legacy)
-    if job_id.startswith("multiscene:"):
-        sub_ops = [op.strip() for op in job_id[len("multiscene:"):].split(",") if op.strip()]
-        completed_paths: list[Path] = []
-        for sub_op in sub_ops:
-            sub_res = video_prov.get_status(sub_op)
-            if sub_res.status == "running":
-                return {
-                    "ok": True,
-                    "status": "running",
-                    "job_id": job_id,
-                    "id": job_id,
-                }
-            if sub_res.status == "failed":
-                return {
-                    "ok": False,
-                    "status": "failed",
-                    "job_id": job_id,
-                    "error": sub_res.error_message or f"Scene operation {sub_op} failed with code {sub_res.error_code}",
-                    "code": sub_res.error_code or "VF_JOB_FAILED",
-                }
-            if sub_res.status == "completed" and sub_res.video_path:
-                p = Path(sub_res.video_path)
-                if p.is_file() and p.stat().st_size > 0:
-                    completed_paths.append(p)
-                else:
-                    return {
-                        "ok": False,
-                        "status": "failed",
-                        "job_id": job_id,
-                        "error": f"EMPTY_OUTPUT: Generated scene file for {sub_op} is missing or empty",
-                        "code": "VF_EMPTY_OUTPUT",
-                    }
-            else:
-                return {
-                    "ok": True,
-                    "status": "running",
-                    "job_id": job_id,
-                    "id": job_id,
-                }
-
-        # All scenes completed -> concatenate into composite MP4 via PyAV
-        ws_root = _workspace_path().resolve()
-        composites_dir = ws_root / "composites"
-        composites_dir.mkdir(parents=True, exist_ok=True)
-        comp_name = f"composite_{hashlib.sha256(job_id.encode()).hexdigest()[:24]}.mp4"
-        comp_path = composites_dir / comp_name
-
-        if not comp_path.is_file() or comp_path.stat().st_size == 0:
-            try:
-                concatenate_videos(completed_paths, comp_path, target_width=720, target_height=1280, target_fps=24)
-            except Exception as exc:
-                return {
-                    "ok": False,
-                    "status": "failed",
-                    "job_id": job_id,
-                    "error": f"COMPOSITION_FAILED: {exc}",
-                    "code": "COMPOSITION_FAILED",
-                }
-
-        render_id = f"render_multiscene_{len(sub_ops)}"
-        return {
-            "ok": True,
-            "status": "completed",
-            "job_id": job_id,
-            "id": render_id,
-            "render_id": render_id,
-            "video_url": f"file://{comp_path.resolve()}",
-            "output_url": f"file://{comp_path.resolve()}",
-            "file_path": str(comp_path.resolve()),
-            "file_size": comp_path.stat().st_size,
-        }
-
-    # Single-scene job
-    res = video_prov.get_status(job_id)
-    if res.status == "running":
-        return {
-            "ok": True,
-            "status": "running",
-            "job_id": job_id,
-            "id": job_id,
-        }
-
-    if res.status == "completed" and res.video_path:
-        video_p = Path(res.video_path)
-        if video_p.is_file() and video_p.stat().st_size > 0:
-            render_id = f"render_{job_id.rsplit('/', 1)[-1]}"
-            return {
-                "ok": True,
-                "status": "completed",
-                "job_id": job_id,
-                "id": render_id,
-                "render_id": render_id,
-                "video_url": f"file://{video_p.resolve()}",
-                "output_url": f"file://{video_p.resolve()}",
-                "file_path": str(video_p.resolve()),
-                "file_size": video_p.stat().st_size,
-            }
-        return {
-            "ok": False,
-            "status": "failed",
-            "job_id": job_id,
-            "error": "EMPTY_OUTPUT: Generated video file is missing or empty",
-            "code": "VF_EMPTY_OUTPUT",
-        }
-
+    # Ungoverned single-scene job path is DISABLED.
     return {
         "ok": False,
         "status": "failed",
         "job_id": job_id,
-        "error": res.error_message or f"Operation failed with code {res.error_code}",
-        "code": res.error_code or "VF_JOB_FAILED",
+        "error": "UNGOVERNED_POLL: Single-scene polling without batch context is disabled for production integrity.",
+        "code": "VF_UNGOVERNED_POLL",
     }
 
 
@@ -2666,7 +3567,9 @@ def export(
     idempotency_key: str | None = None,
     owner_user_id: str = "default_user",
     project_id: str = "",
-    **kwargs: Any,
+    workflow_id: str | None = None,
+    approval_request_id: str | None = None,
+    target_workflow_id: str | None = None,
 ) -> dict[str, Any]:
     """Hermes wire compatibility adapter for deterministic local video export.
 
@@ -2685,13 +3588,115 @@ def export(
 
     params = dict(export_params or {})
 
+    required_lineage = (
+        "owner_user_id",
+        "project_id",
+        "workflow_id",
+        "artifact_id",
+        "artifact_version",
+        "sha256",
+    )
+    missing_lineage = [
+        field
+        for field in required_lineage
+        if field not in rend_data
+        or rend_data[field] is None
+        or (isinstance(rend_data[field], str) and not rend_data[field].strip())
+    ]
+    if missing_lineage:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": "RENDER_LINEAGE_REQUIRED: render_result is missing canonical fields: "
+            + ", ".join(missing_lineage),
+            "code": "RENDER_LINEAGE_REQUIRED",
+        }
+
+    owner = str(rend_data["owner_user_id"]).strip()
+    proj_id = str(rend_data["project_id"]).strip()
+    target_wf_id = str(rend_data["workflow_id"]).strip()
+    artifact_id = str(rend_data["artifact_id"]).strip()
+    export_version_raw = rend_data["artifact_version"]
+    if (
+        isinstance(export_version_raw, bool)
+        or not isinstance(export_version_raw, int)
+        or export_version_raw < 1
+    ):
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": "RENDER_LINEAGE_INVALID: artifact_version must be a positive integer",
+            "code": "RENDER_LINEAGE_INVALID",
+        }
+    export_version = export_version_raw
+    compatibility_version = rend_data.get("version")
+    if compatibility_version is not None and compatibility_version != export_version:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": "RENDER_LINEAGE_MISMATCH: version does not match artifact_version",
+            "code": "RENDER_LINEAGE_MISMATCH",
+        }
+
+    rend_sha = str(rend_data["sha256"]).strip().removeprefix("sha256:").lower()
+    if len(rend_sha) != 64 or any(ch not in "0123456789abcdef" for ch in rend_sha):
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": "RENDER_LINEAGE_INVALID: sha256 must be a 64-character hexadecimal digest",
+            "code": "RENDER_LINEAGE_INVALID",
+        }
+
+    supplied_expectations: list[tuple[str, Any]] = [
+        (
+            "owner_user_id",
+            owner_user_id if owner_user_id and owner_user_id != "default_user" else None,
+        ),
+        ("project_id", project_id or None),
+        (
+            "workflow_id",
+            workflow_id
+            or target_workflow_id
+            or params.get("workflow_id"),
+        ),
+        ("artifact_id", params.get("artifact_id")),
+        (
+            "artifact_version",
+            params.get("artifact_version")
+            if params.get("artifact_version") is not None
+            else params.get("version"),
+        ),
+        ("sha256", params.get("sha256")),
+    ]
+    canonical_values: dict[str, Any] = {
+        "owner_user_id": owner,
+        "project_id": proj_id,
+        "workflow_id": target_wf_id,
+        "artifact_id": artifact_id,
+        "artifact_version": export_version,
+        "sha256": rend_sha,
+    }
+    for field, expected in supplied_expectations:
+        if expected is None or (isinstance(expected, str) and not expected.strip()):
+            continue
+        normalized_expected: Any = expected
+        if field == "sha256":
+            normalized_expected = str(expected).strip().removeprefix("sha256:").lower()
+        elif field != "artifact_version":
+            normalized_expected = str(expected).strip()
+        if normalized_expected != canonical_values[field]:
+            return {
+                "ok": False,
+                "status": "failed",
+                "error": f"RENDER_LINEAGE_MISMATCH: caller {field} does not match render_result",
+                "code": "RENDER_LINEAGE_MISMATCH",
+            }
+
     # Extract source video path from render result FIRST
     raw_video_url = (
         rend_data.get("video_url")
         or rend_data.get("output_url")
         or rend_data.get("file_path")
-        or params.get("video_url")
-        or params.get("file_path")
     )
     if not raw_video_url:
         return {
@@ -2717,23 +3722,6 @@ def export(
             "status": "failed",
             "error": f"INVALID_FORMAT: Video file must be an .mp4 file, got '{src_path.suffix}'",
             "code": "INVALID_FORMAT",
-        }
-
-    proj_id = project_id.strip() or rend_data.get("project_id", "") or params.get("project_id", "")
-    if not proj_id or proj_id == "proj_default":
-        return {
-            "ok": False,
-            "status": "failed",
-            "error": "PROJECT_ID_REQUIRED: project_id is required for export",
-            "code": "PROJECT_ID_REQUIRED",
-        }
-    owner = owner_user_id.strip() or rend_data.get("owner_user_id", "") or params.get("owner_user_id", "")
-    if not owner or owner == "default_user":
-        return {
-            "ok": False,
-            "status": "failed",
-            "error": "OWNER_ID_REQUIRED: owner_user_id is required for export",
-            "code": "OWNER_ID_REQUIRED",
         }
 
     # Verify project final approval and ownership via canonical service
@@ -2779,16 +3767,58 @@ def export(
 
     # Verify Video QC from QCReportRepository directly (fail-closed)
     source_sha256 = compute_file_sha256(src_path)
+    if rend_sha != source_sha256:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": f"LINEAGE_SHA_MISMATCH: Render SHA ({rend_sha}) does not match source video file SHA ({source_sha256})",
+            "code": "LINEAGE_SHA_MISMATCH",
+        }
+
+    canonical_artifact = srv.repository.get_artifact(artifact_id, owner)
+    if canonical_artifact is None:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": "RENDER_LINEAGE_ARTIFACT_NOT_FOUND: canonical composite artifact is missing",
+            "code": "RENDER_LINEAGE_ARTIFACT_NOT_FOUND",
+        }
+    artifact_mismatches = {
+        "project_id": canonical_artifact.project_id != proj_id,
+        "workflow_id": canonical_artifact.workflow_id != target_wf_id,
+        "artifact_version": canonical_artifact.version != export_version,
+        "sha256": canonical_artifact.sha256.removeprefix("sha256:") != source_sha256,
+        "kind": canonical_artifact.kind != "composite",
+        "status": canonical_artifact.status != "active",
+    }
+    failed_artifact_fields = [
+        field for field, mismatched in artifact_mismatches.items() if mismatched
+    ]
+    canonical_path = (_workspace_path() / canonical_artifact.relative_path).resolve()
+    if canonical_path != src_path.resolve():
+        failed_artifact_fields.append("relative_path")
+    if failed_artifact_fields:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": "RENDER_LINEAGE_MISMATCH: source does not match canonical active composite fields: "
+            + ", ".join(failed_artifact_fields),
+            "code": "RENDER_LINEAGE_MISMATCH",
+        }
+
     try:
         from hermes_personal.product_video.qc.repository import QCReportRepository
         from hermes_personal.product_video.qc.models import QCStage, QCVerdict
+
         appr_svc = _approval_service()
         db_candidates: list[tuple[sqlite3.Connection, bool]] = []
         if appr_svc is not None and getattr(appr_svc, "conn", None) is not None:
             db_candidates.append((appr_svc.conn, False))
         elif appr_svc is not None and getattr(appr_svc, "connection", None) is not None:
             db_candidates.append((appr_svc.connection, False))
-        elif appr_svc is not None and getattr(appr_svc, "_connection", None) is not None:
+        elif (
+            appr_svc is not None and getattr(appr_svc, "_connection", None) is not None
+        ):
             db_candidates.append((appr_svc._connection, False))
 
         appr_p = _canonical_approval_db_path()
@@ -2799,39 +3829,23 @@ def export(
             db_candidates.append((sqlite3.connect(vf_p), True))
 
         matching_report = None
-        target_wf_id = str(rend_data.get("workflow_id") or params.get("workflow_id") or "").strip()
-        export_version = rend_data.get("version") or 1
-        artifact_id = rend_data.get("artifact_id") or rend_data.get("composite_artifact_id") or f"art_composite_{proj_id}_v{export_version}"
         for conn, should_close in db_candidates:
             try:
-                cur = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='product_video_qc_reports'")
+                cur = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='product_video_qc_reports'"
+                )
                 if not cur.fetchone():
                     continue
                 qc_repo = QCReportRepository(conn)
-                wf_id_to_check = target_wf_id
-                if not wf_id_to_check:
-                    row = conn.execute(
-                        "SELECT workflow_id FROM product_video_qc_reports "
-                        "WHERE owner_user_id = ? AND project_id = ? AND UPPER(stage) = 'VIDEO' "
-                        "ORDER BY created_at DESC LIMIT 1",
-                        (owner, proj_id),
-                    ).fetchone()
-                    if row:
-                        wf_id_to_check = row[0]
-                if not wf_id_to_check:
-                    continue
-
                 rep = qc_repo.get_verified_pass_report(
                     owner_user_id=owner,
                     project_id=proj_id,
-                    workflow_id=wf_id_to_check,
+                    workflow_id=target_wf_id,
                     artifact_id=artifact_id,
                     artifact_version=export_version,
                     stage=QCStage.VIDEO,
                     expected_sha256=source_sha256,
                 )
-                # Fail-closed: no fallback query that omits artifact_id/version
-                # Export must have exact provenance or fail
                 if rep is not None:
                     matching_report = rep
                     break
@@ -2848,7 +3862,7 @@ def export(
             return {
                 "ok": False,
                 "status": "failed",
-                "error": f"VIDEO_QC_REQUIRED: No verified PASS Video QC report bound to exact composite bytes ({source_sha256})",
+                "error": f"VIDEO_QC_REQUIRED: No verified PASS Video QC report bound to exact composite lineage (owner={owner}, project={proj_id}, workflow={target_wf_id}, artifact={artifact_id}, version={export_version}, sha={source_sha256})",
                 "code": "VIDEO_QC_REQUIRED",
             }
     except Exception as exc:
@@ -2861,7 +3875,11 @@ def export(
     brief_obj = project.creative_brief
     claims_list = [
         safe_claim
-        for c in (brief_obj.verified_selling_points if brief_obj and brief_obj.verified_selling_points else [])
+        for c in (
+            brief_obj.verified_selling_points
+            if brief_obj and brief_obj.verified_selling_points
+            else []
+        )
         if (safe_claim := _caption_safe_line(c.claim))
     ]
 
@@ -2873,8 +3891,11 @@ def export(
             selected_references.append({
                 "asset_id": ref.asset_id,
                 "uri": ref.uri,
-                "sha256": str(metadata.get("qc_sha256") or metadata.get("sha256") or "").removeprefix("sha256:"),
-                "eligible": metadata.get("qc_eligible") is True or metadata.get("eligible") is True,
+                "sha256": str(
+                    metadata.get("qc_sha256") or metadata.get("sha256") or ""
+                ).removeprefix("sha256:"),
+                "eligible": metadata.get("qc_eligible") is True
+                or metadata.get("eligible") is True,
                 "provenance": metadata.get("provenance") or "video_factory",
             })
 
@@ -2893,12 +3914,15 @@ def export(
             approval_conn = appr_svc.conn
         elif appr_svc is not None and getattr(appr_svc, "connection", None) is not None:
             approval_conn = appr_svc.connection
-        elif appr_svc is not None and getattr(appr_svc, "_connection", None) is not None:
+        elif (
+            appr_svc is not None and getattr(appr_svc, "_connection", None) is not None
+        ):
             approval_conn = appr_svc._connection
         else:
             approval_db = _canonical_approval_db_path()
             if approval_db.exists():
                 from hermes_personal.storage.sqlite import connect as _connect_sqlite
+
                 approval_conn = _connect_sqlite(approval_db)
                 should_close_appr = True
 
@@ -2909,17 +3933,26 @@ def export(
             ).fetchall()
             for row in rows:
                 payload = json.loads(row[1] or "{}")
-                if payload.get("project_id") != proj_id:
+                if (
+                    payload.get("project_id") != proj_id
+                    or payload.get("workflow_id") != target_wf_id
+                    or (payload.get("owner_user_id") or payload.get("owner_id")) != owner
+                ):
                     continue
-                gate = str(payload.get("gate") or "").lower()
+                gate = "".join(char for char in str(payload.get("gate") or "").lower() if char.isalnum())
                 for key, marker in (
                     ("product_lock", "productlock"),
                     ("brief", "brief"),
-                    ("scene_plan", "sceneplan"),
+                    ("scene_plan", "sceneapproval"),
                     ("storyboard", "storyboard"),
                     ("final_video", "final"),
                 ):
-                    if marker in gate and approval_ids[key] is None:
+                    if marker in gate:
+                        if key == "final_video" and (
+                            payload.get("artifact_id") != artifact_id
+                            or payload.get("artifact_version") != export_version
+                        ):
+                            continue
                         approval_ids[key] = row[0]
             if should_close_appr:
                 approval_conn.close()
@@ -2937,7 +3970,12 @@ def export(
         for frame in (project.storyboard.frames if project.storyboard else ())
     ]
     render_plan_hash = hashlib.sha256(
-        json.dumps(render_plan_payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        json.dumps(
+            render_plan_payload,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
     ).hexdigest()
     scene_operations = [
         {
@@ -2947,20 +3985,20 @@ def export(
         }
         for scene in project.generated_scenes
     ]
-    supplied_approvals = rend_data.get("approvals") or params.get("approvals")
-    if isinstance(supplied_approvals, dict):
-        approval_ids.update({key: value for key, value in supplied_approvals.items() if key in approval_ids})
-    provider_operations = (
-        rend_data.get("provider_operations")
-        or params.get("provider_operations")
-        or scene_operations
-    )
-    artifact_digests = rend_data.get("artifact_digests") or params.get("artifact_digests") or {}
+    provider_operations = scene_operations
+    artifact_digests = {"composite": source_sha256}
+    artifact_digests.update({
+        str(ref["asset_id"]): str(ref["sha256"])
+        for ref in selected_references
+        if ref.get("asset_id") and ref.get("sha256")
+    })
     qc_reports = {
-        "image": rend_data.get("image_qc_report_id") or params.get("image_qc_report_id"),
-        "video": rend_data.get("video_qc_report_id") or params.get("video_qc_report_id"),
+        "image": None,
+        "video": matching_report.report_id,
     }
-    spend = rend_data.get("spend") or params.get("spend") or {}
+    # A reservation ceiling is not an invoice. Keep caller-supplied spend out
+    # of immutable provenance until provider usage has been reconciled.
+    spend = {"actual_cost_status": "unavailable"}
     export_version = str(
         params.get("version")
         or params.get("export_version")
@@ -2981,9 +4019,13 @@ def export(
         "brief_approval": project.brief_approval,
         "scene_plan_approval": project.scene_plan_approval,
         "final_approval": project.final_approval.value,
-        "storyboard_frames_count": len(project.storyboard.frames) if project.storyboard else 0,
+        "storyboard_frames_count": len(project.storyboard.frames)
+        if project.storyboard
+        else 0,
         "source_video_sha256": source_sha256,
-        "end_keyframe_omissions": rend_data.get("end_keyframe_omissions") or params.get("end_keyframe_omissions") or [],
+        "end_keyframe_omissions": rend_data.get("end_keyframe_omissions")
+        or params.get("end_keyframe_omissions")
+        or [],
     }
     try:
         package = build_export_package(

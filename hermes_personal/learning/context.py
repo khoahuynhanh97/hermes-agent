@@ -7,6 +7,32 @@ from hermes_personal.contracts import AgentTurnRequest
 from hermes_personal.learning.retrieval import ApprovedLearningRetriever, RetrievedLearning
 
 
+def _format_knowledge_with_provenance(item: RetrievedLearning) -> str:
+    """Format a knowledge entry with provenance citation for context injection."""
+    lines = [f"### {item.title}"]
+    lines.append(item.content)
+
+    # Provenance block
+    provenance_parts: list[str] = []
+    source_ref = getattr(item, "source_ref", "")
+    evidence_excerpt = getattr(item, "evidence_excerpt", "")
+    created_at = getattr(item, "created_at", "")
+    if source_ref:
+        provenance_parts.append(f"Source: {source_ref}")
+    if created_at:
+        # Truncate to date for brevity
+        date_str = created_at[:10] if len(created_at) >= 10 else created_at
+        provenance_parts.append(f"Learned: {date_str}")
+    provenance_parts.append(f"ID: {item.candidate_id}")
+    if evidence_excerpt:
+        provenance_parts.append(f"Evidence: {evidence_excerpt[:100]}")
+
+    if provenance_parts:
+        lines.append(f"_[{' | '.join(provenance_parts)}]_")
+
+    return "\n".join(lines)
+
+
 @dataclass(frozen=True)
 class AgentContext:
     session_id: str
@@ -26,11 +52,11 @@ class AgentContext:
             sections.append("## Owner Preferences\n" + "\n".join(pref_lines))
 
         if self.approved_knowledge:
-            know_lines = [f"### {k.title}\n{k.content}" for k in self.approved_knowledge]
+            know_lines = [_format_knowledge_with_provenance(k) for k in self.approved_knowledge]
             sections.append("## Approved Knowledge\n" + "\n\n".join(know_lines))
 
         if self.approved_procedures:
-            proc_lines = [f"### {p.title}\n{p.content}" for p in self.approved_procedures]
+            proc_lines = [_format_knowledge_with_provenance(p) for p in self.approved_procedures]
             sections.append("## Approved Procedures\n" + "\n\n".join(proc_lines))
 
         if self.workflow_summary:

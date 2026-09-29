@@ -19,6 +19,18 @@ database:
   # journal_size_limit: 67108864 # cap the WAL/journal file size in bytes
 
 # =============================================================================
+# Product Video Budget Policy
+# =============================================================================
+# These are hard policy ceilings. Paid calls still require an unexpired durable
+# authorization grant stored against the specific workflow.
+product_video:
+  budget:
+    campaign_max_usd: 100
+    product_max_usd: 10
+  qc:
+    max_attempts_per_stage: 3
+
+# =============================================================================
 # Runtime Limits
 # =============================================================================
 # Long-running Hermes server processes raise their RLIMIT_NOFILE soft limit to
@@ -1917,3 +1929,25 @@ updates:
 #   # This runs ONCE per process at startup, so it cannot replace a credential
 #   # that expires mid-session. For a single provider whose token needs
 #   # re-minting during a session, use `providers.<name>.key_cmd` instead.
+# Product Video tries official providers in this order before paid submission.
+# Gate 4 can explicitly select either provider with --render-provider.
+# Accepted operations remain pinned to their original provider for polling.
+# Google Flow uses a dedicated, already authenticated Chrome user-data profile.
+# The browser session is kept on disk; no cookies or tokens belong in YAML.
+video_factory:
+  render_providers:
+    - google_flow
+    - vertex_ai
+  google_flow:
+    profile_path: "D:/absolute/path/to/isolated/flow-profile"
+    chrome_profile_directory: "Profile 10"
+    model: "Omni 1.1 Flash"
+    post_download_observation_seconds: 30
+  vertex_ai:
+    location: us-central1
+    model: veo-3.1-generate-001
+  # Shared SQLite provider slots across Product Video workers; safe default is 1.
+  provider_capacity:
+    vertex_keyframe: 1
+    vertex_ai: 1
+    google_flow: 1

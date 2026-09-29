@@ -371,33 +371,33 @@ def test_completed_state_has_no_transitions():
 # Regression tests for Gate 5 Task 4 findings
 # ---------------------------------------------------------------------------
 
-def test_researching_to_building_resource_pack_is_blocked():
-    """FINDING 1: Direct RESEARCHING -> BUILDING_RESOURCE_PACK must raise WorkflowTransitionError.
+def test_building_resource_pack_to_locking_resource_pack_is_blocked():
+    """Direct BUILDING_RESOURCE_PACK -> LOCKING_RESOURCE_PACK must raise WorkflowTransitionError.
 
     The HITL gate at AWAITING_PRODUCT_LOCK must not be bypassed.
     """
     with pytest.raises(WorkflowTransitionError):
         transition(
-            ProductVideoWorkflowState.RESEARCHING,
             ProductVideoWorkflowState.BUILDING_RESOURCE_PACK,
+            ProductVideoWorkflowState.LOCKING_RESOURCE_PACK,
         )
 
 
-def test_researching_to_awaiting_product_lock_to_building_resource_pack_works():
-    """FINDING 1: Valid path through AWAITING_PRODUCT_LOCK must work."""
-    # RESEARCHING -> AWAITING_PRODUCT_LOCK
+def test_building_resource_pack_to_awaiting_product_lock_to_locking_resource_pack_works():
+    """Valid path through AWAITING_PRODUCT_LOCK must work."""
+    # BUILDING_RESOURCE_PACK -> AWAITING_PRODUCT_LOCK
     result = transition(
-        ProductVideoWorkflowState.RESEARCHING,
+        ProductVideoWorkflowState.BUILDING_RESOURCE_PACK,
         ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK,
     )
     assert result == ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK
 
-    # AWAITING_PRODUCT_LOCK -> BUILDING_RESOURCE_PACK
+    # AWAITING_PRODUCT_LOCK -> LOCKING_RESOURCE_PACK
     result = transition(
         ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK,
-        ProductVideoWorkflowState.BUILDING_RESOURCE_PACK,
+        ProductVideoWorkflowState.LOCKING_RESOURCE_PACK,
     )
-    assert result == ProductVideoWorkflowState.BUILDING_RESOURCE_PACK
+    assert result == ProductVideoWorkflowState.LOCKING_RESOURCE_PACK
 
 
 def test_invalidate_for_artifact_exact_match_no_false_positive():

@@ -267,13 +267,13 @@ def test_duplicate_terminal_event_idempotency(persisted_db):
     # Initial execution: commits $20 budget
     res1 = handlers.export_job(ctx, "render_ref_final")
     assert isinstance(res1, JobSucceeded)
-    budget_after_first = get_allocated_budget("video_factory")
+    budget_after_first = get_allocated_budget("video_factory", owner_user_id="user")
     assert budget_after_first == 20
 
     # Idempotent replay: returns cached result and commits 0 additional budget
     res2 = handlers.export_job(ctx, "render_ref_final")
     assert isinstance(res2, JobSucceeded)
     assert res1.artifact_ref["artifact_ref"] == res2.artifact_ref["artifact_ref"]
-    budget_after_second = get_allocated_budget("video_factory")
+    budget_after_second = get_allocated_budget("video_factory", owner_user_id="user")
     assert budget_after_second == 20  # Exactly 20, zero duplicate budget commit!
     conn.close()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from types import SimpleNamespace
 import pytest
 
 from hermes_personal.product_video.handlers import (
@@ -46,6 +47,34 @@ def test_research_job(test_engine):
     assert "summary" in result.artifact_ref
 
 
+def test_research_job_forwards_daily_feed_identity_to_pi(test_engine):
+    class CapturingPI:
+        def __init__(self):
+            self.kwargs = None
+
+        def research(self, _name, _keywords, **kwargs):
+            self.kwargs = kwargs
+            return {"summary": "grounded"}
+
+    pi = CapturingPI()
+    test_engine.set_workflow_state("wf-identity", ProductVideoWorkflowState.RESEARCHING.value)
+    handlers = ProductVideoJobHandlers(workflow_engine=test_engine, pi_client=pi)
+
+    result = handlers.research_job(
+        JobContext(workflow_id="wf-identity", job_id="job-identity"),
+        "Xiaomi Mijia Desk Lamp Lite",
+        ["desk lamp"],
+        brand="Xiaomi",
+        model="Mijia Desk Lamp Lite",
+        canonical_product_key="xiaomi:mijia-desk-lamp-lite",
+    )
+
+    assert isinstance(result, JobSucceeded)
+    assert pi.kwargs["brand"] == "Xiaomi"
+    assert pi.kwargs["model"] == "Mijia Desk Lamp Lite"
+    assert pi.kwargs["canonical_product_key"] == "xiaomi:mijia-desk-lamp-lite"
+
+
 def test_resource_pack_job(test_engine):
     test_engine.set_workflow_state("wf1", ProductVideoWorkflowState.BUILDING_RESOURCE_PACK.value)
     handlers = ProductVideoJobHandlers(workflow_engine=test_engine)
@@ -57,7 +86,7 @@ def test_resource_pack_job(test_engine):
 
 
 def test_lock_job(test_engine):
-    test_engine.set_workflow_state("wf1", ProductVideoWorkflowState.BUILDING_RESOURCE_PACK.value)
+    test_engine.set_workflow_state("wf1", ProductVideoWorkflowState.LOCKING_RESOURCE_PACK.value)
     handlers = ProductVideoJobHandlers(workflow_engine=test_engine)
     ctx = JobContext(workflow_id="wf1", job_id="j3")
     pack_dict = {"summary": "test pack", "assets_mapping": {"a1": "url1"}}
@@ -181,3 +210,38 @@ def test_budget_exhaustion_fails_job(test_engine):
     result = handlers.render_job(ctx, "story_ref")
     assert isinstance(result, JobFailed)
     assert result.code == "VF_RENDER_FAILED"
+
+
+def test_paid_job_budget_is_bound_to_workflow_campaign_and_authorization(test_engine, monkeypatch):
+    test_engine.set_workflow_state("wf-budget", ProductVideoWorkflowState.CREATING_BRIEF.value)
+    captured: dict = {}
+
+    def _reserve(channel, amount, **kwargs):
+        captured.update({"channel": channel, "amount": amount, **kwargs})
+        return SimpleNamespace(reservation_id="res-budget")
+
+    monkeypatch.setattr("hermes_personal.product_video.handlers.reserve_budget", _reserve)
+    monkeypatch.setattr("hermes_personal.product_video.handlers.commit_budget", lambda _allocation: None)
+    handlers = ProductVideoJobHandlers(workflow_engine=test_engine)
+    authorization = {
+        "authorization_id": "auth-live-1",
+        "campaign_id": "campaign-live",
+        "campaign_max_cost_usd": 100,
+        "workflow_max_cost_usd": 10,
+    }
+
+    result = handlers.creative_brief_job(
+        JobContext(workflow_id="wf-budget", job_id="job-budget", owner_user_id="operator-1"),
+        "product-1",
+        qc_authorization=authorization,
+    )
+
+    assert isinstance(result, JobSucceeded)
+    assert captured["owner_user_id"] == "operator-1"
+    assert captured["scope_id"] == "wf-budget"
+    assert captured["capability_id"] == "product_video.creative_brief"
+    assert captured["campaign_id"] == "campaign-live"
+    assert captured["campaign_max"] == 10_000
+    assert captured["scope_max"] == 1_000
+    assert captured["authorization_id"] == "auth-live-1"
+    assert captured["attempt_id"] == "wf-budget:creative_brief:job-budget"

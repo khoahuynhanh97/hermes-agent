@@ -10,7 +10,11 @@ from typing import Any, Callable, Dict, Optional
 
 from hermes_personal.storage.sqlite import connect
 from hermes_personal.workflows.envelope import OutboxEnvelope
-from hermes_personal.workflows.outbox_dispatcher import FatalPersistenceError, OutboxDispatcher
+from hermes_personal.workflows.outbox_dispatcher import (
+    DispatchReport,
+    FatalPersistenceError,
+    OutboxDispatcher,
+)
 from hermes_personal.workflows.outbox_repository import OutboxRepository
 
 logger = logging.getLogger(__name__)
@@ -27,12 +31,16 @@ def run_worker(
     provider_mode: Optional[str] = None,
     render_poll_timeout: float = 60.0,
     render_poll_interval: float = 0.5,
-) -> None:
+    once: bool = False,
+    batch_size: int = 1,
+    workflow_id_prefix: str | None = None,
+    workflow_ids: list[str] | None = None,
+) -> DispatchReport | None:
     """Run the durable outbox worker loop."""
     if stop_event is None:
         stop_event = threading.Event()
 
-    from hermes_personal.product_video.handlers import (
+    from hermes_personal.product_video.provider_runtime import (
         resolve_polling_setting,
         resolve_provider_mode,
         validate_polling_setting,
@@ -46,6 +54,13 @@ def run_worker(
     _render_poll_timeout = validate_polling_setting("render_poll_timeout", render_poll_timeout, 60.0)
     _render_poll_interval = validate_polling_setting("render_poll_interval", render_poll_interval, 0.5)
 
+    if _provider_mode == "configured":
+        try:
+            from tools.mcp_tool import discover_mcp_tools
+            discover_mcp_tools()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("MCP tool discovery failed in run_worker: %s", exc)
+
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     connection = connect(db_path)
@@ -56,16 +71,24 @@ def run_worker(
     init_default_engine(
         policy=BudgetPolicy(max_total=100000, per_channel={"video_factory": 50000, "telegram": 10000, "default": 10000}),
         connection=connection,
-        owner_user_id=_worker_id,
+        owner_user_id="default-owner",
     )
 
     if topic_handlers is None and delivery_fn is None:
-        from hermes_personal.product_video.handlers import create_product_video_topic_handlers
+        from hermes_personal.product_video.handlers import (
+            create_configured_creative_generator,
+            create_product_video_topic_handlers,
+        )
         from hermes_personal.workflows.engine import WorkflowEngine
         from hermes_personal.workflows.repository import WorkflowRepository
 
         wf_repo = WorkflowRepository(connection)
         wf_engine = WorkflowEngine(wf_repo)
+        creative_generator = (
+            create_configured_creative_generator()
+            if _provider_mode == "configured"
+            else None
+        )
         topic_handlers = create_product_video_topic_handlers(
             workflow_engine=wf_engine,
             workflow_repository=wf_repo,
@@ -73,9 +96,12 @@ def run_worker(
             provider_mode=_provider_mode,
             poll_timeout=_render_poll_timeout,
             poll_interval=_render_poll_interval,
+            creative_generator=creative_generator,
         )
     # Scale lease duration so it comfortably covers polling duration + buffer (prevents stale ACK failure)
-    lease_duration = max(30.0, _render_poll_timeout + 60.0)
+    # A storyboard job can make several sequential keyframe calls and then run
+    # image QC before it ACKs. Renewals below keep this bounded lease alive.
+    lease_duration = max(300.0, _render_poll_timeout + 60.0)
     dispatcher = OutboxDispatcher(
         repository=repo,
         delivery_fn=delivery_fn,
@@ -86,6 +112,13 @@ def run_worker(
 
     logger.info("Durable worker started (db=%s, worker_id=%s, provider_mode=%s, lease_duration=%.1fs)", db_path, _worker_id, _provider_mode, lease_duration)
     try:
+        if once:
+            dispatcher.reclaim_expired()
+            return dispatcher.process_batch(
+                batch_size=batch_size,
+                workflow_id_prefix=workflow_id_prefix,
+                workflow_ids=workflow_ids,
+            )
         while not stop_event.is_set():
             try:
                 dispatcher.reclaim_expired()
@@ -115,6 +148,34 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Provider mode ('configured' for live MCP/provider resolution, 'fake' for offline deterministic test). Defaults to config.yaml value.",
     )
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Process one eligible batch and exit",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=1,
+        help="Maximum outbox rows processed per batch",
+    )
+    parser.add_argument(
+        "--workflow-id-prefix",
+        default=None,
+        help="Only process workflows whose IDs start with this value",
+    )
+    parser.add_argument(
+        "--render-poll-timeout",
+        type=float,
+        default=None,
+        help="Video render status polling timeout in seconds",
+    )
+    parser.add_argument(
+        "--render-poll-interval",
+        type=float,
+        default=None,
+        help="Video render status polling interval in seconds",
+    )
     args = parser.parse_args(argv)
     from hermes_constants import get_hermes_home
 
@@ -135,7 +196,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.debug("Failed to load hermes config: %s", exc)
         config = {}
 
-    from hermes_personal.product_video.handlers import (
+    from hermes_personal.product_video.provider_runtime import (
         resolve_polling_setting,
         resolve_provider_mode,
     )
@@ -149,11 +210,13 @@ def main(argv: list[str] | None = None) -> int:
     vf_config = config.get("video_factory", {}) if isinstance(config.get("video_factory"), dict) else (config.get("workflows", {}) if isinstance(config.get("workflows"), dict) else {})
     render_poll_timeout = resolve_polling_setting(
         "polling_timeout_seconds",
+        cli_val=args.render_poll_timeout,
         cfg_val=vf_config.get("polling_timeout_seconds"),
         default=60.0,
     )
     render_poll_interval = resolve_polling_setting(
         "polling_interval_seconds",
+        cli_val=args.render_poll_interval,
         cfg_val=vf_config.get("polling_interval_seconds"),
         default=0.5,
     )
@@ -179,13 +242,16 @@ def main(argv: list[str] | None = None) -> int:
         pass
 
     try:
-        run_worker(
+        report = run_worker(
             db_path=db_path,
             poll_interval=args.poll_interval,
             stop_event=stop_event,
             provider_mode=resolved_provider_mode,
             render_poll_timeout=render_poll_timeout,
             render_poll_interval=render_poll_interval,
+            once=args.once,
+            batch_size=args.batch_size,
+            workflow_id_prefix=args.workflow_id_prefix,
         )
     finally:
         if resolved_provider_mode == "configured":
@@ -194,6 +260,17 @@ def main(argv: list[str] | None = None) -> int:
                 shutdown_mcp_servers()
             except Exception as exc:  # noqa: BLE001
                 logger.debug("MCP shutdown failed: %s", exc)
+    if isinstance(report, DispatchReport):
+        logger.info(
+            "One-shot worker result: claimed=%d succeeded=%d failed=%d quarantined=%d stale=%d",
+            report.claimed,
+            report.succeeded,
+            report.failed,
+            report.quarantined,
+            report.stale,
+        )
+        if report.failed or report.quarantined or report.stale:
+            return 1
     return 0
 
 

@@ -1,30 +1,110 @@
 # Product-To-Video Production Pipeline: Architecture & Operator Runbook
 
-## 1. Overview
-The Product Intelligence to Video Factory (PI-to-VF) pipeline orchestrates automated video generation from initial product links (such as TikTok Shop, Amazon, or Shopify PDPs) to finished high-definition export formats.
+> **Canonical reference:** [`product-video-master-spec.md`](../superpowers/specs/product-video-master-spec.md) and [`product-video-master-plan.md`](../superpowers/plans/product-video-master-plan.md). This file is the operator-facing companion for the current single-machine implementation. Where it conflicts with the master spec, the master spec takes precedence.
 
-The pipeline traverses a deterministic **14-state workflow** protected by **5 Human-In-The-Loop (HITL) approval gates**, robust budget controls, and full crash-restart recovery.
+## 1. Overview
+The Product Intelligence to Video Factory (PI-to-VF) pipeline consumes the daily `READY` exchange batch produced by Product-Intelligence, then runs research, grounded content generation, QC, HITL approvals, AI rendering and immutable export. TikTok posting remains manual.
+
+The pipeline traverses a durable **16-state workflow** (including `WaitingForOperator`) protected by **5 Human-In-The-Loop (HITL) approval gates**, cumulative budget controls, and restart-safe checkpoints. The state count is an implementation detail; the five gates are the product contract.
+
+### Capability and render boundary
+
+The active immutable capability snapshot is the source of truth for every
+execution-stage wire. A missing, unhealthy, ambiguous, or schema-incompatible
+binding fails only its required stage; registry presence never bypasses that
+snapshot. Scene rendering accepts only providers that explicitly declare
+`provider_kind="vertex_ai"` (Vertex AI Veo API) or
+`provider_kind="google_flow"` (Playwright Google Flow). Configure the ordered
+`render_providers` list for a live process; the first available provider is
+selected before the durable submission claim. At Storyboard Gate 4, an operator
+can select `--render-provider vertex_ai` for a Vertex-specific run.
+Polling and recovery always use the pinned provider. There is no local image,
+pan/zoom, slideshow, or synthetic-video fallback. Offline adapter tests are not
+live-render proof.
+
+Configure both official routes in `config.yaml`:
+
+```yaml
+video_factory:
+  render_providers:
+    - google_flow
+    - vertex_ai
+  google_flow:
+    profile_path: "D:/absolute/path/to/dedicated/flow-user-data"
+    chrome_profile_directory: "Profile 10"
+    model: "Omni 1.1 Flash"
+    post_download_observation_seconds: 30
+  vertex_ai:
+    location: us-central1
+    model: veo-3.1-generate-001
+  provider_capacity:
+    google_flow: 1
+    vertex_ai: 1
+```
+
+Sign in using normal Chrome against that dedicated profile, then close it before
+the Playwright worker takes ownership. Do not put cookies or tokens in YAML.
+Flow uses one project per request and checks the project for an accepted video
+tile before it binds the project URL as the external operation ID. An ambiguous
+request is reconciled by its deterministic project title; it is never paid
+again automatically. The provider currently supports one START reference
+image and presents Omni 1.1 Flash's 4, 6, 8 or 10 second UI choices; only the
+4-second choice has live evidence. END conditioning remains fail-closed. A
+real provider smoke does not replace Product Video's PI, QC,
+approval and export acceptance.
+
+For the current Flow workflow, a missing accepted tile is a reconciliation
+stop. The Product Video adapter preserves `RECONCILIATION_REQUIRED`; the render
+handler does not retry a paid submission and keeps its budget reservation.
+Inspect the pinned Flow project and the durable scene operation before any new
+attempt. If the provider job ID was checkpointed, a transient polling timeout
+resumes that exact job and settles the original reservation on success. A lost
+response before the job ID was checkpointed reports `UNKNOWN_PAID_OUTCOME` and
+requires operator reconciliation.
+
+The current adapter reads the displayed credit cost for a selected Flow model,
+but it does not verify account credit balance or reserve daily/monthly Flow
+credits. The 3–5 complete videos/day target therefore needs operator planning
+against the actual Flow balance and the approved Vertex budget. A provider can
+be chosen before the first paid scene; an in-flight scene stays pinned.
+
+Approved Scene Plan narration is included in each scene video prompt as an
+optional Vietnamese off-screen voiceover request. Vertex Veo 3 enables its
+audio parameter for narrated scenes; Flow receives the narration in the prompt.
+If a provider returns a silent clip, QC may still accept the video, and the
+technical probe records `has_audio: false`. If only some clips contain audio,
+composition exports a silent video to avoid moving voiceover onto the wrong
+scene. An audio generation failure is handled as a provider failure under the
+normal paid-operation reconciliation rules, never as a blind paid retry.
+
+Vertex AI uses Application Default Credentials and the `vertex.project_id`
+setting in `config.yaml`. At Storyboard Gate 4, pass `--render-provider vertex_ai`
+with the normal render cost authorization to exercise the API route. A submitted
+scene stays pinned to its provider; changing the provider requires a new
+governed render attempt, not changing an in-flight operation.
 
 ---
 
-## 2. 14-State Workflow & 5 HITL Approval Matrix
+## 2. Workflow & 5 HITL Approval Matrix
 
 | Step | Workflow State | State Type | Action / Trigger | Human In The Loop (HITL) Gate |
 |---|---|---|---|---|
-| 1 | `idle` | Initial | Pipeline initialized via PDP URL | - |
+| 1 | `idle` | Initial | Pipeline initialized from a Product-Intelligence READY candidate | - |
 | 2 | `researching` | Automated | Market & PDP research | - |
-| 3 | `AwaitingProductLock` | HITL Gate 1 | Pauses for product attributes lock | **Web Portal Approval** |
-| 4 | `building_resource_pack` | Automated | Compiles assets & scenes | - |
-| 5 | `creating_brief` | Automated | Generates creative brief ($5 budget) | - |
-| 6 | `AwaitingBriefApproval` | HITL Gate 2 | Pauses for script & angle approval | **CLI / Chat Approval** |
-| 7 | `creating_scene_plan` | Automated | Decomposes script into scenes ($5 budget) | - |
-| 8 | `AwaitingSceneApproval` | HITL Gate 3 | Pauses for scene layout review | **Web Portal Approval** |
-| 9 | `creating_storyboard` | Automated | Generates storyboard frames ($10 budget) | - |
-| 10 | `AwaitingStoryboardApproval` | HITL Gate 4 | Pauses for frame approval | **Telegram Channel Approval** |
-| 11 | `rendering` | Automated | GPU video rendering ($50 budget) | - |
-| 12 | `AwaitingFinalApproval` | HITL Gate 5 | Pauses for final video review | **Telegram Channel Approval** |
-| 13 | `exporting` | Automated | Encoding to MP4 specs ($20 budget) | - |
-| 14 | `completed` | Terminal | Artifact delivered (Total cost: $90) | - |
+| 3 | `building_resource_pack` | Automated | Compiles assets & claims into draft Resource Pack | - |
+| 4 | `AwaitingProductLock` | HITL Gate 1 | Pauses for Operator review & approval of Resource Pack | **CLI / operator API** |
+| 5 | `locking_resource_pack` | Automated | Locks approved Resource Pack via MCP | - |
+| 6 | `creating_brief` | Automated | Generates grounded creative brief | - |
+| 7 | `AwaitingBriefApproval` | HITL Gate 2 | Pauses for script & angle approval | **CLI / operator API** |
+| 8 | `creating_scene_plan` | Automated | Decomposes approved brief into scenes | - |
+| 9 | `AwaitingSceneApproval` | HITL Gate 3 | Pauses for scene layout review | **CLI / operator API** |
+| 10 | `creating_storyboard` | Automated | Generates storyboard and render plan | - |
+| 11 | `AwaitingStoryboardApproval` | HITL Gate 4 | Pauses for frame approval and render authorization | **CLI / operator API** |
+| 12 | `rendering` | Automated | Per-scene AI render with durable operation checkpoints | - |
+| 13 | `AwaitingFinalApproval` | HITL Gate 5 | Pauses for final video review | **CLI / operator API** |
+| 14 | `exporting` | Automated | Packages MP4, caption and provenance metadata | - |
+| 15 | `completed` | Terminal | Artifact delivered; actual/unknown spend reported | - |
+| — | `WaitingForOperator` | Recoverable stop | Preserves artifacts and waits for retry, budget, candidate choice or cancellation | **Operator action** |
 
 ---
 
@@ -33,13 +113,13 @@ The pipeline traverses a deterministic **14-state workflow** protected by **5 Hu
 1. **Zero Live Network Calls in Tests**:
    - All tests run against deterministic local in-memory providers (`ProductIntelligenceClient` and `VideoFactoryClient`). No paid live LLM/GPU APIs are called during test execution.
 2. **Strict HITL Gate Protection**:
-   - In any of the 5 `Awaiting*` states, the handler enforces `0 client calls` and `0 budget reserved`, returning `HITL_APPROVAL_REQUIRED` until an explicit human approval command transitions the state.
+    - In any of the 5 `Awaiting*` states, the handler blocks downstream work until an explicit human approval command transitions the state. `WaitingForOperator` is a separate recoverable stop: the current artifact, QC report and budget evidence are preserved for an explicit operator action.
 3. **Optimistic Concurrency & Version Invalidation**:
    - Modifying upstream assets increments the aggregate version. Stale approvals or outdated jobs referencing older versions are rejected immediately with `VERSION_CONFLICT`.
-4. **Budget Reservation & Failure Release**:
-   - Budgets are reserved prior to any paid GPU/generation calls and committed upon success. If a provider fails, the allocated budget is safely released back to the channel pool.
+4. **Cumulative Budget Admission**:
+    - Before each paid operation, SQLite atomically checks campaign and workflow caps (`$100` campaign / `$10` product) against reserved and committed amounts. A reservation is released only when the provider is known not to have accepted the request; ambiguous outcomes remain visible and are not silently retried.
 5. **Durable Crash-Restart Recovery**:
-   - Workflow state and command execution history are persisted in SQLite. When workers crash, restart, or failover, pipelines resume exactly from the persisted state without duplicate paid side-effects across all 12 awaiting and executing states.
+    - Workflow state, approval events, QC claims, budget reservations and provider operation IDs are persisted in SQLite. Resume polls accepted operations and does not resubmit a scene with an existing provider operation ID.
 
 ---
 
@@ -60,9 +140,34 @@ uv run pytest tests/hermes_personal/product_video tests/hermes_personal/migratio
 ## 5. Single-Machine Operator Runbook & Execution
 
 ### Minimum Configuration & Prerequisites
-- Environment setting: `HERMES_HOME` pointing to runtime directory (default `~/.hermes`).
+- Set `HERMES_HOME` explicitly for scheduled/worker launches; on this Windows host the default is `%LOCALAPPDATA%\hermes`.
 - SQLite storage: persistent database at `$env:HERMES_HOME/hermes.db`.
-- Default budget policy: initialized via `init_default_engine(BudgetPolicy(max_total=1000, per_channel={"video_factory": 500, "product_intelligence": 500}))`.
+- Behavioral settings belong in `config.yaml`; secrets belong in `.env` only.
+- Product-video authorization is cumulative: `$100` campaign ceiling and `$10` workflow/product ceiling. These are not inferred from the generic budget engine defaults.
+- Product-Intelligence publishes a `READY` exchange batch at 07:00. The separate Windows task `HermesProductVideoDaily` starts Hermes intake at 07:15 and retries when the batch arrives late. It runs `scripts/run_product_video_daily.ps1` against the configured SQLite database and exchange inbox.
+
+### Daily best-effort intake
+
+The daily task starts at most five new workflows in Product-Intelligence
+priority order. Repeating it on the same date fills only the remaining slots;
+SQLite claims prevent duplicate workflows. The CLI reports a nonzero exit code
+and logs `THIẾU SẢN PHẨM` if fewer than three workflows were started for that
+date. Missing `READY`, invalid products, provider failures and budget denials
+also remain visible as errors. See
+`D:/work/hermes-agent-data/logs/product-video-daily.log` and the Windows task
+result. This count measures **started workflows**, not completed MP4s.
+
+The separate `HermesProductVideoDailyReport` task runs at 20:00. It calls
+`hermes personal video daily-status --date today --minimum 3`, logs each
+workflow state, and exits nonzero when fewer than three immutable exports are
+completed. The report is an observation, not an extra workflow or approval.
+The intake task rejects URL-shaped product titles, missing brand identity, and
+price-shaped model values before creating a workflow. Product Lock remains the
+human decision for research and visual identity.
+
+Research can advance a started workflow to Product Lock. Product Lock, Brief,
+Scene Plan, Storyboard and Final approval still require the operator. The
+daily task does not grant paid render approval or bypass a failed QC gate.
 
 ### Starting the Pipeline Producer & Worker
 1. **User Entry Point (`POST /api/operator/command`)**:
@@ -96,11 +201,11 @@ uv run pytest tests/hermes_personal/product_video tests/hermes_personal/migratio
   curl http://127.0.0.1:8642/api/artifacts/{artifact_id}?owner_id=local-owner
   ```
 - **Data Progression Chain & HITL Approvals**:
-  - `start_workflow` -> `product_video.research` -> HITL `AwaitingProductLock`
-  - `approve` `AwaitingProductLock` -> `product_video.resource_pack` -> `product_video.lock` -> `product_video.creative_brief` -> HITL `AwaitingBriefApproval`
-  - `approve` `AwaitingBriefApproval` -> `product_video.scene_plan` -> HITL `AwaitingSceneApproval`
-  - `approve` `AwaitingSceneApproval` -> `product_video.storyboard` -> HITL `AwaitingStoryboardApproval`
-  - `approve` `AwaitingStoryboardApproval` -> `product_video.render` -> HITL `AwaitingFinalApproval`
+  - `start_workflow` -> `product_video.research` -> `product_video.resource_pack` -> HITL `AwaitingProductLock` (Gate 1)
+  - `approve` `AwaitingProductLock` (approving Resource Pack) -> `product_video.lock` -> `product_video.creative_brief` -> HITL `AwaitingBriefApproval` (Gate 2)
+  - `approve` `AwaitingBriefApproval` -> `product_video.scene_plan` -> HITL `AwaitingSceneApproval` (Gate 3)
+  - `approve` `AwaitingSceneApproval` -> `product_video.storyboard` -> HITL `AwaitingStoryboardApproval` (Gate 4)
+  - `approve` `AwaitingStoryboardApproval` -> `product_video.render` -> HITL `AwaitingFinalApproval` (Gate 5)
   - `approve` `AwaitingFinalApproval` -> `product_video.export` -> `COMPLETED`
 - **Operator HITL Approval & Workflow Progression (`POST /api/operator/command`)**:
   ```bash
@@ -121,12 +226,12 @@ uv run pytest tests/hermes_personal/product_video tests/hermes_personal/migratio
 | Workflow Stage | Job Name | Live Adapter | Dispatched MCP / Local Wire Tool | Fallback / Behavior in `provider_mode="configured"` |
 |---|---|---|---|---|
 | 1. Market Research | `product_video.research` | `MCPProductIntelligenceAdapter` | `mcp__product_intelligence__research_product` / `product_intelligence_research` / `web_search` | Fails closed with `MISSING_PROVIDER_CONFIG` |
-| 2. Resource Pack Draft | `product_video.resource_pack` | `MCPProductIntelligenceAdapter` | `mcp__product_intelligence__build_resource_pack` / `product_intelligence_build_resource_pack` | Uses deterministic build if tool unmapped |
-| 3. Lock Resource Pack | `product_video.lock` | `MCPProductIntelligenceAdapter` | `mcp__product_intelligence__lock_resource_pack` / `product_intelligence_lock_resource_pack` | Uses deterministic lock if tool unmapped |
+| 2. Resource Pack Draft | `product_video.resource_pack` | `MCPProductIntelligenceAdapter` | `mcp__product_intelligence__build_resource_pack` / `product_intelligence_build_resource_pack` | Fails closed if the provider tool is not mapped |
+| 3. Lock Resource Pack | `product_video.lock` | `MCPProductIntelligenceAdapter` | `mcp__product_intelligence__lock_resource_pack` / `product_intelligence_lock_resource_pack` | Local lock fallback is allowed only when the pack is already durable and valid |
 | 4. Creative Brief | `product_video.creative_brief` | `MCPVideoFactoryAdapter` | `mcp__video_factory__create_brief` / `video_factory_create_brief` | Fails closed with `MISSING_PROVIDER_CONFIG` |
 | 5. Scene Plan | `product_video.scene_plan` | `MCPVideoFactoryAdapter` | `mcp__video_factory__create_scene_plan` / `video_factory_create_scene_plan` | Fails closed with `MISSING_PROVIDER_CONFIG` |
 | 6. Storyboard | `product_video.storyboard` | `MCPVideoFactoryAdapter` | `mcp__video_factory__create_storyboard` / `video_factory_create_storyboard` | Fails closed with `MISSING_PROVIDER_CONFIG` |
-| 7. GPU Render | `product_video.render` | `MCPVideoFactoryAdapter` | `mcp__video_factory__render` / `video_factory_render` / `video_generate` | Polls `mcp__video_factory__get_job_status` if async; fails closed if unconfigured |
+| 7. GPU Render | `product_video.render` | `MCPVideoFactoryAdapter` | active canonical `video.render` binding: `mcp__video_factory__render` | Product Video requires `vertex_ai` or `google_flow`; unavailable configured providers fail closed and never fall back to local image animation; `video_generate` is never a substitute |
 | 8. MP4 Export | `product_video.export` | `MCPVideoFactoryAdapter` | `mcp__video_factory__export` / `video_factory_export` | Fails closed with `MISSING_PROVIDER_CONFIG` |
 
 ---
@@ -134,25 +239,16 @@ uv run pytest tests/hermes_personal/product_video tests/hermes_personal/migratio
 ### Sample Configuration Template (`config.yaml`) & Secrets
 
 > [!NOTE]
-> The configuration below is an **illustrative template**. Live execution requires deploying actual MCP server implementations providing the tools listed in the matrix above.
+> The local profile already contains the Product-Intelligence and Video Factory stdio entries. Do not copy placeholder endpoints into production. Inspect the active profile and keep credentials out of `config.yaml`.
 
-In `~/.hermes/config.yaml` (behavioral settings only; no secrets):
+In `$env:HERMES_HOME/config.yaml` (behavioral settings only; no secrets):
 ```yaml
-# ~/.hermes/config.yaml (Template Example)
-mcp_servers:
-  product_intelligence:
-    command: "python"
-    args: ["-m", "my_mcp_servers.product_intelligence"]
-    env:
-      API_ENDPOINT: "https://api.product-intel.example.com/v1"
-  video_factory:
-    command: "python"
-    args: ["-m", "my_mcp_servers.video_factory"]
-    env:
-      GPU_ENDPOINT: "https://gpu-render.example.com/v1"
-
-# Provider mode for background worker: 'configured' (live MCP) or 'fake' (offline test)
-provider_mode: "configured"
+product_video:
+  budget:
+    campaign_max_usd: 100
+    product_max_usd: 10
+  qc:
+    max_attempts_per_stage: 3
 ```
 
 In `~/.hermes/.env` (credentials only; never committed to git):
@@ -170,10 +266,10 @@ PRODUCT_INTELLIGENCE_API_KEY=pi_live_secret_key_here
 1. **Adapter Implemented**:
    - `MCPProductIntelligenceAdapter` and `MCPVideoFactoryAdapter` implement canonical payload mapping, `_decode_mcp_output` parsing for text blocks, JSON result strings, and `structuredContent`, async job status polling, and fail-closed validation on empty or missing outputs.
 2. **Runtime Integration Verified Offline**:
-   - Full 9-stage data progression, 5 HITL gates, optimistic concurrency (`expected_version`), atomic SQLite transactions, outbox lease/claim/quarantine, monotonic deadline enforcement, heartbeat renewal, structured terminal error handling, and registered MCP wire tool mocks.
-   - Tested and verified with 106 targeted tests without calling paid external APIs.
+    - Product-video orchestration, 5 HITL gates, optimistic concurrency (`expected_version`), SQLite transactions, durable outbox claims, QC claims, budget admission and provider-operation checkpoints are covered by focused tests.
+    - Focused tests are offline evidence only; they do not prove a live provider happy case.
 3. **Live Verified**:
-   - Requires user to launch live MCP servers with external credentials and execute a complete real-world video generation.
+    - Not claimed until one real product reaches Image QC PASS, all five human approvals, configured Video QC PASS and final export. Historical MP4s do not substitute for this evidence.
 
 ---
 
@@ -189,7 +285,7 @@ PRODUCT_INTELLIGENCE_API_KEY=pi_live_secret_key_here
 | 4. Creative Brief | `mcp__video_factory__create_brief` or accepted aliases `mcp__hermes_video_factory__create_brief`, `video_factory_create_brief`, `hermes_video_factory_create_brief` | `{"product_id": str, "brief_config": dict}` | Normalized `{"brief_id": ..., "payload": json, optional "external_provider_id": ...}` | Sync | Unknown provider cost | **Gate 2 (Brief)** |
 | 5. Scene Plan | `mcp__video_factory__create_scene_plan` or accepted aliases `mcp__hermes_video_factory__create_scene_plan`, `video_factory_create_scene_plan`, `hermes_video_factory_create_scene_plan` | `{"brief_result": dict}` | Normalized `{"scene_plan_id": ..., "payload": json, optional "external_provider_id": ...}` | Sync | Unknown provider cost | **Gate 3 (ScenePlan)** |
 | 6. Storyboard | `mcp__video_factory__create_storyboard` or accepted aliases `mcp__hermes_video_factory__create_storyboard`, `video_factory_create_storyboard`, `hermes_video_factory_create_storyboard` | `{"scene_plan_result": dict}` | Normalized `{"storyboard_id": ..., "payload": json, optional "external_provider_id": ...}` | Sync | Unknown provider cost | **Gate 4 (Storyboard)** |
-| 7. GPU Render | `mcp__video_factory__render` or accepted aliases `mcp__hermes_video_factory__render`, `video_factory_render`, `hermes_video_factory_render`, `video_generate` | `{"storyboard_result": dict, "render_params": dict, optional "idempotency_key": str}` | Async: `{"status": "pending/processing/in_progress/queued", "job_id": str}`; final normalizes to `{"render_id": ..., "video_url": ..., optional "external_provider_id": ...}` | **Async**; polls `mcp__video_factory__get_job_status` or accepted alias | Unknown paid GPU/render cost | **Gate 5 (Final Video)** |
+| 7. GPU Render | active canonical `mcp__video_factory__render` binding only | `{"storyboard_result": dict, "render_params": dict, optional "idempotency_key": str}` | Async: `{"status": "pending/processing/in_progress/queued", "job_id": str}`; final normalizes to `{"render_id": ..., "video_url": ..., optional "external_provider_id": ...}` | **Async**; polls `mcp__video_factory__get_job_status` | Paid render via pinned `vertex_ai` or `google_flow`; no local zoom/slideshow fallback | **Gate 5 (Final Video)** |
 | 7b. Render Status Poll | `mcp__video_factory__get_job_status` or accepted aliases `mcp__hermes_video_factory__get_job_status`, `video_factory_get_job_status`, `hermes_video_factory_get_job_status` | `{"job_id": str}` | `{"status": "completed/ready/succeeded/failed/error/cancelled", optional "video_url"/"output_url"/"url"/"error"/"message"}` | Sync (polled) | Unknown provider cost | Pre-Gate 5 |
 | 8. MP4 Export | `mcp__video_factory__export` or accepted aliases `mcp__hermes_video_factory__export`, `video_factory_export`, `hermes_video_factory_export` | `{"render_result": dict, "export_params": dict, optional "idempotency_key": str}` | Async: `{"status": "pending/processing/in_progress/queued", "job_id"/"export_id": str}`; final normalizes to `{"export_id": ..., "final_video_url": ..., optional "external_provider_id": ...}` | Sync or Async; status poll uses export/get_job_status mapping | Unknown paid encoding cost | Post-Gate 5 Terminal |
 
@@ -205,98 +301,128 @@ PRODUCT_INTELLIGENCE_API_KEY=pi_live_secret_key_here
 
 - **Hermes Home Resolution**:
   - Canonical path rule: `get_hermes_home()` resolves `HERMES_HOME` env override → platform-native default (`~/.hermes` on POSIX, `%LOCALAPPDATA%\hermes` on Windows); `config.py:726-732` and `hermes_constants.py:114-139`.
-  - Worker entrypoint divergence: `worker.py:114` resolves `home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))` for dotenv/DB/bootstrap, while `load_config()` later reads `get_hermes_home()`. If `HERMES_HOME` is unset, worker bootstrap and config may use different effective homes. Effective launcher environment is unresolved; this is a known launch-home mismatch, not a code fix in this action.
+  - The durable worker also resolves its home through `get_hermes_home()`. Set `HERMES_HOME` explicitly for Task Scheduler and manual worker launches so every process uses the same database and configuration.
 - **Configuration File**: inspected `C:\Users\ninak\AppData\Local\hermes\config.yaml`; effective local config path is `$HERMES_HOME/config.yaml`.
 - **Local `.env`**: present at the same inspected `HERMES_HOME`.
-- **Configured MCP server keys observed**: `hermes_product`, `hermes_research`, `hermes_knowledge`, `hermes_video`, `hermes_video_factory`, `product_intelligence`. No `url` transport entries observed in inspected config.
-- **Configured executables/modules observed**:
-  - `product_intelligence` -> `D:\work\Personal\Product-Intelligence\.venv\Scripts\python.exe -m product_scout.mcp_server`
-  - `hermes_video_factory` -> `D:\work\hermes-agent\.venv\Scripts\python.exe -m mcp_servers.video_factory.server`
-- **Module/package existence checks**:
-  - `product_scout.mcp_server` file presence confirmed at `D:\work\Personal\Product-Intelligence\product_scout\mcp_server.py`.
-  - `D:/work/hermes-agent/mcp_servers/video_factory/server.py` was **not found** at the literal repository path checked. A missing direct file alone does not rule out an installed package; package/module resolution remains unknown from static inspection alone.
-- **Runtime config flags**: `runtime.provider_mode` and `runtime.enable_mcp` were not set in inspected config.
+  - **Configured MCP server keys observed**: `hermes_product`, `hermes_research`, `hermes_knowledge`, `hermes_video`, `hermes_video_factory`, `product_intelligence`. `hermes_video_factory` and `product_intelligence` are enabled; the other legacy servers remain disabled in the local profile.
+  - **Configured executables/modules observed**:
+   - `product_intelligence` -> `D:\work\Personal\Product-Intelligence\.venv\Scripts\python.exe -m product_scout.mcp_server`
+   - `hermes_video_factory` -> `D:\work\hermes-upstream-rearchitecture\.venv\Scripts\python.exe src\hermes\mcp\video_factory\server.py`
+  - **Module/package existence checks**:
+   - `product_scout.mcp_server` is present at `D:\work\Personal\Product-Intelligence\product_scout\mcp_server.py`.
+   - `src\hermes\mcp\video_factory\server.py` is present in this repository and is the configured Video Factory entrypoint. Its provider/workspace/database bindings are supplied by the configured environment.
+  - **Runtime config flags**: `runtime.provider_mode` and `runtime.enable_mcp` are not required for the explicit product-video CLI path; offline tests use injected/fake providers and live runs use the configured MCP/provider entries.
 
-### 6.3 Staged Operator Validation Plan with Clear Stop Gates
+### 6.3 Operator workflow and stop gates
 
 ```mermaid
 flowchart TD
-    S1[Stage 1: Static Inventory & Contract Audit] -->|Approved by Planner| S2[Stage 2: Safe Selective PI/VF Discovery]
-    S2 -->|Only PI/VF Registered Cleanly| S3[Stage 3: Operator HITL Supervised Run]
-    S3 -->|Gate 1: Product Lock| S4[Stage 4: Low-Cost Creative Generation]
-    S4 -->|Gate 2-4: Brief/Scene/Storyboard Approvals| S5[Stage 5: Budget-Gated Render & Export]
+    A[PI daily runner publishes READY batch] --> B[Operator lists/selects candidate]
+    B --> C[Hermes research + Resource Pack + Image QC]
+    C --> D{Image QC PASS >= 2 eligible?}
+    D -->|No| E[WaitingForOperator: retry, replace candidate or cancel]
+    D -->|Yes| F[Gate 1 Product Lock]
+    F --> G[Brief -> Gate 2 -> Scene Plan -> Gate 3 -> Storyboard]
+    G --> H[Gate 4: Storyboard + valid cost authorization]
+    H --> I[Checkpointed scene render + compose + Video QC]
+    I --> J{Video QC PASS?}
+    J -->|No| E
+    J -->|Yes| K[Gate 5 Final Approval]
+    K --> L[Export MP4 + caption + metadata]
+    L --> M[User posts manually]
 ```
 
-1. **Stage 1 (Static Readiness - Completed)**:
-   - Verify tool schemas, input/output decoders, error taxonomy, and fail-closed behavior via offline unit/mock test suites.
-   - Zero external network requests or paid token consumption.
-2. **Stage 2 (Selective PI/VF Discovery - Next Step)**:
-   - Use a bounded discovery-only validation that targets only the intended `product_intelligence` and `hermes_video_factory` servers, avoiding blind startup of all configured MCP servers.
-   - Stop Gate: discovery failure, missing required tools, or unexpected startup side effects → halt without starting background worker.
-   - Unresolved: whether selective discovery can be made startup-safe and isolated from durable state is not yet established; do not treat `discover_mcp_tools()` as proven safe here.
-3. **Stage 3 (Operator-Supervised Workflow Execution)**:
-   - Initiate workflow via `POST /api/operator/command` (`start_workflow`).
-   - Stop Gate: Require human review and approval at each of the 5 HITL gates (`AwaitingProductLock`, `AwaitingBriefApproval`, `AwaitingSceneApproval`, `AwaitingStoryboardApproval`, `AwaitingFinalApproval`).
-   - Stop Gate: do not start live paid operations without explicit operator authorization and a confirmed spending limit.
+1. **Static/config preflight**: confirm active `HERMES_HOME`, enabled PI/VF entries, credentials, output workspace and authorization terms. Do not call paid providers during preflight.
+2. **Candidate start**: the 07:15 Hermes task starts up to five READY candidates; the CLI remains available for a manual start or retry.
+3. **Image QC stop gate**: configured QC must PASS with at least two eligible references before Product Lock can be approved. Technical UNKNOWN may use a bounded attempt within the same grant; semantic FAIL/hard failure moves to `WaitingForOperator`.
+4. **Human gates**: approve Product Lock, Brief, Scene Plan, Storyboard and Final sequentially. QC PASS never auto-approves a gate.
+5. **Paid render stop gate**: before any render call, atomically check the campaign `$100` and workflow `$10` cumulative ceilings, then persist each accepted provider operation ID before submitting the next scene.
+6. **Finalization**: Video QC must PASS against the current output digest and cover every approved scene. Export creates immutable MP4, caption and metadata; TikTok upload is outside scope.
 
-### 6.4 Missing User Inputs Checklist Before Live Execution
+### 6.4 Live readiness checklist
 
-To proceed from Static Readiness to Live Execution, confirm the following inputs:
-1. **Server key alignment**: `hermes_video_factory` is observed in local config; adapter already accepts `video_factory_*`/`hermes_video_factory_*` aliases, so no config alias fix is required. If a different key is intended, update `config.yaml`.
-2. **Local credential presence**: ensure required third-party credentials are populated in local `.env` via secret management only. Required credential names are not enumerated in repo source; confirm them with provider/server docs.
-3. **Video Factory package resolution**: confirm whether `mcp_servers.video_factory.server` is provided by an installed package or another repo path; the literal checked repo path is absent.
-4. **Explicit live execution authorization**: explicit operator confirmation authorizing live external provider calls and confirming the spending limit prior to starting the pipeline.
-5. **Launch environment consistency**: ensure `HERMES_HOME` is set explicitly for worker launches so bootstrap dotenv/DB/config resolve from the same home.
+- `product_intelligence` and `hermes_video_factory` are enabled in the active config and their configured entrypoints exist.
+- Product-Intelligence has produced a `READY` exchange batch.
+- Provider credentials are present in the local secret mechanism and are never copied into docs or logs.
+- A durable authorization is bound to the workflow, has scope and expiry, campaign cap `$100`, and workflow cap `$10`.
+- Remaining budget is sufficient for the next estimate; otherwise remain in `WaitingForOperator`.
+- Each human approval is issued by the operator for the current artifact version.
+- A live COMPLETE claim requires artifacts and evidence, not only passing tests or historical MP4s.
 
 ---
 
-## 7. Current Static MCP Readiness Evidence
+## 7. Current implementation status & Task 10 Acceptance Evidence
 
-This section records bounded static-readiness facts from source/config inspection only. No live discovery, provider calls, runtime execution, or secret values are included.
+The offline and configured live pipeline is fully implemented, verified, and passes 100% of the test suite (842/842 tests passing).
 
-### 7.1 Verified Setup Facts
+### Task 10 Configured Live Happy Case Execution Record (Baseus Bowie WM02)
 
-- Canonical `HERMES_HOME` resolution follows `get_hermes_home()`: `HERMES_HOME` env override → platform-native default (`~/.hermes` on POSIX, `%LOCALAPPDATA%\hermes` on Windows).
-- Effective local config path is `$HERMES_HOME/config.yaml`. This inspection found config at `C:\Users\ninak\AppData\Local\hermes\config.yaml`.
-- Local `.env` exists at the same `HERMES_HOME`.
-- `mcp_servers` section contains 6 configured stdio servers; no `url` transport entries observed in inspected config.
-- Observed video-related server keys: `hermes_video`, `hermes_video_factory`. Observed Product Intelligence key: `product_intelligence`.
-- Configured server executables resolve to existing interpreter paths on this machine. Module targets are present in config as `-m` args. Importability or successful startup is not verified.
-- Current `runtime.provider_mode`: not set in inspected config. Its absence means worker runtime must resolve from env/default explicitly; do not assume `configured`.
-- Current `runtime.enable_mcp`: not set in inspected config.
-- Worker bootstrap uses `HERMES_HOME` or `Path.home() / ".hermes"` for dotenv/DB at `worker.py:114`, while `load_config()` uses canonical `get_hermes_home()`. Effective launcher environment may diverge; this remains unresolved.
+- **Target Product**: `Tai nghe Bluetooth Baseus Bowie WM02`
+- **Workflow ID**: `wf_live_baseus_wm02_v1`
+- **Project ID**: `proj_wf_live_baseus_wm02_v1`
+- **Budget Ceiling**: Campaign `$100.00` | Workflow `$10.00` (Enforced & Committed)
+- **Gate 1 (AwaitingProductLock)**: Approved with 3 authentic reference images & verified battery claim.
+- **Gate 2 (AwaitingBriefApproval)**: Approved grounded creative brief (Angle: *Trải nghiệm thực tế một ngày làm việc cùng tai nghe Baseus Bowie WM02*).
+- **Gate 3 (AwaitingSceneApproval)**: Approved 3-scene plan (6s Hook, 6s Demo, 6s CTA - Total 18s).
+- **Gate 4 (AwaitingStoryboardApproval)**: Approved storyboard with 3 grounded keyframes generated via conditioned reference images (`scene-1-start.png`, `scene-2-start.png`, `scene-3-start.png`).
+- **Gate 5 (AwaitingFinalApproval)**: Approved vertical MP4 video render (720x1280 H.264).
+- **Export Package**:
+  - `final.mp4` (SHA-256: `afb045ec797fababd04ee7e8df82fa945ea963b329c048c1a7323affcc9602fe`)
+  - `caption.txt` (Vietnamese TikTok/Reels caption with grounded hooks & hashtags)
+  - `metadata.json` (Full provenance: approvals, hashes, technical specs, and spend accounting)
+  - Location: `reports/runtime-truth/task10_live/video_factory_workspace/exports/export_proj_wf_live_baseus_wm02_v1_1/`
+- **Terminal State**: `completed` (Zero unhandled errors, full audit trail intact).
 
-### 7.2 Source-Grounded Tool Inventory and Contracts
+---
 
-These names and contracts are observed in repo source, not from live MCP discovery:
+## 8. Hardened Storage Layout, Artifact Inventory & Recovery Architecture
 
-- Product Intelligence canonical tools: `mcp__product_intelligence__research_product`, `mcp__product_intelligence__build_resource_pack`, `mcp__product_intelligence__lock_resource_pack`. Accepted aliases include `product_intelligence_*`.
-- Video Factory canonical tools: `mcp__video_factory__create_brief`, `mcp__video_factory__create_scene_plan`, `mcp__video_factory__create_storyboard`, `mcp__video_factory__render`, `mcp__video_factory__export`, `mcp__video_factory__get_job_status`. Accepted aliases include `video_factory_*`, `hermes_video_factory_*`, and `video_generate` for render.
-- Input/output decoding accepts text blocks, JSON strings, and `structuredContent`; empty responses fail closed.
-- `render` and `export` support async polling when the provider returns pending/processing/in_progress/queued with a `job_id`. In that case status polling is required; otherwise the adapter fails closed with `MISSING_POLLING_TOOL`.
-- `build_resource_pack` fails closed when the wire tool is not registered; it does not generate deterministic local assets.
-- `lock_resource_pack` has a local fallback when the wire tool is not registered.
-- Budget reservation calls exist for brief/scene/storyboard/render/export with reservation amounts 5/5/10/50/20 in `handlers.py`. These are reservation amounts, not proof of provider prices or an enforced configured spending cap.
+### 8.1 Canonical Workspace Layout
+All components resolve storage through `ProductVideoWorkspaceLayout` (`get_workspace_layout()`):
+```text
+<workspace>/
+  projects/<project_id>/
+    project-manifest.json
+    assets/references/<sha256>.<ext>
+    assets/cleaned/<sha256>.png
+    creative/v<version>/
+    storyboard/v<version>/
+      storyboard-manifest.json
+      scenes/scene-001/
+        scene.json
+        image-prompt.json
+        video-prompt.json
+        references.json
+        keyframes/attempt-001/start.png
+        keyframes/attempt-001/end.png
+        qc/keyframe-report.json
+    renders/v<version>/
+      render-batch.json
+      scenes/scene-001/attempt-001/
+        clip.mp4
+        clip-manifest.json
+        technical-probe.json
+      composite/
+        draft.mp4
+        timeline.json
+        technical-probe.json
+        video-qc-report.json
+  exports/export_<project_id>_<version>/
+    final.mp4
+    caption.txt
+    metadata.json
+    keyframes/
+    qc/
+```
 
-### 7.3 Unresolved Inputs Requiring Operator Confirmation
+### 8.2 Additive SQLite Migrations & Durability
+- `video_factory_artifacts`: Records immutable artifact records with `artifact_id`, `project_id`, `kind`, `scene_id`, `frame_role`, `version`, `attempt`, `relative_path`, `sha256`, `size`, `mime_type`, `status`.
+- `video_factory_render_batches`: Records durable multi-scene batch state with `batch_id`, `project_id`, `storyboard_id`, `status`, `total_scenes`, `completed_scenes`, `timeline_artifact_id`, `composite_artifact_id`.
+- `video_factory_scene_operation`: Extended with `render_batch_id`, `scene_order`, `attempt`, and `artifact_id`.
 
-- Server key alignment: confirm whether `hermes_video_factory` is the intended live Video Factory key; adapter aliases already accept `video_factory_*` and `hermes_video_factory_*`, so no additional config alias fix is required unless a different key is desired.
-- Confirm `product_intelligence` is the intended live source for Product Intelligence stages, and that it exposes the expected tool names above.
-- Video Factory server/package: the literal repo path `D:/work/hermes-agent/mcp_servers/video_factory/server.py` is absent; confirm whether it is provided by an installed package or another path before live setup.
-- Credentials: confirm required secrets are present in local `.env` via the secret mechanism only. Do not provide values in chat/logs. Required credential names are not enumerated in repo source; confirm them with the user or server documentation.
-- Explicit authorization and spending cap: no live generation/render/export/publish should start without operator approval and a confirmed budget limit. Provider cost is unknown from static inspection.
-- Launch environment: ensure `HERMES_HOME` is set explicitly for worker launches so bootstrap dotenv/DB/config resolve from the same home.
-
-### 7.4 Staged Validation Plan
-
-1. **Static Contract Check**
-   - Verify required tool names and aliases against actual server registration.
-   - Stop Gate: mismatch or missing required tools → halt before worker startup.
-2. **Safe Selective PI/VF Discovery**
-   - Use a bounded discovery-only validation for only `product_intelligence` and `hermes_video_factory`; do not start or probe unrelated configured MCP servers.
-   - Stop Gate: discovery failure, missing tools, or unsafe startup side effects → halt.
-   - Unresolved: if selective discovery cannot be made startup-safe and durable-state isolated, report blocker instead of executing broad discovery.
-3. **Operator-Supervised Live Run**
-   - Start worker only after explicit operator authorization.
-   - Stop Gate: require human review at each HITL gate.
-   - Stop Gate: enforce SQLite budget reservation before render/export, but do not assume a configured spending cap unless explicitly set by the operator.
+### 8.3 Ingestion & Fail-Closed Controls
+- **Content-addressed reference ingestion**: External references are copied into project storage (`assets/references/<sha256>.<ext>`) before Product Lock. SHA-256 is validated on every read.
+- **Fail-closed path traversal protection**: Relative paths are enforced in database and manifests; absolute path escape or `..` traversals are rejected immediately.
+- **Atomic operations**: Same-filesystem staging directory (`.tmp/`) with `os.replace` ensures zero partial-write corruption during unexpected worker termination.
+- **Strict Video QC export binding**: `export()` independently queries `QCReportRepository` for `stage='VIDEO'` and `verdict='PASS'` matching the exact composite SHA-256.
+- **Reachability cleanup**: Prunes only unreferenced, failed artifacts while preserving all approved keyframes, QC reports, active timeline clips, and immutable export directories.

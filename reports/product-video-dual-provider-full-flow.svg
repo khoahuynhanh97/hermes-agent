@@ -1,0 +1,264 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="3000" viewBox="0 0 1800 3000">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07111f"/>
+      <stop offset="1" stop-color="#102238"/>
+    </linearGradient>
+    <linearGradient id="active" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f766e"/>
+      <stop offset="1" stop-color="#14b8a6"/>
+    </linearGradient>
+    <linearGradient id="provider" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1d4ed8"/>
+      <stop offset="1" stop-color="#3b82f6"/>
+    </linearGradient>
+    <linearGradient id="planned" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#92400e"/>
+      <stop offset="1" stop-color="#f59e0b"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000" flood-opacity=".28"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#8fb3d9"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#34d399"/>
+    </marker>
+    <style>
+      text { font-family: "Segoe UI", Arial, sans-serif; fill: #eef6ff; }
+      .title { font-size: 44px; font-weight: 750; }
+      .subtitle { font-size: 22px; fill: #a9c5df; }
+      .h { font-size: 25px; font-weight: 700; }
+      .body { font-size: 19px; fill: #d9e9f7; }
+      .small { font-size: 16px; fill: #bdd2e5; }
+      .tiny { font-size: 14px; fill: #9eb8cf; }
+      .box { stroke: #365674; stroke-width: 2; rx: 20; filter: url(#shadow); }
+      .line { fill: none; stroke: #8fb3d9; stroke-width: 4; marker-end: url(#arrow); }
+      .live-line { fill: none; stroke: #34d399; stroke-width: 4; marker-end: url(#arrow-green); }
+      .dash { stroke-dasharray: 10 8; }
+    </style>
+  </defs>
+
+  <rect width="1800" height="3000" fill="url(#bg)"/>
+  <circle cx="1550" cy="170" r="260" fill="#164e63" opacity=".18"/>
+  <circle cx="210" cy="1990" r="340" fill="#1d4ed8" opacity=".12"/>
+
+  <text x="900" y="75" text-anchor="middle" class="title">HERMES PERSONAL · DAILY PRODUCT-TO-VIDEO FULL FLOW</text>
+  <text x="900" y="112" text-anchor="middle" class="subtitle">Từ săn sản phẩm mỗi ngày → chọn 3–5 sản phẩm → sản xuất video qua API hoặc Google Flow</text>
+
+  <g transform="translate(425,140)">
+    <rect x="0" y="0" width="950" height="52" rx="26" fill="#0b1c2d" stroke="#294863"/>
+    <circle cx="45" cy="26" r="8" fill="#34d399"/><text x="65" y="33" class="small">Đã có / đang chạy</text>
+    <circle cx="295" cy="26" r="8" fill="#60a5fa"/><text x="315" y="33" class="small">Provider có thể chọn</text>
+    <circle cx="570" cy="26" r="8" fill="#fbbf24"/><text x="590" y="33" class="small">Kế hoạch / chưa nối</text>
+    <circle cx="800" cy="26" r="8" fill="#fb7185"/><text x="820" y="33" class="small">HITL bắt buộc</text>
+  </g>
+
+  <!-- Daily portfolio planning -->
+  <g>
+    <rect class="box" x="555" y="225" width="690" height="92" fill="#12263b"/>
+    <text x="900" y="260" text-anchor="middle" class="h">1 · DAILY TRIGGER &amp; STRATEGY REQUEST</text>
+    <text x="900" y="290" text-anchor="middle" class="body">Task Scheduler / Cron / catch-up → đọc request.txt</text>
+  </g>
+  <path class="line" d="M900 317 L900 350"/>
+
+  <g>
+    <rect class="box" x="430" y="360" width="940" height="105" fill="url(#active)"/>
+    <text x="900" y="399" text-anchor="middle" class="h">2 · PRODUCT-INTELLIGENCE DAILY SCOUT</text>
+    <text x="900" y="431" text-anchor="middle" class="body">Google Trends VN · open web · TikTok/Shopee cues · LLM/heuristic fallback</text>
+    <text x="900" y="455" text-anchor="middle" class="small">Áp tiêu chí ngành hàng · khoảng giá · thị trường · số lượng mục tiêu</text>
+  </g>
+  <path class="line" d="M900 465 L900 500"/>
+
+  <g>
+    <rect class="box" x="200" y="510" width="430" height="115" fill="#153b63"/>
+    <text x="415" y="550" text-anchor="middle" class="h">3 · CANDIDATE POOL</text>
+    <text x="415" y="582" text-anchor="middle" class="body">Danh sách 10–30 sản phẩm tiềm năng</text>
+    <text x="415" y="607" text-anchor="middle" class="small">Giá · category · trend signals · source URLs</text>
+
+    <rect class="box" x="685" y="510" width="430" height="115" fill="#153b63"/>
+    <text x="900" y="550" text-anchor="middle" class="h">4 · ENRICH &amp; VERIFY</text>
+    <text x="900" y="582" text-anchor="middle" class="body">Canonical identity · evidence · listings</text>
+    <text x="900" y="607" text-anchor="middle" class="small">Tải/validate/dedup ảnh sản phẩm 3–6 assets</text>
+
+    <rect class="box" x="1170" y="510" width="430" height="115" fill="#153b63"/>
+    <text x="1385" y="550" text-anchor="middle" class="h">5 · SCORE &amp; RANK</text>
+    <text x="1385" y="582" text-anchor="middle" class="body">Trend · product fit · content potential</text>
+    <text x="1385" y="607" text-anchor="middle" class="small">Data quality · media readiness · dedup/suppress</text>
+  </g>
+  <path class="line" d="M630 567 L685 567"/>
+  <path class="line" d="M1115 567 L1170 567"/>
+  <path class="line" d="M1385 625 L1385 655 L900 655 L900 675"/>
+
+  <g>
+    <rect class="box" x="380" y="685" width="1040" height="105" fill="#173c58" stroke="#60a5fa"/>
+    <text x="900" y="723" text-anchor="middle" class="h">6 · DAILY CONTENT SLATE PROPOSAL</text>
+    <text x="900" y="755" text-anchor="middle" class="body">Đề xuất 3–5 sản phẩm + priority + angle + hook + audience + channel + lịch sản xuất</text>
+    <text x="900" y="780" text-anchor="middle" class="small">Có thể chọn image_provider và video_provider riêng cho từng sản phẩm</text>
+  </g>
+  <path class="line" d="M900 790 L900 820"/>
+
+  <g>
+    <rect class="box" x="555" y="830" width="690" height="82" fill="#8f2942" stroke="#fb7185"/>
+    <text x="900" y="864" text-anchor="middle" class="h">HITL 0 · DUYỆT DAILY LINEUP 3–5 SẢN PHẨM</text>
+    <text x="900" y="892" text-anchor="middle" class="small">Approve · reject · reorder · chỉnh angle trước khi tạo video</text>
+  </g>
+  <path class="line" d="M900 912 L900 945"/>
+
+  <g transform="translate(0,700)">
+  <!-- Ingress -->
+  <g>
+    <rect class="box" x="555" y="225" width="690" height="105" fill="#12263b"/>
+    <text x="900" y="265" text-anchor="middle" class="h">7 · FAN-OUT 3–5 PRODUCT-TO-VIDEO WORKFLOWS</text>
+    <text x="900" y="297" text-anchor="middle" class="body">Mỗi sản phẩm có workflow_id, project_id, provider và trạng thái riêng</text>
+  </g>
+  <path class="line" d="M900 330 L900 375"/>
+
+  <!-- Research -->
+  <g>
+    <rect class="box" x="555" y="385" width="690" height="115" fill="url(#active)"/>
+    <text x="900" y="426" text-anchor="middle" class="h">8 · DEEP PRODUCT RESEARCH</text>
+    <text x="900" y="458" text-anchor="middle" class="body">Candidate + PDP / URL / ảnh mẫu → facts, claims, evidence, snapshot</text>
+    <text x="900" y="484" text-anchor="middle" class="small">Lưu SQLite + artifact refs bất biến</text>
+  </g>
+  <path class="line" d="M900 500 L900 545"/>
+
+  <!-- Gate 1 -->
+  <g>
+    <rect class="box" x="625" y="555" width="550" height="82" fill="#8f2942" stroke="#fb7185"/>
+    <text x="900" y="589" text-anchor="middle" class="h">HITL 1 · PRODUCT LOCK</text>
+    <text x="900" y="617" text-anchor="middle" class="small">Duyệt đúng sản phẩm, claims và nguồn tham chiếu</text>
+  </g>
+  <path class="line" d="M900 637 L900 677"/>
+
+  <!-- Pack + Brief -->
+  <g>
+    <rect class="box" x="345" y="687" width="500" height="108" fill="#12314a"/>
+    <text x="595" y="726" text-anchor="middle" class="h">9 · RESOURCE PACK</text>
+    <text x="595" y="757" text-anchor="middle" class="body">Ảnh sản phẩm · identity · restrictions</text>
+    <text x="595" y="782" text-anchor="middle" class="small">Khóa asset dùng xuyên suốt project</text>
+
+    <rect class="box" x="955" y="687" width="500" height="108" fill="#12314a"/>
+    <text x="1205" y="726" text-anchor="middle" class="h">10 · CREATIVE BRIEF</text>
+    <text x="1205" y="757" text-anchor="middle" class="body">Objective · audience · message · CTA</text>
+    <text x="1205" y="782" text-anchor="middle" class="small">Tone · pace · duration · platform</text>
+  </g>
+  <path class="line" d="M900 677 L900 715 L845 715"/>
+  <path class="line" d="M845 741 L955 741"/>
+  <path class="line" d="M1205 795 L1205 835 L900 835 L900 860"/>
+
+  <!-- Gate 2 -->
+  <g>
+    <rect class="box" x="625" y="870" width="550" height="82" fill="#8f2942" stroke="#fb7185"/>
+    <text x="900" y="904" text-anchor="middle" class="h">HITL 2 · BRIEF APPROVAL</text>
+    <text x="900" y="932" text-anchor="middle" class="small">Duyệt concept và thông điệp trước khi chia cảnh</text>
+  </g>
+  <path class="line" d="M900 952 L900 992"/>
+
+  <!-- Scene plan -->
+  <g>
+    <rect class="box" x="555" y="1002" width="690" height="100" fill="url(#active)"/>
+    <text x="900" y="1041" text-anchor="middle" class="h">11 · SCENE PLAN</text>
+    <text x="900" y="1073" text-anchor="middle" class="body">Hook → scene breakdown → shot intent → required resources</text>
+  </g>
+  <path class="line" d="M900 1102 L900 1142"/>
+
+  <!-- Gate 3 -->
+  <g>
+    <rect class="box" x="625" y="1152" width="550" height="82" fill="#8f2942" stroke="#fb7185"/>
+    <text x="900" y="1186" text-anchor="middle" class="h">HITL 3 · SCENE PLAN APPROVAL</text>
+    <text x="900" y="1214" text-anchor="middle" class="small">Duyệt cấu trúc cảnh trước khi tạo keyframe</text>
+  </g>
+  <path class="line" d="M900 1234 L900 1275"/>
+
+  <!-- Image router -->
+  <g>
+    <polygon points="900,1285 1080,1360 900,1435 720,1360" fill="#183a5a" stroke="#60a5fa" stroke-width="3" filter="url(#shadow)"/>
+    <text x="900" y="1348" text-anchor="middle" class="h">12 · IMAGE PROVIDER</text>
+    <text x="900" y="1378" text-anchor="middle" class="small">Chọn theo project/config</text>
+  </g>
+
+  <path class="live-line" d="M720 1360 L515 1360 L515 1405"/>
+  <path class="live-line" d="M1080 1360 L1285 1360 L1285 1405"/>
+
+  <g>
+    <rect class="box" x="230" y="1415" width="570" height="225" fill="url(#provider)"/>
+    <text x="515" y="1455" text-anchor="middle" class="h">A · VERTEX / API IMAGE</text>
+    <text x="515" y="1490" text-anchor="middle" class="body">Prompt + reference assets → API provider</text>
+    <text x="275" y="1530" class="small">• Không phụ thuộc UI browser</text>
+    <text x="275" y="1560" class="small">• Trả image URL/path theo contract chuẩn</text>
+    <text x="275" y="1590" class="small">• Phù hợp batch và automation ổn định</text>
+    <rect x="585" y="1602" width="180" height="30" rx="15" fill="#064e3b"/>
+    <text x="675" y="1623" text-anchor="middle" class="tiny">API PATH · ACTIVE</text>
+
+    <rect class="box" x="1000" y="1415" width="570" height="225" fill="#153b63" stroke="#60a5fa"/>
+    <text x="1285" y="1455" text-anchor="middle" class="h">B · VISUAL BROWSER MCP</text>
+    <text x="1285" y="1490" text-anchor="middle" class="body">Playwright + persistent Chrome profile</text>
+    <text x="1045" y="1530" class="small">• Mở/tái sử dụng Google Flow project</text>
+    <text x="1045" y="1560" class="small">• Upload ảnh mẫu → nhập prompt → Generate</text>
+    <text x="1045" y="1590" class="small">• Download ảnh + evidence + QC/retry</text>
+    <rect x="1355" y="1602" width="180" height="30" rx="15" fill="#064e3b"/>
+    <text x="1445" y="1623" text-anchor="middle" class="tiny">IMAGE PATH · ACTIVE</text>
+  </g>
+
+  <path class="live-line" d="M515 1640 L515 1685 L900 1685 L900 1710"/>
+  <path class="live-line" d="M1285 1640 L1285 1685 L900 1685 L900 1710"/>
+
+  <!-- Storyboard -->
+  <g>
+    <rect class="box" x="555" y="1720" width="690" height="100" fill="url(#active)"/>
+    <text x="900" y="1759" text-anchor="middle" class="h">13 · VISUAL STORYBOARD</text>
+    <text x="900" y="1791" text-anchor="middle" class="body">Keyframes + prompts + frame identity + contact sheet</text>
+  </g>
+  <path class="line" d="M900 1820 L900 1855"/>
+
+  <!-- Gate 4 -->
+  <g>
+    <rect class="box" x="625" y="1865" width="550" height="82" fill="#8f2942" stroke="#fb7185"/>
+    <text x="900" y="1899" text-anchor="middle" class="h">HITL 4 · STORYBOARD APPROVAL</text>
+    <text x="900" y="1927" text-anchor="middle" class="small">Duyệt hình, continuity và identity trước render</text>
+  </g>
+
+  <!-- Video provider compact branch -->
+  <path class="line" d="M900 1947 L900 1980"/>
+  <g>
+    <polygon points="900,1990 1045,2048 900,2106 755,2048" fill="#183a5a" stroke="#60a5fa" stroke-width="3"/>
+    <text x="900" y="2041" text-anchor="middle" class="h">14 · VIDEO PROVIDER</text>
+    <text x="900" y="2070" text-anchor="middle" class="tiny">Persist lựa chọn + job ID</text>
+
+    <rect class="box" x="235" y="1985" width="430" height="135" fill="url(#provider)"/>
+    <text x="450" y="2025" text-anchor="middle" class="h">VERTEX AI VEO</text>
+    <text x="450" y="2057" text-anchor="middle" class="body">API submit → operation ID → poll</text>
+    <text x="450" y="2087" text-anchor="middle" class="small">ĐÃ CÓ PROVIDER</text>
+
+    <rect class="box" x="1135" y="1985" width="430" height="135" fill="url(#planned)" stroke="#fbbf24"/>
+    <text x="1350" y="2025" text-anchor="middle" class="h">GOOGLE FLOW VIDEO</text>
+    <text x="1350" y="2057" text-anchor="middle" class="body">Playwright → generate → download</text>
+    <text x="1350" y="2087" text-anchor="middle" class="small">KẾ HOẠCH · CHƯA TRIỂN KHAI</text>
+  </g>
+  <path class="live-line" d="M755 2048 L665 2048"/>
+  <path class="line dash" d="M1045 2048 L1135 2048"/>
+
+  <!-- Finish rail at bottom -->
+  <path class="live-line" d="M450 2120 L450 2160 L900 2160"/>
+  <path class="line dash" d="M1350 2120 L1350 2160 L900 2160"/>
+  <g>
+    <rect x="710" y="2135" width="380" height="54" rx="27" fill="#0f766e" stroke="#34d399" stroke-width="2"/>
+    <text x="900" y="2170" text-anchor="middle" class="h">RENDER → POLL → MP4</text>
+  </g>
+  <path class="line" d="M900 2189 L900 2215"/>
+  <g>
+    <rect x="340" y="2220" width="1120" height="58" rx="18" fill="#8f2942" stroke="#fb7185" stroke-width="2"/>
+    <text x="900" y="2257" text-anchor="middle" class="h">HITL 5 FINAL APPROVAL → EXPORT → COMPLETED → GỬI FILE CHO NGƯỜI DÙNG</text>
+  </g>
+
+  <!-- Cross-cutting rails -->
+  <g>
+    <rect x="35" y="385" width="150" height="1590" rx="24" fill="#0b1c2d" stroke="#2c506f" stroke-width="2"/>
+    <text transform="translate(92 1180) rotate(-90)" text-anchor="middle" class="h">SQLITE · WORKFLOW STATE · OUTBOX · CHECKPOINT · REPLAY SAFETY</text>
+    <rect x="1615" y="385" width="150" height="1590" rx="24" fill="#0b1c2d" stroke="#2c506f" stroke-width="2"/>
+    <text transform="translate(1708 1180) rotate(90)" text-anchor="middle" class="h">APPROVAL RECEIPTS · BUDGET · ARTIFACT REFS · AUDIT EVIDENCE</text>
+  </g>
+  </g>
+</svg>

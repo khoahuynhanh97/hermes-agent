@@ -356,10 +356,40 @@ class Supervisor:
         if child.poll() is not None:
             return False
 
-        if probe.probe_type == "noop" or probe.probe_type == "exec":
-            if probe.endpoint == "video_factory_stdio" or "video_factory" in probe.endpoint:
-                return probe_video_factory_stdio(timeout_seconds=probe.timeout_seconds) and child.is_alive()
+        if probe.probe_type == "noop":
             return child.is_alive()
+
+        if probe.probe_type == "exec":
+            while time.monotonic() <= deadline:
+                if child.poll() is not None:
+                    return False
+                remaining = max(0.0, deadline - time.monotonic())
+                if remaining <= 0:
+                    break
+                if probe.endpoint == "video_factory_stdio":
+                    if probe_video_factory_stdio(timeout_seconds=min(remaining, probe.timeout_seconds)) and child.is_alive():
+                        return True
+                elif probe.endpoint == "mcp_snapshot_check":
+                    try:
+                        cmd_timeout = min(remaining, 5.0)
+                        result = subprocess.run(
+                            [spec.argv[0], "-m", "hermes_personal.capabilities.mcp_runner",
+                             "--action", "check", "--expected-pid", str(child.pid)],
+                            cwd=str(spec.cwd), shell=False, check=False,
+                            timeout=cmd_timeout,
+                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                        if result.returncode == 0 and child.is_alive():
+                            return True
+                    except (OSError, subprocess.TimeoutExpired):
+                        pass
+                else:
+                    return False
+                remaining = deadline - time.monotonic()
+                if remaining > 0:
+                    self._sleep(min(max(0.001, probe.interval_seconds), remaining))
+            return False
 
         if probe.probe_type == "http":
             while time.monotonic() <= deadline:

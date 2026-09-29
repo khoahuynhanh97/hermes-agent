@@ -24,6 +24,7 @@ source and tests.
 
 | Document | Purpose |
 | --- | --- |
+| [Master Documentation](HERMES_PERSONAL_MASTER_DOC.md) | **Single Source of Truth (SSOT):** Bounded context, invariants, Video Factory, Governed Learning, và Windows operations |
 | [Architecture](architecture.md) | Bounded contexts, turn path, startup, and state machines |
 | [Infrastructure](infrastructure.md) | Processes, SQLite, filesystem, workers, and deployment gaps |
 | [Security and auth](security-and-auth.md) | Identity, owner isolation, secrets, policy, and known auth limitations |
@@ -43,12 +44,24 @@ source and tests.
 - [Operations](hermes-personal/operations.md)
 - [Workflow implementation notes](hermes-personal/workflows.md)
 - [Product-video migration](hermes-personal/product-video-migration.md)
-- [Product-video runbook](hermes-personal/product-video-runbook.md)
+- [Product-video runbook](hermes-personal/product-video-runbook.md) *(operational companion to the canonical master spec)*
 - [Cutover runbook](hermes-personal/cutover-runbook.md)
+
+## Product-Intelligence → AI Video Factory (canonical)
+
+The Product Video pipeline has its own canonical specification and implementation plan. These supersede all earlier per-date design and plan files under `docs/superpowers/`.
+
+| Document | Purpose |
+| --- | --- |
+| [Product Video Master Spec](superpowers/specs/product-video-master-spec.md) | Architecture, contracts, state machine, QC policy, budget model, export schema |
+| [Product Video Master Plan](superpowers/plans/product-video-master-plan.md) | Phased implementation roadmap (P0-A → P0-B → P0 live → P0-C hardening) |
+
+> **Historical files** in `docs/superpowers/specs/` and `docs/superpowers/plans/` dated before 2026-09-16 are preserved for reference but are superseded by the canonical docs above. Do not use them as implementation targets.
 
 ## Current implementation boundary
 
-The implemented core uses a single upstream `run_agent.AIAgent` through\n`HermesTurnService`, SQLite persistence, local filesystem artifacts, in-process
+The implemented core uses a single upstream `run_agent.AIAgent` through
+`HermesTurnService`, SQLite persistence, local filesystem artifacts, in-process
 job threads, and a subprocess supervisor abstraction. RabbitMQ, Kafka, Redis,
 and a dead-letter queue are not part of the current implementation.
 

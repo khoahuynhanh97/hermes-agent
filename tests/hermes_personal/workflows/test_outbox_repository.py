@@ -49,6 +49,33 @@ def test_competing_workers_isolation():
     assert w1_ids.isdisjoint(w2_ids)
 
 
+def test_claim_can_be_restricted_to_workflow_prefix():
+    conn = connect(":memory:")
+    repo = OutboxRepository(conn)
+    repo.enqueue("unrelated-workflow", "other")
+    repo.enqueue("pv-daily-first", "daily-1")
+    repo.enqueue("pv-daily-second", "daily-2")
+
+    claims = repo.claim(
+        "daily-worker",
+        batch_size=5,
+        workflow_id_prefix="pv-daily-",
+    )
+
+    assert [claim.workflow_id for claim in claims] == [
+        "pv-daily-first",
+        "pv-daily-second",
+    ]
+    remaining = conn.execute(
+        "SELECT workflow_id, state FROM workflow_outbox ORDER BY outbox_id"
+    ).fetchall()
+    assert [(row["workflow_id"], row["state"]) for row in remaining] == [
+        ("unrelated-workflow", "pending"),
+        ("pv-daily-first", "leased"),
+        ("pv-daily-second", "leased"),
+    ]
+
+
 def test_ack_success_and_stale_ack_rejection():
     conn = connect(":memory:")
     repo = OutboxRepository(conn)

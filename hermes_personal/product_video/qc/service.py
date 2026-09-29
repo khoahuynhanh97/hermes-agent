@@ -12,7 +12,7 @@ from typing import Any
 from hermes_personal.product_video.qc.evaluator import MultimodalEvaluator
 from hermes_personal.product_video.qc.image_qc import compute_artifact_digest, run_image_qc
 from hermes_personal.product_video.qc.keyframe_qc import run_keyframe_qc
-from hermes_personal.product_video.qc.models import QCStage
+from hermes_personal.product_video.qc.models import QCStage, QCVerdict
 from hermes_personal.product_video.qc.normalization import normalize_product_identity
 from hermes_personal.product_video.qc.fingerprint import qc_fingerprint
 from hermes_personal.product_video.qc.repository import QCReportRepository
@@ -25,6 +25,18 @@ def _file_url_to_path(value: str | Path) -> Path:
     from hermes_personal.product_video.storage.layout import get_workspace_layout
     ws = get_workspace_layout()
     return ws.resolve_path(value)
+
+
+def _reference_url_to_path(value: str | Path) -> Path:
+    """Resolve approved external source images without widening video output paths."""
+    from hermes_personal.product_video.storage.layout import (
+        get_trusted_exchange_roots,
+        get_workspace_layout,
+    )
+
+    return get_workspace_layout().resolve_path(
+        value, allowed_roots=get_trusted_exchange_roots(),
+    )
 
 
 def _payload_dict(artifact: dict[str, Any] | None) -> dict[str, Any]:
@@ -202,7 +214,24 @@ class ProductVideoQCService:
                 return attempt_id, requested_number, None
             if len(rows) >= 3:
                 return None, None, "QC maximum of 3 total attempts has been consumed"
-            if rows and str(rows[0]["status"]) != "technical_unknown":
+            video_rework = False
+            if stage == QCStage.VIDEO and rows and str(rows[0]["status"]) == "semantic_fail":
+                retry_report_id = str(aggregate.get("video_retry_report_id") or "")
+                previous_report = self.repository.get_report(retry_report_id) if retry_report_id else None
+                current_render = aggregate.get("render_result") or {}
+                current_digest = str(current_render.get("sha256") or "").removeprefix("sha256:")
+                video_rework = bool(
+                    aggregate.get("state") in {"rendering", "WaitingForOperator"}
+                    and previous_report is not None
+                    and previous_report.verdict == QCVerdict.FAIL
+                    and previous_report.artifact_digest != current_digest
+                    and current_digest
+                )
+            if rows and str(rows[0]["status"]) != "technical_unknown" and not (
+                stage == QCStage.KEYFRAME
+                and isinstance(aggregate.get("keyframe_recovery_plan"), dict)
+                and aggregate.get("keyframe_recovery_plan", {}).get("frames")
+            ) and not video_rework:
                 return None, None, "Previous QC result is not a retryable technical UNKNOWN"
             number = len(rows) + 1
             return f"{authorization_id}:{stage.value}:{number}", number, None
@@ -265,7 +294,6 @@ class ProductVideoQCService:
         def _finish(fingerprint: str, report: Any, allocation: Any | None) -> dict[str, Any]:
             self.repository.complete_claim(workflow_id, stage, fingerprint, report.report_id)
             if allocation is not None:
-                self.budget_repository.commit_budget(allocation)
                 outcome = "pass" if getattr(report.verdict, "value", report.verdict) == "pass" else "semantic_fail"
                 if stage == QCStage.KEYFRAME and outcome == "semantic_fail":
                     package = artifact_override or aggregate.get("storyboard") or {}
@@ -290,10 +318,30 @@ class ProductVideoQCService:
                         if isinstance(item, dict)
                     )
                     outcome = "technical_unknown" if technical else "unknown"
-                self.connection.execute(
-                    """UPDATE product_video_operation_attempt SET status = ?, updated_at = ? WHERE attempt_id = ?""",
-                    (outcome, datetime.now(timezone.utc).isoformat(), str(effective_attempt_id)),
+                # A disabled Vertex service rejects every image before inference.
+                # Keep the failed attempt and QC report, but do not charge its
+                # reserved ceiling against later stages of the same workflow.
+                items = report.findings.get("items", []) if isinstance(report.findings, dict) else []
+                service_disabled = (
+                    stage == QCStage.IMAGE
+                    and outcome == "technical_unknown"
+                    and bool(items)
+                    and all(
+                        isinstance(item, dict)
+                        and "MultimodalEvaluator HTTP 403:" in str(item.get("reason", ""))
+                        and "SERVICE_DISABLED" in str(item.get("reason", ""))
+                        for item in items
+                    )
                 )
+                if service_disabled:
+                    self.budget_repository.release_budget(allocation)
+                else:
+                    self.budget_repository.commit_budget(allocation)
+                with self.connection:
+                    self.connection.execute(
+                        """UPDATE product_video_operation_attempt SET status = ?, updated_at = ? WHERE attempt_id = ?""",
+                        (outcome, datetime.now(timezone.utc).isoformat(), str(effective_attempt_id)),
+                    )
             result = {
                 "status": "completed",
                 "stage": stage.value,
@@ -370,7 +418,7 @@ class ProductVideoQCService:
                 model_identifier=str(getattr(evaluator, "model", "")),
                 storyboard=package,
                 reference_digests=[
-                    compute_file_sha256(_file_url_to_path(path))
+                    compute_file_sha256(_reference_url_to_path(path))
                     for item in package.get("generated_keyframes", [])
                     if isinstance(item, dict)
                     for path in item.get("reference_image_paths", [])
@@ -393,6 +441,90 @@ class ProductVideoQCService:
             return _finish(fingerprint, report, allocation)
 
         render_artifact = artifact_override or aggregate.get("render_result") or {}
+        required_render_lineage = (
+            "owner_user_id",
+            "project_id",
+            "workflow_id",
+            "artifact_id",
+            "artifact_version",
+            "sha256",
+        )
+        missing_render_lineage = [
+            field
+            for field in required_render_lineage
+            if field not in render_artifact
+            or render_artifact[field] is None
+            or (
+                isinstance(render_artifact[field], str)
+                and not render_artifact[field].strip()
+            )
+        ]
+        if missing_render_lineage:
+            return {
+                "status": "failed",
+                "stage": stage.value,
+                "reason": "Render artifact is missing canonical lineage fields: "
+                + ", ".join(missing_render_lineage),
+            }
+
+        render_owner = str(render_artifact["owner_user_id"]).strip()
+        render_project = str(render_artifact["project_id"]).strip()
+        render_workflow = str(render_artifact["workflow_id"]).strip()
+        artifact_id = str(render_artifact["artifact_id"]).strip()
+        if render_owner != owner_user_id:
+            return {
+                "status": "failed",
+                "stage": stage.value,
+                "reason": "Render owner_user_id does not match workflow owner_user_id",
+            }
+        if render_project != project_id:
+            return {
+                "status": "failed",
+                "stage": stage.value,
+                "reason": "Render project_id does not match workflow project_id",
+            }
+        if render_workflow != workflow_id:
+            return {
+                "status": "failed",
+                "stage": stage.value,
+                "reason": "Render workflow_id does not match the workflow being evaluated",
+            }
+
+        render_ver_raw = render_artifact["artifact_version"]
+        if (
+            isinstance(render_ver_raw, bool)
+            or not isinstance(render_ver_raw, int)
+            or render_ver_raw < 1
+        ):
+            return {
+                "status": "failed",
+                "stage": stage.value,
+                "reason": "Render artifact_version must be a positive integer",
+            }
+        render_ver = render_ver_raw
+        compatibility_version = render_artifact.get("version")
+        if compatibility_version is not None and compatibility_version != render_ver:
+            return {
+                "status": "failed",
+                "stage": stage.value,
+                "reason": "Render version does not match artifact_version",
+            }
+
+        expected_sha = (
+            str(render_artifact["sha256"])
+            .strip()
+            .removeprefix("sha256:")
+            .lower()
+        )
+        if len(expected_sha) != 64 or any(
+            ch not in "0123456789abcdef" for ch in expected_sha
+        ):
+            return {
+                "status": "failed",
+                "stage": stage.value,
+                "reason": "Render sha256 must be a canonical 64-character hexadecimal digest",
+            }
+
         storyboard = storyboard_override or aggregate.get("storyboard") or {}
         storyboard = _payload_dict(storyboard) or storyboard
         if isinstance(storyboard, dict):
@@ -435,12 +567,16 @@ class ProductVideoQCService:
         )
         if image_report is None or image_report.verdict.value != "pass":
             return {"status": "pending", "stage": stage.value, "reason": "Current image QC PASS is required before video QC"}
-        approved_paths = [
-            item["uri"]
-            for item in image_report.findings.get("items", [])
-            if item.get("eligible") and item.get("uri", "").startswith("file://")
-        ]
-        approved_paths = [_file_url_to_path(path) for path in approved_paths]
+        reference_manifest = image_report.findings.get("eligible_reference_manifest", [])
+        if not isinstance(reference_manifest, list) or not reference_manifest:
+            reference_manifest = image_report.findings.get("items", [])
+        approved_paths = []
+        for item in reference_manifest if isinstance(reference_manifest, list) else []:
+            if not isinstance(item, dict) or not item.get("eligible"):
+                continue
+            reference_value = item.get("local_path") or item.get("uri") or item.get("path")
+            if reference_value:
+                approved_paths.append(_reference_url_to_path(reference_value))
         if len(approved_paths) < 2 or any(not path.is_file() for path in approved_paths):
             return {"status": "unknown", "stage": stage.value, "reason": "Current image QC has no usable eligible reference manifest"}
         evaluator = self.evaluator or MultimodalEvaluator(fake_mode=provider_mode == "fake")
@@ -463,6 +599,26 @@ class ProductVideoQCService:
         expected_duration = float(duration_value or 16.0)
         video_path = _file_url_to_path(video_value)
         video_sha = compute_file_sha256(video_path)
+
+        if video_sha != expected_sha:
+            return {
+                "status": "failed",
+                "stage": stage.value,
+                "reason": f"Render artifact SHA ({expected_sha}) does not match video on disk ({video_sha})",
+            }
+
+        render_payload = _payload_dict(render_artifact)
+        raw_scene_providers = render_payload.get("scene_provider_kinds")
+        scene_provider_kinds = (
+            raw_scene_providers
+            if isinstance(raw_scene_providers, list)
+            and render_payload.get("artifact_id") == artifact_id
+            and str(render_payload.get("sha256") or "").removeprefix("sha256:") == video_sha
+            and render_payload.get("render_id") == render_artifact.get("render_id")
+            and all(kind in {"google_flow", "vertex_ai"} for kind in raw_scene_providers)
+            else []
+        )
+
         fingerprint = qc_fingerprint(
             workflow_id,
             stage,
@@ -475,6 +631,7 @@ class ProductVideoQCService:
             video_sha256=video_sha,
             reference_digests=[compute_file_sha256(path) for path in approved_paths],
             attempt_id=str(effective_attempt_id),
+            scene_provider_kinds=scene_provider_kinds,
         )
         allocation, completed = _admit(fingerprint)
         if completed:
@@ -491,6 +648,9 @@ class ProductVideoQCService:
             attempt_id=str(effective_attempt_id),
             owner_user_id=owner_user_id,
             project_id=project_id,
+            artifact_id=artifact_id,
+            artifact_version=render_ver,
+            scene_provider_kinds=scene_provider_kinds,
         )
         result = _finish(fingerprint, report, allocation)
         result["video_sha256"] = video_sha

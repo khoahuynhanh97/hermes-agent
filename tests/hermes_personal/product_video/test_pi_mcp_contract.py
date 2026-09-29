@@ -33,6 +33,7 @@ class StrictPIMCPToolRegistry:
     def get_all_tool_names(self) -> set[str]:
         return {
             "mcp__product_intelligence__research_product",
+            "mcp__product_intelligence__get_product_research",
             "mcp__product_intelligence__build_resource_pack",
             "mcp__product_intelligence__lock_resource_pack",
         }
@@ -81,6 +82,18 @@ class StrictPIMCPToolRegistry:
             self.research_store[snap_id] = res
             return res
 
+        elif tool_name == "mcp__product_intelligence__get_product_research":
+            snap_id = payload.get("snapshot_id")
+            result = self.research_store.get(snap_id)
+            if result is None:
+                return {"status": "not_found", "snapshot_id": snap_id}
+            return {
+                "status": "found",
+                "snapshot_id": snap_id,
+                "research_id": result.get("research_id"),
+                "result": result,
+            }
+
         elif tool_name == "mcp__product_intelligence__build_resource_pack":
             # Strict signature check: must receive 'snapshot_id', and optionally 'variant_id'
             forbidden_keys = {"research_result", "pack_dict", "product_name", "keywords", "url"}
@@ -103,11 +116,14 @@ class StrictPIMCPToolRegistry:
                 "reason": None,
                 "canonical_product_id": f"prod_{snap_id}",
                 "variant_id": payload.get("variant_id"),
-                "media_count": 1,
+                "media_count": 2,
                 "claims": [{"text": "High quality product", "status": "verified"}],
                 "restrictions": [],
                 "completeness": {"has_images": True, "has_specs": True},
-                "assets_mapping": {f"asset_{snap_id}_01": f"/data/media/{snap_id}_01.jpg"},
+                "assets_mapping": {
+                    f"asset_{snap_id}_01": f"/data/media/{snap_id}_01.jpg",
+                    f"asset_{snap_id}_02": f"/data/media/{snap_id}_02.jpg",
+                },
                 "scene_plan": ["intro", "features", "outro"],
             }
             self.pack_store[pack_id] = pack_res
@@ -145,7 +161,14 @@ class StrictPIMCPToolRegistry:
                         "media_role": "original",
                         "source_url": "https://example.com/image.jpg",
                         "match_confidence": 0.98,
-                    }
+                    },
+                    {
+                        "asset_id": f"asset_{snap_id}_02",
+                        "local_path": f"/data/media/{snap_id}_02.jpg",
+                        "media_role": "original",
+                        "source_url": "https://example.com/image2.jpg",
+                        "match_confidence": 0.95,
+                    },
                 ],
             }
             self.lock_store[lock_id] = lock_res
@@ -196,6 +219,7 @@ def test_pi_adapter_outgoing_parameter_mapping():
     }
     assert "research_result" not in payload2
     assert pack_res["resource_pack_id"] == "rp_snap_001"
+    assert pack_res["raw_result"]["version"] == pack_res["version"] == 1
     assert pack_res["pack_status"] == "ready_to_lock"
     assert pack_res["canonical_product_id"] == "prod_snap_001"
     assert pack_res["variant_id"] == "var_v1"
@@ -216,8 +240,57 @@ def test_pi_adapter_outgoing_parameter_mapping():
     assert lock_res["snapshot_id"] == "snap_001"
     assert lock_res["canonical_product_id"] == "prod_snap_001"
     assert lock_res["variant_id"] == "var_v1"
-    assert len(lock_res["assets"]) == 1
+    assert len(lock_res["assets"]) == 2
     assert lock_res["assets"][0]["asset_id"] == "asset_snap_001_01"
+
+
+def test_pi_adapter_discovers_sources_from_manifest_identity_when_pdp_is_missing():
+    registry = StrictPIMCPToolRegistry()
+    adapter = MCPProductIntelligenceAdapter(
+        registry,
+        {"research": "mcp__product_intelligence__research_product"},
+    )
+
+    with pytest.raises(TerminalJobError):
+        adapter.research(
+            product_name="Đèn bàn thông minh Xiaomi Mijia Desk Lamp Lite",
+            keywords=["Xiaomi Mijia Desk Lamp Lite"],
+            pdp_url=None,
+            brand="Xiaomi",
+            model="Mijia Desk Lamp Lite",
+            canonical_product_key="xiaomi:mijia-desk-lamp-lite",
+        )
+
+    _tool, payload = registry.dispatched_calls[0]
+    assert payload["brand"] == "Xiaomi"
+    assert payload["model"] == "Mijia Desk Lamp Lite"
+    assert payload["canonical_product_key"] == "xiaomi:mijia-desk-lamp-lite"
+    assert payload["discover_sources"] is True
+
+
+def test_pi_adapter_reuses_persisted_research_snapshot_without_rerunning_research():
+    registry = StrictPIMCPToolRegistry()
+    wire_tools = {
+        "research": "mcp__product_intelligence__research_product",
+        "get_research": "mcp__product_intelligence__get_product_research",
+    }
+    adapter = MCPProductIntelligenceAdapter(registry, wire_tools)
+
+    first = adapter.research("Snapshot Lamp", ["lamp"])
+    registry.dispatched_calls.clear()
+    reused = adapter.research(
+        "Snapshot Lamp",
+        ["lamp"],
+        research_snapshot_id=first["snapshot_id"],
+        brand="Acme",
+        model="Model-X",
+    )
+
+    assert registry.dispatched_calls == [
+        ("mcp__product_intelligence__get_product_research", {"snapshot_id": first["snapshot_id"]})
+    ]
+    assert reused["snapshot_id"] == first["snapshot_id"]
+    assert reused["persistence_status"] == "saved"
 
 
 def test_build_resource_pack_missing_or_failed_snapshot_fails_closed():
@@ -375,7 +448,7 @@ def test_product_video_job_handlers_roundtrip_identifiers_through_sqlite(tmp_pat
     # Persist pack result
     repo.commit_workflow(
         workflow_id=wf_id,
-        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.BUILDING_RESOURCE_PACK.value, "resource_pack": pack_art}),
+        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.LOCKING_RESOURCE_PACK.value, "resource_pack": pack_art}),
         events=[{"event_id": "e_pack", "command_id": "c_pack", "event_type": "ResourcePackBuilt", "timestamp": "2026-08-28T00:02:00Z", "payload": {"artifact": pack_art}}],
         expected_version=2,
     )
@@ -391,7 +464,7 @@ def test_product_video_job_handlers_roundtrip_identifiers_through_sqlite(tmp_pat
     assert lock_art["canonical_product_id"] == "prod_snap_001"
     assert lock_art["owner_user_id"] == "operator_user"
     assert lock_art["manifest_digest"] == "sha256:manifest_digest_rp_snap_001"
-    assert len(lock_art["assets"]) == 1
+    assert len(lock_art["assets"]) == 2
     assert lock_art["assets"][0]["asset_id"] == "asset_snap_001_01"
 
     # Persist locked artifact
@@ -402,7 +475,6 @@ def test_product_video_job_handlers_roundtrip_identifiers_through_sqlite(tmp_pat
         expected_version=3,
     )
     conn.close()
-
     # Step 4: Reopen SQLite connection from scratch to verify durability across restart
     conn2 = connect(db_file)
     repo2 = WorkflowRepository(conn2)
@@ -460,6 +532,12 @@ def test_handlers_missing_prerequisites_return_non_retryable_failed(tmp_path):
     assert fail_res1.code == "PREREQUISITE_FAILED"
 
     # 2. lock_job with non-lockable status -> JobFailed(retryable=False)
+    repo.commit_workflow(
+        workflow_id=wf_id,
+        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.LOCKING_RESOURCE_PACK.value}),
+        events=[{"event_id": "e_lock_init", "command_id": "c_lock_init", "event_type": "ReadyToLock", "timestamp": "2026-08-28T00:01:00Z", "payload": {}}],
+        expected_version=1,
+    )
     fail_res2 = handlers.lock_job(ctx, pack_dict={"resource_pack_id": "rp_123", "pack_status": "needs_review"})
     assert isinstance(fail_res2, JobFailed)
     assert fail_res2.retryable is False
@@ -513,7 +591,200 @@ def test_fake_mode_compatibility_retained(tmp_path):
     res_pack = handlers.resource_pack_job(ctx, research_result=res.artifact_ref)
     assert isinstance(res_pack, JobSucceeded)
 
+    # Transition to LOCKING_RESOURCE_PACK
+    repo.commit_workflow(
+        workflow_id=wf_id,
+        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.LOCKING_RESOURCE_PACK.value, "resource_pack": res_pack.artifact_ref}),
+        events=[{"event_id": "e_pack", "command_id": "c_pack", "event_type": "ResourcePackBuilt", "timestamp": "2026-08-28T00:02:00Z", "payload": {}}],
+        expected_version=2,
+    )
+
     # Lock pack with fake output
     res_lock = handlers.lock_job(ctx, pack_dict=res_pack.artifact_ref)
     assert isinstance(res_lock, JobSucceeded)
+    conn.close()
+
+
+def test_pi_adapter_fails_closed_on_semantic_evidence_failures():
+    """Test that MCPProductIntelligenceAdapter fails closed on no evidence, empty products, or identity mismatch."""
+    class CustomMockRegistry:
+        def __init__(self, response: dict[str, Any]) -> None:
+            self.response = response
+
+        def get_all_tool_names(self) -> set[str]:
+            return {"mcp__product_intelligence__research_product"}
+
+        def dispatch(self, tool_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+            return self.response
+
+    wire_tools = {"research": "mcp__product_intelligence__research_product"}
+
+    # 1. status == "no_product_evidence"
+    reg1 = CustomMockRegistry({
+        "status": "no_product_evidence",
+        "snapshot_id": "snap_err_1",
+        "persistence_status": "saved",
+        "report": {"text": "nothing found"},
+    })
+    adapter1 = MCPProductIntelligenceAdapter(reg1, wire_tools)
+    with pytest.raises(TerminalJobError) as exc1:
+        adapter1.research(product_name="Unknown Device", keywords=["unknown"])
+    assert exc1.value.code == "PI_RESEARCH_FAILED"
+
+    # 2. empty canonical_products
+    reg2 = CustomMockRegistry({
+        "status": "success",
+        "snapshot_id": "snap_err_2",
+        "persistence_status": "saved",
+        "canonical_products": [],
+        "report": {"text": "scraped but no canonical identity"},
+    })
+    adapter2 = MCPProductIntelligenceAdapter(reg2, wire_tools)
+    with pytest.raises(TerminalJobError) as exc2:
+        adapter2.research(product_name="Unknown Device", keywords=["unknown"])
+    assert exc2.value.code == "NO_PRODUCT_EVIDENCE"
+
+    # A summary identity is advisory only; it must not be promoted into
+    # canonical evidence when the persisted PI result is empty.
+    reg2b = CustomMockRegistry({
+        "status": "success",
+        "snapshot_id": "snap_err_2b",
+        "persistence_status": "saved",
+        "canonical_products": [],
+        "media_assets": [{"asset_id": "a1", "local_path": "/tmp/a1.jpg"}],
+        "summary": {"research_identity": {"name": "Looks like a product", "brand": "Example"}},
+        "report": {"text": "identity was only a query summary"},
+    })
+    adapter2b = MCPProductIntelligenceAdapter(reg2b, wire_tools)
+    with pytest.raises(TerminalJobError) as exc2b:
+        adapter2b.research(product_name="Looks like a product", keywords=["example"])
+    assert exc2b.value.code == "NO_PRODUCT_EVIDENCE"
+
+    # 3. identity mismatch: requested Apple AirPods Max, received Sony WH-1000XM5
+    reg3 = CustomMockRegistry({
+        "status": "success",
+        "snapshot_id": "snap_err_3",
+        "persistence_status": "saved",
+        "canonical_products": [{"brand": "Sony", "model": "WH-1000XM5"}],
+        "report": {"text": "found Sony headphones instead"},
+    })
+    adapter3 = MCPProductIntelligenceAdapter(reg3, wire_tools)
+    with pytest.raises(TerminalJobError) as exc3:
+        adapter3.research(
+            product_name="AirPods Max",
+            keywords=["apple", "headphones"],
+            brand="Apple",
+            model="AirPods Max",
+        )
+    assert exc3.value.code == "IDENTITY_MISMATCH"
+
+
+def test_pi_adapter_fails_closed_on_insufficient_media_or_non_lockable_status():
+    """Test that build_resource_pack fails closed on < 2 media assets or non-ready_to_lock status."""
+    class CustomMockRegistry:
+        def __init__(self, response: dict[str, Any]) -> None:
+            self.response = response
+
+        def get_all_tool_names(self) -> set[str]:
+            return {"mcp__product_intelligence__build_resource_pack"}
+
+        def dispatch(self, tool_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+            return self.response
+
+    wire_tools = {"build_resource_pack": "mcp__product_intelligence__build_resource_pack"}
+
+    # 1. media_count < 2
+    reg1 = CustomMockRegistry({
+        "status": "built",
+        "resource_pack_id": "rp_few_media",
+        "pack_status": "ready_to_lock",
+        "media_count": 1,
+        "assets_mapping": {"asset_01": "/path/1.jpg"},
+    })
+    adapter1 = MCPProductIntelligenceAdapter(reg1, wire_tools)
+    with pytest.raises(TerminalJobError) as exc1:
+        adapter1.build_resource_pack({"snapshot_id": "snap_01", "persistence_status": "saved"})
+    assert exc1.value.code == "INSUFFICIENT_MEDIA_ASSETS"
+
+    # 2. pack_status != "ready_to_lock"
+    reg2 = CustomMockRegistry({
+        "status": "built",
+        "resource_pack_id": "rp_not_ready",
+        "pack_status": "needs_review",
+        "media_count": 3,
+        "assets_mapping": {"asset_01": "/1.jpg", "asset_02": "/2.jpg", "asset_03": "/3.jpg"},
+    })
+    adapter2 = MCPProductIntelligenceAdapter(reg2, wire_tools)
+    with pytest.raises(TerminalJobError) as exc2:
+        adapter2.build_resource_pack({"snapshot_id": "snap_01", "persistence_status": "saved"})
+    assert exc2.value.code == "NON_LOCKABLE_STATUS"
+
+    # Ambiguous identity produces an empty draft; report that upstream reason
+    # instead of falsely diagnosing the empty media list as the root cause.
+    reg3 = CustomMockRegistry({
+        "status": "built",
+        "resource_pack_id": "rp_ambiguous",
+        "pack_status": "needs_review",
+        "reason": "ambiguous: 2 resolved products",
+        "media_count": 0,
+    })
+    adapter3 = MCPProductIntelligenceAdapter(reg3, wire_tools)
+    with pytest.raises(TerminalJobError) as exc3:
+        adapter3.build_resource_pack({"snapshot_id": "snap_01", "persistence_status": "saved"})
+    assert exc3.value.code == "NON_LOCKABLE_STATUS"
+    assert "ambiguous: 2 resolved products" in str(exc3.value)
+
+
+def test_idempotency_cache_lookup_fails_on_illegal_state_or_version(tmp_path):
+    """Test that in-memory cache lookup validates state and version first, never bypassing guards."""
+    from hermes_personal.integrations.product_intelligence.client import ProductIntelligenceClient
+    from hermes_personal.integrations.video_factory.client import VideoFactoryClient
+
+    db_file = tmp_path / "cache_guard_test.db"
+    conn = connect(db_file)
+    repo = WorkflowRepository(conn)
+
+    handlers = ProductVideoJobHandlers(
+        pi_client=ProductIntelligenceClient(),
+        video_client=VideoFactoryClient(),
+        workflow_repository=repo,
+        provider_mode="fake",
+    )
+
+    wf_id = "wf_cache_guard_01"
+    repo.commit_workflow(
+        workflow_id=wf_id,
+        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.RESEARCHING.value}),
+        events=[{"event_id": "e_init", "command_id": "c_init", "event_type": "WorkflowStarted", "timestamp": "2026-08-28T00:00:00Z", "payload": {}}],
+        expected_version=0,
+    )
+
+    # Inject cached result for research
+    fake_succeeded = JobSucceeded(artifact_ref={"report": "cached_report"})
+    handlers._idempotency_cache[f"{wf_id}:research:v1:idemp_cache_1"] = fake_succeeded
+
+    # 1. When state is RESEARCHING and expected_version matches, cache hit succeeds
+    ctx_valid = JobContext(workflow_id=wf_id, job_id="job_c1", expected_version=1, idempotency_key="idemp_cache_1")
+    res1 = handlers.research_job(ctx_valid, product_name="Any", keywords=["any"])
+    assert isinstance(res1, JobSucceeded)
+    assert res1.artifact_ref["report"] == "cached_report"
+
+    # 2. When expected_version is stale/conflicting, guard triggers VERSION_CONFLICT without returning cached result
+    ctx_stale = JobContext(workflow_id=wf_id, job_id="job_c2", expected_version=99, idempotency_key="idemp_cache_1")
+    res2 = handlers.research_job(ctx_stale, product_name="Any", keywords=["any"])
+    assert isinstance(res2, JobFailed)
+    assert res2.code == "VERSION_CONFLICT"
+
+    # 3. When workflow state is advanced/illegal (e.g. COMPLETED), guard triggers ILLEGAL_WORKFLOW_STATE
+    repo.commit_workflow(
+        workflow_id=wf_id,
+        aggregate_json=json.dumps({"state": ProductVideoWorkflowState.COMPLETED.value}),
+        events=[{"event_id": "e_done", "command_id": "c_done", "event_type": "WorkflowCompleted", "timestamp": "2026-08-28T00:01:00Z", "payload": {}}],
+        expected_version=1,
+    )
+    ctx_illegal = JobContext(workflow_id=wf_id, job_id="job_c3", expected_version=2, idempotency_key="idemp_cache_1")
+    res3 = handlers.research_job(ctx_illegal, product_name="Any", keywords=["any"])
+    assert isinstance(res3, JobFailed)
+    assert res3.code == "ILLEGAL_WORKFLOW_STATE"
+
     conn.close()

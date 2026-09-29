@@ -191,6 +191,59 @@ CREATE TABLE IF NOT EXISTS learning_event (
     created_at TEXT NOT NULL
 );
 
+-- Full-text search index for approved knowledge retrieval
+CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
+  title,
+  content,
+  candidate_id UNINDEXED,
+  version_id UNINDEXED,
+  owner_user_id UNINDEXED,
+  kind UNINDEXED,
+  tokenize='unicode61 remove_diacritics 2'
+);
+
+-- Source artifacts for knowledge grounding (P1.1)
+CREATE TABLE IF NOT EXISTS source_artifact (
+  artifact_id TEXT PRIMARY KEY,
+  candidate_id TEXT NOT NULL REFERENCES learning_candidate(candidate_id) ON DELETE CASCADE,
+  owner_user_id TEXT NOT NULL REFERENCES global_user_identity(owner_user_id) ON DELETE RESTRICT,
+  kind TEXT NOT NULL,
+  filename TEXT NOT NULL,
+  relative_path TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL DEFAULT 0,
+  mime_type TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_source_artifact_cand ON source_artifact(candidate_id, kind);
+CREATE INDEX IF NOT EXISTS idx_source_artifact_sha ON source_artifact(sha256);
+
+-- Personal memo / Quick notes storage (decoupled from knowledge base)
+CREATE TABLE IF NOT EXISTS personal_memo (
+  memo_id TEXT PRIMARY KEY,
+  owner_user_id TEXT NOT NULL REFERENCES global_user_identity(owner_user_id) ON DELETE RESTRICT,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  group_name TEXT NOT NULL DEFAULT 'general',
+  tags_json TEXT NOT NULL DEFAULT '[]',
+  pinned INTEGER NOT NULL DEFAULT 0,
+  archived INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memo_owner_group ON personal_memo(owner_user_id, group_name, archived);
+CREATE INDEX IF NOT EXISTS idx_memo_owner_pinned ON personal_memo(owner_user_id, pinned, updated_at);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS memo_fts USING fts5(
+  title,
+  content,
+  tags,
+  memo_id UNINDEXED,
+  owner_user_id UNINDEXED,
+  group_name UNINDEXED,
+  tokenize='unicode61 remove_diacritics 2'
+);
+
 CREATE TABLE IF NOT EXISTS budget_reservation (
   reservation_id TEXT PRIMARY KEY,
   owner_user_id TEXT NOT NULL,
@@ -207,6 +260,9 @@ CREATE TABLE IF NOT EXISTS budget_reservation (
   policy_version INTEGER NOT NULL DEFAULT 1,
   policy_snapshot_json TEXT NOT NULL DEFAULT '{}',
   external_reference TEXT,
+  campaign_id TEXT NOT NULL DEFAULT '',
+  authorization_id TEXT NOT NULL DEFAULT '',
+  attempt_id TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE(owner_user_id, scope_id, idempotency_key)
@@ -214,12 +270,234 @@ CREATE TABLE IF NOT EXISTS budget_reservation (
 CREATE INDEX IF NOT EXISTS budget_reservation_owner_scope_idx
   ON budget_reservation(owner_user_id, scope_id, state, channel);
 
+CREATE TABLE IF NOT EXISTS product_video_operation_attempt (
+  attempt_id TEXT PRIMARY KEY,
+  authorization_id TEXT NOT NULL,
+  campaign_id TEXT NOT NULL,
+  owner_user_id TEXT NOT NULL,
+  workflow_id TEXT NOT NULL,
+  capability_id TEXT NOT NULL,
+  attempt_number INTEGER NOT NULL CHECK(attempt_number > 0),
+  input_fingerprint TEXT NOT NULL,
+  estimated_cost INTEGER NOT NULL CHECK(estimated_cost > 0),
+  reservation_id TEXT,
+  provider_operation_id TEXT,
+  status TEXT NOT NULL,
+  actual_cost INTEGER,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(authorization_id, workflow_id, capability_id, attempt_number)
+);
+CREATE INDEX IF NOT EXISTS product_video_attempt_workflow_idx
+  ON product_video_operation_attempt(workflow_id, capability_id, attempt_number);
+
+CREATE TABLE IF NOT EXISTS daily_product_video_import (
+  product_key TEXT PRIMARY KEY,
+  canonical_product_key TEXT NOT NULL DEFAULT '',
+  source_date TEXT NOT NULL,
+  source_batch_id TEXT NOT NULL DEFAULT '',
+  source_product_id TEXT NOT NULL,
+  source_path TEXT NOT NULL,
+  workflow_id TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL CHECK(status IN ('discovered', 'imported', 'claimed', 'started', 'error', 'reserved')),
+  worker_id TEXT,
+  claimed_at TEXT,
+  lease_expires_at TEXT,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS daily_product_video_import_date_idx
+  ON daily_product_video_import(source_date, status);
+
+-- Video Factory Artifacts & Render Batches
+CREATE TABLE IF NOT EXISTS video_factory_artifacts (
+  artifact_id TEXT PRIMARY KEY,
+  owner_user_id TEXT NOT NULL,
+  workflow_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  scene_id TEXT NOT NULL DEFAULT '',
+  frame_role TEXT NOT NULL DEFAULT '',
+  version INTEGER NOT NULL DEFAULT 1,
+  attempt INTEGER NOT NULL DEFAULT 1,
+  relative_path TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  size INTEGER NOT NULL DEFAULT 0,
+  mime_type TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'active',
+  parent_artifact_ids_json TEXT NOT NULL DEFAULT '[]',
+  provider_metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_vf_artifacts_proj ON video_factory_artifacts(project_id, kind);
+CREATE INDEX IF NOT EXISTS idx_vf_artifacts_sha ON video_factory_artifacts(sha256);
+
+CREATE TABLE IF NOT EXISTS video_factory_render_batches (
+  render_batch_id TEXT PRIMARY KEY,
+  owner_user_id TEXT NOT NULL,
+  workflow_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'pending',
+  scene_count INTEGER NOT NULL DEFAULT 0,
+  completed_scene_count INTEGER NOT NULL DEFAULT 0,
+  timeline_artifact_id TEXT,
+  composite_artifact_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_vf_batches_proj ON video_factory_render_batches(project_id, version);
+
 """
+
+
+def _migrate_daily_product_video_import(connection: sqlite3.Connection) -> None:
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='daily_product_video_import'"
+    ).fetchone()
+    if not row:
+        return
+    current_sql = row["sql"] if hasattr(row, "keys") else row[0]
+    if not current_sql:
+        return
+    if "'claimed'" in current_sql and "daily_product_video_import" in current_sql:
+        return
+
+    cols = [
+        r["name"] if hasattr(r, "keys") else r[1]
+        for r in connection.execute("PRAGMA table_info(daily_product_video_import)").fetchall()
+    ]
+    old_count = connection.execute("SELECT COUNT(*) FROM daily_product_video_import").fetchone()[0]
+
+    connection.execute(
+        """
+        CREATE TABLE daily_product_video_import_v2 (
+          product_key TEXT PRIMARY KEY,
+          canonical_product_key TEXT NOT NULL DEFAULT '',
+          source_date TEXT NOT NULL,
+          source_batch_id TEXT NOT NULL DEFAULT '',
+          source_product_id TEXT NOT NULL,
+          source_path TEXT NOT NULL,
+          workflow_id TEXT NOT NULL UNIQUE,
+          status TEXT NOT NULL CHECK(status IN ('discovered', 'imported', 'claimed', 'started', 'error', 'reserved')),
+          worker_id TEXT,
+          claimed_at TEXT,
+          lease_expires_at TEXT,
+          last_error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+        """
+    )
+
+    canon_col = "canonical_product_key" if "canonical_product_key" in cols else "''"
+    batch_col = "source_batch_id" if "source_batch_id" in cols else "''"
+    worker_col = "worker_id" if "worker_id" in cols else "NULL"
+    claimed_col = "claimed_at" if "claimed_at" in cols else "NULL"
+    lease_col = "lease_expires_at" if "lease_expires_at" in cols else "NULL"
+    last_err_col = "last_error" if "last_error" in cols else "NULL"
+
+    connection.execute(
+        f"""
+        INSERT INTO daily_product_video_import_v2 (
+            product_key, canonical_product_key, source_date, source_batch_id,
+            source_product_id, source_path, workflow_id, status, worker_id,
+            claimed_at, lease_expires_at, last_error, created_at, updated_at
+        )
+        SELECT
+            product_key, {canon_col}, source_date, {batch_col},
+            source_product_id, source_path, workflow_id, status, {worker_col},
+            {claimed_col}, {lease_col}, {last_err_col}, created_at, updated_at
+        FROM daily_product_video_import
+        """
+    )
+
+    new_count = connection.execute("SELECT COUNT(*) FROM daily_product_video_import_v2").fetchone()[0]
+    if old_count != new_count:
+        raise RuntimeError(
+            f"Migration failed: row count mismatch (old={old_count}, new={new_count})"
+        )
+
+    connection.execute("DROP TABLE daily_product_video_import")
+    connection.execute("ALTER TABLE daily_product_video_import_v2 RENAME TO daily_product_video_import")
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS daily_product_video_import_date_idx
+          ON daily_product_video_import(source_date, status);
+        """
+    )
+    _backfill_canonical_product_keys(connection)
+
+
+def _backfill_canonical_product_keys(connection: sqlite3.Connection) -> None:
+    tbl = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='daily_product_video_import'"
+    ).fetchone()
+    if not tbl:
+        return
+    rows = connection.execute(
+        "SELECT product_key, workflow_id FROM daily_product_video_import WHERE canonical_product_key = '' OR canonical_product_key IS NULL"
+    ).fetchall()
+    for row in rows:
+        pkey = row["product_key"] if hasattr(row, "keys") else row[0]
+        wfid = row["workflow_id"] if hasattr(row, "keys") else row[1]
+        wf_row = connection.execute(
+            "SELECT aggregate_json FROM workflow WHERE workflow_id = ?",
+            (wfid,),
+        ).fetchone()
+        if not wf_row:
+            continue
+        raw_json = wf_row["aggregate_json"] if hasattr(wf_row, "keys") else wf_row[0]
+        try:
+            import json
+            agg = json.loads(raw_json)
+            src = agg.get("source_context", {})
+            brand = src.get("brand")
+            model = src.get("model")
+            variant = src.get("variant")
+            if brand and model:
+                from hermes_personal.product_video.automation.contracts import compute_canonical_product_key
+                ckey = compute_canonical_product_key(brand, model, variant)
+                connection.execute(
+                    "UPDATE daily_product_video_import SET canonical_product_key = ? WHERE product_key = ?",
+                    (ckey, pkey),
+                )
+        except Exception:
+            pass
+
+
+def _populate_knowledge_fts(connection: sqlite3.Connection) -> None:
+    """Populate knowledge FTS index from existing approved learning versions."""
+    try:
+        count = connection.execute("SELECT COUNT(*) FROM knowledge_fts").fetchone()[0]
+        if count > 0:
+            return  # Already populated
+    except sqlite3.OperationalError:
+        return  # Table doesn't exist yet
+
+    try:
+        connection.execute(
+            """
+            INSERT INTO knowledge_fts (title, content, candidate_id, version_id, owner_user_id, kind)
+            SELECT c.title, v.content, c.candidate_id, v.version_id, v.owner_user_id, c.kind
+            FROM learning_version v
+            JOIN learning_candidate c ON v.candidate_id = c.candidate_id
+            WHERE v.status = 'active' AND c.status = 'approved'
+            """
+        )
+    except sqlite3.OperationalError:
+        pass  # learning tables may not exist yet
+
 
 def _migrate_schema(connection: sqlite3.Connection) -> None:
     with connection:
+        _migrate_daily_product_video_import(connection)
+        _backfill_canonical_product_keys(connection)
         columns = [
             row["name"]
+
             for row in connection.execute("PRAGMA table_info(turn_execution)").fetchall()
         ]
         if columns and "user_message" not in columns:
@@ -303,11 +581,51 @@ def _migrate_schema(connection: sqlite3.Connection) -> None:
                 connection.execute("ALTER TABLE budget_reservation ADD COLUMN policy_version INTEGER NOT NULL DEFAULT 1")
             if "policy_snapshot_json" not in b_cols:
                 connection.execute("ALTER TABLE budget_reservation ADD COLUMN policy_snapshot_json TEXT NOT NULL DEFAULT '{}'")
+            if "campaign_id" not in b_cols:
+                connection.execute("ALTER TABLE budget_reservation ADD COLUMN campaign_id TEXT NOT NULL DEFAULT ''")
+            if "authorization_id" not in b_cols:
+                connection.execute("ALTER TABLE budget_reservation ADD COLUMN authorization_id TEXT NOT NULL DEFAULT ''")
+            if "attempt_id" not in b_cols:
+                connection.execute("ALTER TABLE budget_reservation ADD COLUMN attempt_id TEXT NOT NULL DEFAULT ''")
 
         connection.execute(
             """
             CREATE INDEX IF NOT EXISTS budget_reservation_owner_scope_idx
               ON budget_reservation(owner_user_id, scope_id, state, channel);
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS budget_reservation_campaign_idx
+              ON budget_reservation(campaign_id, state, channel);
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS product_video_operation_attempt (
+              attempt_id TEXT PRIMARY KEY,
+              authorization_id TEXT NOT NULL,
+              campaign_id TEXT NOT NULL,
+              owner_user_id TEXT NOT NULL,
+              workflow_id TEXT NOT NULL,
+              capability_id TEXT NOT NULL,
+              attempt_number INTEGER NOT NULL CHECK(attempt_number > 0),
+              input_fingerprint TEXT NOT NULL,
+              estimated_cost INTEGER NOT NULL CHECK(estimated_cost > 0),
+              reservation_id TEXT,
+              provider_operation_id TEXT,
+              status TEXT NOT NULL,
+              actual_cost INTEGER,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              UNIQUE(authorization_id, workflow_id, capability_id, attempt_number)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS product_video_attempt_workflow_idx
+              ON product_video_operation_attempt(workflow_id, capability_id, attempt_number);
             """
         )
 
@@ -342,6 +660,9 @@ def _migrate_schema(connection: sqlite3.Connection) -> None:
               ON workflow_outbox(state, next_attempt_at, outbox_id);
             """
         )
+        
+        # Populate knowledge FTS from existing approved versions if FTS is empty
+        _populate_knowledge_fts(connection)
 
 
 def connect(database_path: str | Path) -> sqlite3.Connection:

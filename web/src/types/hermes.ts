@@ -39,7 +39,7 @@ export interface HermesArtifactMetadata {
 export interface HermesOperatorCommand {
   command_type: 'approve' | 'reject' | 'retry' | 'cancel' | 'upload' | 'form_update';
   target_id: string;
-  expected_version: number;
+  expected_version: number | null;
   payload?: Record<string, unknown>;
 }
 

@@ -26,7 +26,7 @@ SUPPORTED_ASPECT_RATIOS = frozenset({"9:16", "16:9"})
 SUPPORTED_RESOLUTIONS = frozenset({"720p", "1080p"})
 ALLOWED_DURATIONS = frozenset({4, 6, 8})
 DEFAULT_MODEL = "veo-3.1-generate-001"
-DEFAULT_LOCATION = "us-central1"
+DEFAULT_LOCATION = "us-east4"
 
 
 def mime_for(path: Path) -> str:
@@ -59,6 +59,9 @@ class VertexVideoProvider(VideoGenerationPort):
     fetchPredictOperation REST endpoints.
     """
 
+    provider_kind: str = "vertex_ai"
+    supports_end_keyframe: bool = True
+
     def __init__(
         self,
         project_id: str | None = None,
@@ -69,8 +72,9 @@ class VertexVideoProvider(VideoGenerationPort):
         credential_resolver: Callable[[], tuple[str | None, str | None]] | None = None,
         post_fn: Callable[..., Any] | None = None,
     ) -> None:
+        self.provider_kind = "vertex_ai"
         self._explicit_project = project_id
-        self.location = (location or DEFAULT_LOCATION).strip()
+        self.location = (location or "").strip()
         self.model = (model or DEFAULT_MODEL).strip()
         self.timeout = timeout
         self._credential_resolver = credential_resolver
@@ -78,6 +82,10 @@ class VertexVideoProvider(VideoGenerationPort):
 
         configured_dir = output_dir or ""
         self.output_dir = Path(configured_dir).expanduser().resolve() if configured_dir else (Path.cwd() / "workspace")
+
+    def is_available(self) -> bool:
+        token, proj, _ = self._resolve_auth()
+        return bool(token and proj)
 
     def _resolve_auth(self) -> tuple[str | None, str | None, str | None]:
         """Resolve (token, project_id, error_message).
@@ -110,7 +118,8 @@ class VertexVideoProvider(VideoGenerationPort):
             if not effective_project:
                 return None, None, "MISSING_PROJECT_ID: Google Cloud project ID is not set"
             # Override location if configured in vertex_adapter
-            self.location = _resolve_region(self.location)
+            resolved_region = _resolve_region(self.location)
+            self.location = resolved_region if (resolved_region and resolved_region != "global") else DEFAULT_LOCATION
             return token, effective_project, None
         except ImportError:
             return None, None, "DEPENDENCY_MISSING: google-auth is not installed for Vertex AI"
@@ -303,6 +312,11 @@ class VertexVideoProvider(VideoGenerationPort):
                 path_obj = Path(p)
                 if not path_obj.is_file():
                     return f"Reference image does not exist or is not a readable file: {p}"
+        if request.end_keyframe is not None:
+            if not request.reference_image_paths:
+                return "end_keyframe requires a start reference image"
+            if not Path(request.end_keyframe.image_path).is_file():
+                return f"End keyframe does not exist or is not a readable file: {request.end_keyframe.image_path}"
         return None
 
     def _build_submit_body(self, request: VideoGenerationRequest) -> dict[str, Any]:
@@ -313,10 +327,20 @@ class VertexVideoProvider(VideoGenerationPort):
                 "bytesBase64Encoded": base64.b64encode(first.read_bytes()).decode("ascii"),
                 "mimeType": mime_for(first),
             }
+        if request.end_keyframe is not None:
+            last = Path(request.end_keyframe.image_path)
+            instance["lastFrame"] = {
+                "bytesBase64Encoded": base64.b64encode(last.read_bytes()).decode("ascii"),
+                "mimeType": mime_for(last),
+            }
 
         parameters: dict[str, Any] = {
             "durationSeconds": int(request.duration_seconds),
         }
+        if self.model.startswith("veo-3"):
+            # Veo 3 requires an explicit audio choice. The approved scene plan
+            # requests voiceover only when it has narration.
+            parameters["generateAudio"] = request.request_audio
         if request.aspect_ratio in SUPPORTED_ASPECT_RATIOS:
             parameters["aspectRatio"] = request.aspect_ratio
 
@@ -391,3 +415,11 @@ class VertexVideoProvider(VideoGenerationPort):
             return f"vertex http {response.status_code}: {message}" if message else f"vertex http {response.status_code}"
         except Exception:
             return f"vertex http {response.status_code}: non-JSON response (endpoint/model may not exist)"
+
+    def lookup_by_request_id(self, request_id: str) -> VideoGenerationResult | None:
+        """Lookup an operation by client request ID.
+
+        Vertex Veo REST API does not provide a client request-id reverse lookup endpoint;
+        returns None so caller fails closed to controlled operator reconciliation.
+        """
+        return None

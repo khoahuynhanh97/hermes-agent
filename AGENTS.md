@@ -320,6 +320,12 @@ repository. Its canonical documentation starts at [`docs/README.md`](docs/README
 Before changing this package, read the architecture, data-contract, security,
 error-handling, idempotency, and known-gaps documents linked there.
 
+For any structural change to Hermes Personal code or Product Video data/artifacts,
+start with [the repository Codex architecture rule](.codex/rules/hermes-personal-architecture.md),
+then load its governance skill and referenced code/data rules before editing. This
+includes module moves, new schemas, persistence, media paths, storyboards,
+manifests, QC, and exports.
+
 Hard requirements for this bounded context:
 
 - `AgentTurnRequest` and `AgentEvent` are the channel-neutral wire contracts.

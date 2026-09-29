@@ -139,6 +139,7 @@ def test_full_governed_learning_lifecycle_e2e(db_conn, tmp_path):
     assert len(retrieved_before) == 0
 
     # 5. Owner approves promotion -> creates active version v1
+    approval_service.approve(req_result.approval_id)
     v1 = promotion_service.approve_promotion(
         approval_id=req_result.approval_id,
         owner_user_id="owner_alice",

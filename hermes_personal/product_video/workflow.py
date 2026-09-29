@@ -1,15 +1,14 @@
-﻿"""hermes_personal/product_video/workflow.py
+"""hermes_personal/product_video/workflow.py
 
 Gate 5 Task 4 -- state-machine helpers for the product-to-video pipeline.
 
-The canonical state enum lives in handlers.py (ProductVideoWorkflowState)
-because that is the production module that enforces HITL guards on every
-dispatched job. This module re-exports those types and adds the stateless
-transition() / is_hitl_blocked() helpers used by binding and tests.
+The canonical state enum lives in workflow_state.py. This module re-exports
+those types and adds the stateless transition() / is_hitl_blocked() helpers
+used by binding and tests.
 """
 from __future__ import annotations
 
-from hermes_personal.product_video.handlers import (
+from hermes_personal.product_video.workflow_state import (
     ProductVideoWorkflowState,
     HITL_WAITING_STATES,
 )
@@ -32,12 +31,19 @@ _TRANSITIONS: dict[ProductVideoWorkflowState, frozenset[ProductVideoWorkflowStat
         ProductVideoWorkflowState.RESEARCHING,
     }),
     ProductVideoWorkflowState.RESEARCHING: frozenset({
+        ProductVideoWorkflowState.BUILDING_RESOURCE_PACK,
         ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK,
     }),
+    ProductVideoWorkflowState.BUILDING_RESOURCE_PACK: frozenset({
+        ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK,
+        ProductVideoWorkflowState.CREATING_BRIEF,
+        ProductVideoWorkflowState.WAITING_FOR_OPERATOR,
+    }),
     ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK: frozenset({
+        ProductVideoWorkflowState.LOCKING_RESOURCE_PACK,
         ProductVideoWorkflowState.BUILDING_RESOURCE_PACK,
     }),
-    ProductVideoWorkflowState.BUILDING_RESOURCE_PACK: frozenset({
+    ProductVideoWorkflowState.LOCKING_RESOURCE_PACK: frozenset({
         ProductVideoWorkflowState.CREATING_BRIEF,
     }),
     ProductVideoWorkflowState.CREATING_BRIEF: frozenset({
@@ -56,6 +62,7 @@ _TRANSITIONS: dict[ProductVideoWorkflowState, frozenset[ProductVideoWorkflowStat
     }),
     ProductVideoWorkflowState.CREATING_STORYBOARD: frozenset({
         ProductVideoWorkflowState.AWAITING_STORYBOARD_APPROVAL,
+        ProductVideoWorkflowState.WAITING_FOR_OPERATOR,
     }),
     ProductVideoWorkflowState.AWAITING_STORYBOARD_APPROVAL: frozenset({
         ProductVideoWorkflowState.RENDERING,
@@ -63,6 +70,14 @@ _TRANSITIONS: dict[ProductVideoWorkflowState, frozenset[ProductVideoWorkflowStat
     }),
     ProductVideoWorkflowState.RENDERING: frozenset({
         ProductVideoWorkflowState.AWAITING_FINAL_APPROVAL,
+        ProductVideoWorkflowState.WAITING_FOR_OPERATOR,
+    }),
+    ProductVideoWorkflowState.WAITING_FOR_OPERATOR: frozenset({
+        ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK,
+        ProductVideoWorkflowState.CREATING_STORYBOARD,
+        ProductVideoWorkflowState.AWAITING_STORYBOARD_APPROVAL,
+        ProductVideoWorkflowState.AWAITING_FINAL_APPROVAL,
+        ProductVideoWorkflowState.RENDERING,
     }),
     ProductVideoWorkflowState.AWAITING_FINAL_APPROVAL: frozenset({
         ProductVideoWorkflowState.EXPORTING,

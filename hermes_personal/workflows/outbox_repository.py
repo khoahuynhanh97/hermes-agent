@@ -89,6 +89,8 @@ class OutboxRepository:
         lease_duration_seconds: float = 30.0,
         batch_size: int = 10,
         now_iso: str | None = None,
+        workflow_id_prefix: str | None = None,
+        workflow_ids: list[str] | None = None,
     ) -> list[OutboxClaim]:
         """Atomically claim a batch of outbox rows for delivery.
 
@@ -121,16 +123,29 @@ class OutboxRepository:
             self.connection.execute("BEGIN IMMEDIATE")
 
         try:
+            target_clause = ""
+            params: list[object] = [now, now]
+            if workflow_ids is not None:
+                if not workflow_ids:
+                    return []
+                placeholders = ",".join("?" for _ in workflow_ids)
+                target_clause = f" AND workflow_id IN ({placeholders})"
+                params.extend(workflow_ids)
+            elif workflow_id_prefix is not None:
+                target_clause = " AND substr(workflow_id, 1, ?) = ?"
+                params.extend([len(workflow_id_prefix), workflow_id_prefix])
+            params.append(batch_size)
             cur = self.connection.execute(
-                """
+                f"""
                 SELECT outbox_id, workflow_id, message, state, attempt_count, max_attempts, created_at, updated_at
                 FROM workflow_outbox
-                WHERE (state = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= ?))
-                   OR (state = 'leased' AND lease_expires_at <= ?)
+                WHERE ((state = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= ?))
+                   OR (state = 'leased' AND lease_expires_at <= ?))
+                  {target_clause}
                 ORDER BY outbox_id ASC
                 LIMIT ?
                 """,
-                (now, now, batch_size),
+                params,
             )
             rows = cur.fetchall()
 

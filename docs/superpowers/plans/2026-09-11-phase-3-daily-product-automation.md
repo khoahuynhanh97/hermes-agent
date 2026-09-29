@@ -1,3 +1,7 @@
+﻿> **Status: Historical** — This document is superseded by [Product Video Master Plan](product-video-master-plan.md). Do not use as implementation target.
+
+---
+
 # Phase 3 Daily Product Automation Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -54,7 +58,7 @@ def test_load_daily_request_accepts_three_to_five_target(tmp_path: Path):
 version: 1
 enabled: true
 timezone: Asia/Bangkok
-category: Gia dụng
+category: Gia dá»¥ng
 market: VN
 platforms: [tiktok]
 price: {currency: VND, min: 200000, max: 1500000}
@@ -80,7 +84,7 @@ def test_request_rejects_target_outside_daily_range(target_count: int):
             {
                 "schema": "daily_product_request",
                 "version": 1,
-                "category": "Gia dụng",
+                "category": "Gia dá»¥ng",
                 "candidate_limit": 10,
                 "target_count": target_count,
             }
@@ -93,7 +97,7 @@ def test_request_rejects_target_above_candidate_limit():
             {
                 "schema": "daily_product_request",
                 "version": 1,
-                "category": "Gia dụng",
+                "category": "Gia dá»¥ng",
                 "candidate_limit": 3,
                 "target_count": 5,
             }

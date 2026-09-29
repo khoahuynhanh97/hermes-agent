@@ -101,10 +101,23 @@ class VideoFactoryService:
             locked_at=None,
             version=project.resource_pack.version + 1,
         )
+        updated_sb = (
+            replace(project.storyboard, approval_status=StoryboardApprovalStatus.PENDING, updated_at=_now())
+            if project.storyboard
+            else None
+        )
         updated = replace(
             project,
             resource_pack=unlocked,
             resource_version=project.resource_version + 1,
+            brief_approval="pending",
+            scene_plan_approval="pending",
+            storyboard=updated_sb,
+            draft_video_asset_id=None,
+            final_video_asset_id=None,
+            final_approval=FinalApprovalStatus.PENDING,
+            final_approval_notes="",
+            status=ProjectStatus.RESOURCE_READY,
             updated_at=_now(),
         )
         return self.repository.save(updated)
@@ -125,11 +138,22 @@ class VideoFactoryService:
         project = self.get_project(owner_user_id, project_id)
         if project.resource_pack is None or not project.resource_pack.locked_at:
             raise ValueError("RESOURCE_PACK_LOCKED_REQUIRED")
+        updated_sb = (
+            replace(project.storyboard, approval_status=StoryboardApprovalStatus.PENDING, updated_at=_now())
+            if project.storyboard
+            else None
+        )
         updated = replace(
             project,
             creative_brief=brief,
             brief_version=project.brief_version + 1,
             brief_approval="pending",
+            scene_plan_approval="pending",
+            storyboard=updated_sb,
+            draft_video_asset_id=None,
+            final_video_asset_id=None,
+            final_approval=FinalApprovalStatus.PENDING,
+            final_approval_notes="",
             status=ProjectStatus.BRIEF_READY,
             updated_at=_now(),
         )
@@ -146,11 +170,21 @@ class VideoFactoryService:
         project = self.get_project(owner_user_id, project_id)
         if project.creative_brief is None or project.brief_approval != "approved":
             raise ValueError("BRIEF_APPROVAL_REQUIRED")
+        updated_sb = (
+            replace(project.storyboard, approval_status=StoryboardApprovalStatus.PENDING, updated_at=_now())
+            if project.storyboard
+            else None
+        )
         updated = replace(
             project,
             scene_plan=plan,
             scene_version=project.scene_version + 1,
             scene_plan_approval="pending",
+            storyboard=updated_sb,
+            draft_video_asset_id=None,
+            final_video_asset_id=None,
+            final_approval=FinalApprovalStatus.PENDING,
+            final_approval_notes="",
             status=ProjectStatus.SCENE_PLAN_READY,
             updated_at=_now(),
         )
@@ -174,10 +208,36 @@ class VideoFactoryService:
         project = self.get_project(owner_user_id, project_id)
         if project.scene_plan is None or project.scene_plan_approval != "approved":
             raise ValueError("SCENE_PLAN_APPROVAL_REQUIRED")
+        if (
+            project.storyboard
+            and storyboard.source_scene_version > 0
+            and project.storyboard.source_scene_version == storyboard.source_scene_version
+            and storyboard.source_scene_version == project.scene_version
+        ):
+            def intent(frame: Any) -> tuple[Any, ...]:
+                return (
+                    frame.frame_id, frame.scene_id, frame.order, frame.label,
+                    frame.purpose, frame.visual_state, frame.subject_action,
+                    frame.product_state, frame.character_state, frame.context,
+                    frame.camera_intention, frame.required_resource_ids, frame.prompt,
+                )
+
+            if tuple(map(intent, project.storyboard.frames)) == tuple(map(intent, storyboard.frames)):
+                return project
+            raise ValueError("STORYBOARD_CONFLICT: approved scene plan already has a different storyboard")
+        sb_pending = replace(
+            storyboard,
+            approval_status=StoryboardApprovalStatus.PENDING,
+            updated_at=_now(),
+        )
         updated = replace(
             project,
-            storyboard=storyboard,
+            storyboard=sb_pending,
             storyboard_version=project.storyboard_version + 1,
+            draft_video_asset_id=None,
+            final_video_asset_id=None,
+            final_approval=FinalApprovalStatus.PENDING,
+            final_approval_notes="",
             status=ProjectStatus.STORYBOARD_READY,
             updated_at=_now(),
         )
@@ -378,6 +438,10 @@ class VideoFactoryService:
                 project,
                 timeline=timeline,
                 timeline_version=project.timeline_version + 1,
+                draft_video_asset_id=None,
+                final_video_asset_id=None,
+                final_approval=FinalApprovalStatus.PENDING,
+                final_approval_notes="",
                 status=ProjectStatus.TIMELINE_READY,
                 updated_at=_now(),
             )
@@ -395,6 +459,10 @@ class VideoFactoryService:
             replace(
                 project,
                 timeline=updated_timeline,
+                draft_video_asset_id=None if status != TimelineStatus.COMPLETED else project.draft_video_asset_id,
+                final_video_asset_id=None if status != TimelineStatus.COMPLETED else project.final_video_asset_id,
+                final_approval=FinalApprovalStatus.PENDING if status != TimelineStatus.COMPLETED else project.final_approval,
+                final_approval_notes="" if status != TimelineStatus.COMPLETED else project.final_approval_notes,
                 updated_at=_now(),
             )
         )
@@ -403,11 +471,16 @@ class VideoFactoryService:
         project = self.get_project(owner_user_id, project_id)
         if not project.timeline:
             raise ValueError("TIMELINE_REQUIRED")
+        if project.timeline.status != TimelineStatus.COMPLETED:
+            raise ValueError("TIMELINE_NOT_COMPLETED")
 
         return self.repository.save(
             replace(
                 project,
                 draft_video_asset_id=asset_id,
+                final_video_asset_id=None,
+                final_approval=FinalApprovalStatus.PENDING,
+                final_approval_notes="",
                 status=ProjectStatus.DRAFT_VIDEO_READY,
                 updated_at=_now(),
             )

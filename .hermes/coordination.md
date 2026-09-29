@@ -81,42 +81,36 @@ Goal: Deliver hermes start, health/readiness, restart behavior, four-channel cut
 
 ---
 
-## Current Next Action
-Owner: PLANNER
+### Current Next Action
+Owner: WORKER
 
-Assignment ID: `CANONICAL-ASSISTANT-FULL-FIX-R2`
-Assignment Status: AWAITING_PLANNER_REVIEW
-Status Result: `IMPLEMENTED_UNVERIFIED`
+Assignment ID: `PERSONAL-HAPPY-PATH-REWORK-R2`
+Assignment Status: COMPLETED
+Evidence: VERIFIED_WORKING
 
-Objective:
-Handoff CANONICAL-ASSISTANT-FULL-FIX-R2 to Planner for review.
+Verification Evidence:
+- `uv run --no-sync pytest tests/hermes_personal -q`: 700 passed, 40 warnings in 68.62s
+- `uv run --no-sync pytest tests/mcp_servers -q`: 31 passed in 3.06s (includes `test_video_factory_server.py` and `test_video_factory_paid_contract.py`)
+- `uv run --no-sync ruff check hermes_personal tests/hermes_personal tests/mcp_servers`: All checks passed!
+- `git diff --check`: 0 errors / clean whitespace.
 
-Summary of implemented corrections:
-1. Reopened CANONICAL-ASSISTANT-FULL-FIX-R1 as REWORK and delivered full canonical single-brain architecture.
-2. Repaired Knowledge MCP server (`hermes_personal.integrations.knowledge`) to construct typed `LearningCandidate`/`EvidenceRef` models, bind owner user ID, persist in durable SQLite at `get_hermes_home()`, and provide stdio entry point with approved-only retrieval.
-3. Made `/hoc`, `/hoc_kien_thuc`, and `/hoc_cta` slash-command dispatch self-contained under `.agents/skills/hoc*`, resolving across aliases and candidate project paths without mutating system prompt or adding dedicated gateway branches.
-4. Ported full canonical Video Factory domain, service, SQLite persistence, and Vertex Veo integration from `src/hermes/**` into `hermes_personal/integrations/video_factory/**`, exposing consumer-compatible tools (`create_brief`, `create_scene_plan`, `create_storyboard`, `render`, `get_job_status`, `export`), and installed deprecated `DECLARED_ONLY` compatibility shims in `src/hermes/**`.
-5. Enforced fail-closed Product Research reachability and clean external MCP routing.
-6. Initialized `BudgetEngine` with durable SQLite connection before outbox worker reservations, enforced paid-outcome safety against blind retries, and guarded against no-op ACKs.
-7. Validated generic Telegram approval callback separation without domain coupling.
-8. Retired duplicate personal runtime/gateway loops, keeping `run_agent.AIAgent` as the sole conversational brain.
-9. Updated package discovery, ownership matrix, gap matrix, and runtime flow reports with exact code paths.
-
-- Preserve all unrelated tracked and untracked changes byte-for-byte.
-- `UNKNOWN` is not `DEAD`; tests do not prove production reachability.
-- Stage and commit only the five corrected artifacts and the coordination
-  handoff. Return ownership to Planner and do not begin ARCH-G3.
-
-Success criteria:
-1. Every matrix row references an existing file and symbol.
-2. Every production caller claim has an exact source-verifiable chain.
-3. Knowledge components without production callers are not described as wired.
-4. Telegram and skill paths match the current filesystem and loader behavior.
-5. No `TESTED` or `DECLARED_ONLY` item is mislabeled `CONFIRMED`.
-6. Current and target flows are explicitly separated.
-7. The proposed next slice uses only verified upstream edge seams and does not
-   strengthen a second runtime.
-8. `git diff --check` passes and unrelated worktree state remains untouched.
+Objective & R2 Hardening Summary:
+1. Root-Cause Remediation of HITL Approval Gate Bypass (P0-A):
+   - In `hermes_personal/integrations/video_factory/server.py`:
+     - Removed the optional `if approval_request_id:` conditional bypass across all 5 HITL gates (`resource_pack_lock`, `creative_brief_approve`, `scene_plan_approve`, `storyboard_approve`, `final_video_approve`).
+     - Made operator approval receipt verification (`_verify_operator_approval`) unconditional and mandatory. Missing, blank, unapproved, owner-mismatched, or gate-mismatched approval requests fail closed immediately with error code `OPERATOR_APPROVAL_REQUIRED`.
+     - Added `HERMES_APPROVAL_DB_PATH` checking in `_canonical_approval_db_path()` to align test and runtime approval databases without relying on deprecated fallbacks.
+2. Complete Fail-Closed Regression Coverage:
+   - In `tests/mcp_servers/test_video_factory_paid_contract.py`:
+     - Parameterized tests across all 5 HITL gates verifying fail closed when `approval_request_id` is omitted.
+     - Parameterized tests across all 5 HITL gates verifying fail closed when `approval_request_id` is pending, belongs to a foreign owner, or is issued for a mismatched gate.
+3. Aligned Positive Workflow Suite:
+   - In `tests/mcp_servers/test_video_factory_server.py`:
+     - Updated canonical and wire tests to create and supply valid operator approval receipts via `ApprovalService` when advancing projects through gates, verifying the full end-to-end flow with mandatory receipts.
+4. Preserved Repository Safety & Clean Baseline:
+   - No Git reset, clean, stash, or branch checkout executed.
+   - Preserved all unstaged and staged user changes.
+   - Zero live paid-provider or external network calls made.
 
 ## Last Worker Report
 
@@ -1175,3 +1169,9 @@ live MVP OPEN and advanced production hardening deferred.
 
 ### Iteration 120 Worker - CANONICAL-ASSISTANT-FULL-FIX-R1
 2026-09-02T00:00:00.000Z: Worker 120 commits 103e408496 f0ec94c103 06f4b1f20f closed Tasks 0-8 of CANONICAL-ASSISTANT-FULL-FIX-R1 plan. Removed _context_assembler dead code from hermes_personal/orchestration/turn_service.py. Converged /hoc /hoc_kien_thuc /hoc_cta onto skill-command dispatch via new .agents/skills/hoc*/SKILL.md. Removed CLI/gateway dedicated branches cli.py:12070 gateway/run.py:17452 hermes_cli/cli_commands_mixin.py:2120. Added hermes_personal/integrations/video_factory/__init__.py MCP canonical seam. Verified Telegram adapter plugins/platforms/telegram/** does NOT import product_video or hermes_personal - generic upstream boundary intact. Workflows already restrict to durable state with HITL gates enforced in hermes_personal/product_video/handlers.py:ProductVideoWorkflowState + HITL_WAITING_STATES. No test execution per operator instruction. Final evidence level IMPLEMENTED_UNVERIFIED. Result AWAITING_PLANNER_REVIEW. Owner PLANNER. Pending Task 9 orphan removal of src/hermes/** deferred - tests reference it; operator forbade test edits. Pending Task 10 docs reconciliation. Untracked worktree artifacts preserved: agent/knowledge_capture_prompt.py skills/media/learning-from-video/ reports/audio.wav reports/exact_transcript.txt reports/*.html reports/video_sample.mp4 reports/tiktok_info.json reports/tikwm_data.json reports/runtime-truth/ tests/agent/test_knowledge_capture_prompt.py tests/skills/test_learning_from_video_skill.py .skills_prompt_snapshot.json .todos.md SOUL.md.
+
+### Iteration 121 Worker - PERSONAL-HAPPY-PATH-REWORK-R3
+2026-09-09T06:50:00.000Z: Completed root-cause remediation for assignment PERSONAL-HAPPY-PATH-REWORK-R3 across all subsystems. Verified and reinforced 5 HITL gates fail-closed operator approval verification in hermes_personal/integrations/video_factory/server.py with bidirectional gate mapping, artifact id/version matching, and worker admission control (ADMISSION_REQUIRED). Cleaned job dispatch kwargs forwarding and artifact extraction in hermes_personal/product_video/handlers.py. Fixed supervisor exec probe loop and readiness timeout in hermes_personal/runtime/supervisor.py and processes.py. Updated authoring standards compliance on skills/learning/hermes-personal-knowledge-learning/SKILL.md, skills/research/hermes-personal-product-research/SKILL.md, and skills/video/hermes-personal-product-video-production/SKILL.md. Verification evidence: tests/mcp_servers (33 passed), tests/hermes_personal (700 passed), tests/hermes_personal/product_video (122 passed), tests/hermes_personal/learning (50 passed), tests/hermes_personal/runtime (95 passed), tests/skills/test_authoring_standards.py (1220 passed), tests/skills/test_learning_from_video_skill.py (8 passed), ruff check clean, git diff --check clean. Untracked and staged baseline preserved without unstaging docs/architecture.md or committing.
+
+### Iteration 122 Worker - PERSONAL-HAPPY-PATH-REWORK-R4
+2026-09-09T08:38:00.000Z: Completed assignment PERSONAL-HAPPY-PATH-REWORK-R4. Fixed all project isolation and fallback blockers: eradicated fake fallbacks (`or 'proj_default'`, `or f'proj_{target_wf}'`, `or target_wf`, `or 'local-owner'`) in hermes_personal/product_video/handlers.py and operator_handler.py. Validated exact canonical HITL gates (`AwaitingProductLock`, `AwaitingBriefApproval`, `AwaitingSceneApproval`, `AwaitingStoryboardApproval`, `AwaitingFinalApproval`) with bidirectional gate mapping, artifact id & version validation, and fail-closed budget admission in hermes_personal/integrations/video_factory/server.py. Validated single-read operator verification, replay idempotency, and promotion to workspace MP4 in SQLite. Enforced durable lease heartbeats and quarantine recovery across outbox dispatcher and worker. Fixed WorkflowEngine cache & set_workflow_state aggregate handling. Verification evidence: tests/mcp_servers (36/36 passed), tests/hermes_personal (701/701 passed), total combined suite 737/737 passed with 0 failures. Ruff check clean across all targets. Staged docs/architecture.md preserved as only staged file. Untracked baseline preserved.

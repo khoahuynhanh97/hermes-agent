@@ -1,6 +1,13 @@
 ---
 name: hermes-personal-knowledge-learning
-description: Governed Hermes personal skill for approved retrieval and human-in-the-loop candidate capture.
+description: Governed knowledge retrieval and candidate capture.
+version: 1.0.0
+author: Hermes Personal
+license: MIT
+platforms: [linux, macos, windows]
+metadata:
+  hermes:
+    tags: [Learning, Knowledge]
 allowed-capabilities:
   - knowledge.candidate.create
   - knowledge.retrieve

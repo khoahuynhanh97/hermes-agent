@@ -117,6 +117,8 @@ DEFAULT_WIRE_BINDING_RULES: tuple[WireBindingRule, ...] = (
         accepted_wire_names=(
             "mcp__learning__create_candidate",
             "learning_create_candidate",
+            "mcp__knowledge__knowledge_candidate_create",
+            "knowledge_candidate_create",
         ),
         provider="learning",
     ),
@@ -125,6 +127,8 @@ DEFAULT_WIRE_BINDING_RULES: tuple[WireBindingRule, ...] = (
         accepted_wire_names=(
             "mcp__learning__retrieve",
             "learning_retrieve",
+            "mcp__knowledge__knowledge_retrieve",
+            "knowledge_retrieve",
         ),
         provider="learning",
     ),
@@ -192,8 +196,14 @@ class CapabilityDiscovery:
             wire for rule in self._rules for wire in rule.accepted_wire_names
         }
         registered_candidates = candidate_wire_names & all_registered_names
-
-        definitions = registry.get_definitions(registered_candidates, quiet=True)
+        get_defs = getattr(registry, "get_definitions", None)
+        if callable(get_defs):
+            definitions = get_defs(registered_candidates, quiet=True)
+        else:
+            definitions = [
+                {"name": name, "function": {"name": name, "parameters": {}}}
+                for name in registered_candidates
+            ]
 
         # Index returned definition envelopes by wire name
         def_envelopes: dict[str, dict[str, Any] | Any] = {}
@@ -308,12 +318,15 @@ class CapabilityDiscovery:
                 )
                 continue
 
+            get_toolset = getattr(registry, "get_toolset_for_tool", None)
             provider = (
-                registry.get_toolset_for_tool(wire_name) or rule.provider
+                (get_toolset(wire_name) if callable(get_toolset) else None)
+                or rule.provider
             )
 
             if wire_name not in def_envelopes:
-                raw_schema = registry.get_schema(wire_name) or {}
+                get_schema = getattr(registry, "get_schema", None)
+                raw_schema = get_schema(wire_name) if callable(get_schema) else {}
                 try:
                     digest = hash_schema_dict(raw_schema)
                 except ValueError:

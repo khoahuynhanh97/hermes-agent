@@ -1,0 +1,16 @@
+{
+  "source_url": "https://vt.tiktok.com/ZSbkp6buE/",
+  "resolved_url": "https://www.tiktok.com/@mindang.com/video/7690481116658076949",
+  "sha256": "9c110cf558142d3fae240ea40537f078356d652173d869487b0320810c163d96",
+  "byte_size": 1952817,
+  "duration_seconds": 46,
+  "has_audio": true,
+  "transcription_method": "openai-whisper base model (FP32 on CPU), language=Vietnamese",
+  "artifacts": {
+    "video_sample": "D:/work/hermes-upstream-rearchitecture/reports/knowledge_capture/video_sample.mp4",
+    "audio_sample": "D:/work/hermes-upstream-rearchitecture/reports/knowledge_capture/audio.wav",
+    "transcript": "D:/work/hermes-upstream-rearchitecture/reports/knowledge_capture/exact_transcript.txt",
+    "analysis": "D:/work/hermes-upstream-rearchitecture/reports/knowledge_capture/knowledge_analysis.md"
+  },
+  "memory_candidate_status": "pending_review"
+}

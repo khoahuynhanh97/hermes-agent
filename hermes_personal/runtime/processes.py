@@ -157,7 +157,7 @@ def build_process_topology(config: RuntimeConfig) -> tuple[ProcessSpec, ...]:
                 cwd=root,
                 env_keys=("HERMES_HOME",),
                 required=True,
-                readiness_probe=ProbeSpec(probe_type="exec", endpoint="mcp_snapshot_check"),
+                readiness_probe=ProbeSpec(probe_type="exec", endpoint="mcp_snapshot_check", timeout_seconds=15.0),
                 shutdown_timeout_seconds=3.0,
                 restart=RestartPolicy(max_attempts=3, window_seconds=60.0, base_backoff_seconds=2.0),
             )
@@ -190,7 +190,7 @@ def build_process_topology(config: RuntimeConfig) -> tuple[ProcessSpec, ...]:
                 argv=(
                     py,
                     "-m",
-                    "hermes_personal.gateway.platforms.telegram_runner",
+                    "hermes_personal.runtime.telegram_runner",
                 ),
                 cwd=root,
                 env_keys=("HERMES_HOME", "HERMES_TELEGRAM_TOKEN"),

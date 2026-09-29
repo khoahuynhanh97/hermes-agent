@@ -28,7 +28,7 @@ Write-Host "  Inbox:  $INBOX_ROOT" -ForegroundColor Gray
 $exitCode = $LASTEXITCODE
 
 if ($exitCode -eq 0) {
-    Write-Host "`n✓ Daily batch published successfully" -ForegroundColor Green
+    Write-Host "`n[OK] Daily batch published successfully" -ForegroundColor Green
     
     # Optionally trigger auto-start coordinator
     $AUTO_START = $env:HERMES_AUTO_START_AFTER_PUBLISH
@@ -37,6 +37,7 @@ if ($exitCode -eq 0) {
         & $PYTHON -m hermes_personal.product_video.cli start-auto --limit 5
     }
 } else {
-    Write-Host "`n✗ Daily batch publishing failed" -ForegroundColor Red
+    Write-Host "`n[FAIL] Daily batch publishing failed" -ForegroundColor Red
     exit $exitCode
 }
+

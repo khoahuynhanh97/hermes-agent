@@ -18,6 +18,7 @@ from hermes_personal.integrations.video_factory.composer import (
 from hermes_personal.integrations.video_factory import server
 from hermes_personal.integrations.video_factory.domain import (
     FinalApprovalStatus,
+    VideoFactoryArtifact,
     VideoFactoryProject,
 )
 
@@ -43,7 +44,8 @@ def _write_valid_video(path: Path) -> Path:
 
 
 def test_probe_rejects_ftyp_followed_by_zero_bytes(tmp_path: Path) -> None:
-    broken = tmp_path / "broken.mp4"
+    broken = tmp_path / "workspace" / "projects" / "proj-invalid-video" / "renders" / "v1" / "composite" / "draft.mp4"
+    broken.parent.mkdir(parents=True, exist_ok=True)
     broken.write_bytes(
         b"\x00\x00\x00\x20ftypisom\x00\x00\x02\x00isomiso2avc1mp41"
         + b"\x00" * 4096
@@ -80,14 +82,41 @@ def test_export_rejects_undecodable_video_instead_of_fabricating_metadata(
             }
         )
     )
-    broken = tmp_path / "broken.mp4"
+    broken = tmp_path / "workspace" / "projects" / "proj-invalid-video" / "renders" / "v1" / "composite" / "draft.mp4"
+    broken.parent.mkdir(parents=True, exist_ok=True)
     broken.write_bytes(
         b"\x00\x00\x00\x20ftypisom\x00\x00\x02\x00isomiso2avc1mp41"
         + b"\x00" * 4096
     )
 
+    artifact_id = "art_composite_proj-invalid-video_v1"
+    broken_sha = __import__("hashlib").sha256(broken.read_bytes()).hexdigest()
+    service.repository.save_artifact(
+        VideoFactoryArtifact(
+            artifact_id=artifact_id,
+            owner_user_id="owner",
+            workflow_id="wf-invalid-video",
+            project_id="proj-invalid-video",
+            kind="composite",
+            relative_path=broken.relative_to(tmp_path / "workspace").as_posix(),
+            sha256=broken_sha,
+            version=1,
+            size=broken.stat().st_size,
+            mime_type="video/mp4",
+            status="active",
+        )
+    )
+
     result = server.export(
-        render_result={"video_url": f"file://{broken}", "project_id": "proj-invalid-video"},
+        render_result={
+            "video_url": f"file://{broken}",
+            "owner_user_id": "owner",
+            "project_id": "proj-invalid-video",
+            "workflow_id": "wf-invalid-video",
+            "artifact_id": artifact_id,
+            "artifact_version": 1,
+            "sha256": broken_sha,
+        },
         project_id="proj-invalid-video",
         owner_user_id="owner",
     )
@@ -121,7 +150,9 @@ def test_server_export_uses_canonical_immutable_package(tmp_path: Path, monkeypa
             }
         )
     )
-    video = _write_valid_video(tmp_path / "final-source.mp4")
+    video = tmp_path / "workspace" / "projects" / "proj-canonical" / "renders" / "v1" / "composite" / "draft.mp4"
+    video.parent.mkdir(parents=True, exist_ok=True)
+    _write_valid_video(video)
     from hermes_personal.integrations.video_factory.composer import compute_file_sha256
     from hermes_personal.product_video.qc.repository import QCReportRepository
     from hermes_personal.product_video.qc.models import QCReport, QCStage, QCVerdict
@@ -149,6 +180,23 @@ def test_server_export_uses_canonical_immutable_package(tmp_path: Path, monkeypa
     )
     qc_conn.close()
 
+    artifact_id = "art-canonical"
+    service.repository.save_artifact(
+        VideoFactoryArtifact(
+            artifact_id=artifact_id,
+            owner_user_id="owner",
+            workflow_id="wf-canonical",
+            project_id="proj-canonical",
+            kind="composite",
+            relative_path=video.relative_to(tmp_path / "workspace").as_posix(),
+            sha256=compute_file_sha256(video),
+            version=1,
+            size=video.stat().st_size,
+            mime_type="video/mp4",
+            status="active",
+        )
+    )
+
     # Patch the delivery-spec expectation so the 64×96 test fixture passes validation.
     # Production code enforces 1080×1920; this override is test-scoped only.
     monkeypatch.setattr(
@@ -160,29 +208,33 @@ def test_server_export_uses_canonical_immutable_package(tmp_path: Path, monkeypa
     result = server.export(
         render_result={
             "video_url": f"file://{video}",
+            "owner_user_id": "owner",
             "project_id": "proj-canonical",
             "workflow_id": "wf-canonical",
             "version": 1,
-            "artifact_id": "art-canonical",
+            "artifact_id": artifact_id,
+            "artifact_version": 1,
+            "sha256": compute_file_sha256(video),
             "video_qc_report_id": "qc-video-1",
             "provider_operations": [{"scene_id": "scene-1", "operation_id": "vertex-op-1"}],
             "spend": {"total_usd": 8.5},
         },
-        export_params={"version": "v7", "artifact_digests": {"storyboard": "sha256:abc"}},
+        export_params={"version": 1, "artifact_digests": {"storyboard": "sha256:abc"}},
         project_id="proj-canonical",
         owner_user_id="owner",
     )
 
-    expected = tmp_path / "workspace" / "exports" / "export_proj-canonical_v7"
-    assert result["ok"] is True
+    expected = tmp_path / "workspace" / "exports" / "export_proj-canonical_1"
+    assert result["ok"] is True, result
     assert Path(result["file_path"]) == expected / "final.mp4"
     assert Path(result["caption_path"]) == expected / "caption.txt"
     assert Path(result["metadata_path"]) == expected / "metadata.json"
     metadata = json.loads((expected / "metadata.json").read_text(encoding="utf-8"))
     assert metadata["video"]["frame_count"] == 3
-    assert metadata["provenance"]["provider_operations"][0]["operation_id"] == "vertex-op-1"
-    assert metadata["provenance"]["artifact_digests"]["storyboard"] == "sha256:abc"
-    assert metadata["provenance"]["spend"]["total_usd"] == 8.5
+    assert metadata["provenance"]["provider_operations"] == []
+    assert metadata["provenance"]["artifact_digests"]["composite"] == compute_file_sha256(video)
+    assert metadata["provenance"]["qc"]["video"] == "qc-video-1"
+    assert metadata["provenance"]["spend"] == {"actual_cost_status": "unavailable"}
 
 
 def test_probe_rejects_truncated_mp4(tmp_path: Path) -> None:
@@ -247,4 +299,3 @@ def test_export_metadata_is_derived_from_probe(tmp_path: Path) -> None:
     assert metadata["fps"] == probe.fps
     assert metadata["frame_count"] == probe.frame_count
     assert metadata["codec"] == probe.codec
-

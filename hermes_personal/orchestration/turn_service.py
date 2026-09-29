@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Iterator
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 from hermes_personal.capabilities.errors import CapabilityError
 from hermes_personal.capabilities.policy import PolicyRequestContext
@@ -19,6 +19,9 @@ from .ports import (
     TranscriptFactory,
     UpstreamAgentPort,
 )
+
+if TYPE_CHECKING:  # pragma: no cover
+    from hermes_personal.learning.context import AgentContextAssembler
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +90,7 @@ class HermesTurnService:
         transcript_factory: TranscriptFactory,
         agent: UpstreamAgentPort,
         catalog_service: CapabilityCatalogService | None = None,
+        context_assembler: AgentContextAssembler | None = None,
     ) -> None:
         self._identity_repository = identity_repository
         self._session_repository = session_repository
@@ -94,6 +98,7 @@ class HermesTurnService:
         self._transcript_factory = transcript_factory
         self._agent = agent
         self._catalog_service = catalog_service
+        self._context_assembler = context_assembler
 
     @property
     def catalog_service(self) -> CapabilityCatalogService | None:
@@ -128,7 +133,7 @@ class HermesTurnService:
 
         transcript = self._transcript_factory.for_session(request.session_id)
         history = self._assemble_history(transcript, request.session_id)
-        effective_history = history
+        effective_history = self._maybe_prepend_context(request, history)
 
         transcript.append_user_turn(request.message)
         outputs: Iterator[AgentOutput] | None = None
@@ -243,6 +248,14 @@ class HermesTurnService:
         if canonical_history:
             return canonical_history
         return tuple(transcript_history)
+
+    def _maybe_prepend_context(
+        self, request: AgentTurnRequest, history: tuple[Mapping[str, Any], ...]
+    ) -> tuple[Mapping[str, Any], ...]:
+        if self._context_assembler is not None:
+            ctx = self._context_assembler.assemble(request, history)
+            return ctx.assemble_history_messages()
+        return history
 
     def _validate_request(self, request: AgentTurnRequest) -> None:
         try:

@@ -1,0 +1,50 @@
+{
+  "timestamp_utc": "2026-08-29T18:19:07.680829+00:00",
+  "platform": {
+    "system": "Windows",
+    "release": "10",
+    "version": "10.0.26200",
+    "machine": "AMD64",
+    "python_version": "3.11.15 (main, Jun 23 2026, 15:20:37) [MSC v.1944 64 bit (AMD64)]",
+    "python_executable": "D:\\work\\hermes-upstream-rearchitecture\\.venv\\Scripts\\python.exe"
+  },
+  "git": {
+    "revision": "b193b1d07e800d7109e77f5ae5f61fa66f2fb454",
+    "repo_root": "D:\\work\\hermes-upstream-rearchitecture"
+  },
+  "test_baselines": [
+    {
+      "command": "uv run pytest tests/hermes_personal -q -p no:cacheprovider",
+      "exit_code": 0,
+      "passed": 663,
+      "warnings": 40,
+      "execution_time_seconds": 96.28,
+      "scope": "hermes_personal test suite"
+    },
+    {
+      "command": "uv run ruff check hermes_personal tests/hermes_personal",
+      "exit_code": 0,
+      "status": "All checks passed",
+      "scope": "hermes_personal linter check"
+    },
+    {
+      "command": "uv run pytest tests/agent/test_knowledge_capture_prompt.py tests/skills/test_learning_from_video_skill.py tests/gateway/test_unknown_command.py tests/hermes_cli/test_commands.py -q -p no:cacheprovider",
+      "exit_code": 0,
+      "passed": 85,
+      "execution_time_seconds": 22.26,
+      "scope": "promoted upstream & capability test suite"
+    },
+    {
+      "command": "uv run python -c \"from hermes_cli.commands import GATEWAY_KNOWN_COMMANDS, resolve_command; bad=sorted(x for x in GATEWAY_KNOWN_COMMANDS if resolve_command(x) is None); print(bad); assert not bad\"",
+      "exit_code": 0,
+      "output": "[]",
+      "scope": "gateway known commands resolution invariant"
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "status": "Clean",
+      "scope": "git diff whitespace and syntax cleanliness"
+    }
+  ]
+}

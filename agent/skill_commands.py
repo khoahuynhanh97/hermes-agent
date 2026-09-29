@@ -469,22 +469,17 @@ def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
         disabled = _get_disabled_skill_names()
         seen_names: set = set()
 
-        # Scan project dirs first (highest precedence), then candidate project dirs, then local, then external.
+        # Scan project dirs first (highest precedence), then local, then external.
         # Project dirs iterate through the quarantine chokepoint.
-        from agent.skill_utils import find_project_root, _candidate_project_skills_dirs, is_quarantined_project_skill
+        from agent.skill_utils import is_quarantined_project_skill
         project_dirs = list(get_project_skills_dirs())
         dirs_to_scan = list(project_dirs)
-        root = find_project_root()
-        if root:
-            for cand_dir in _candidate_project_skills_dirs(root):
-                if cand_dir not in dirs_to_scan:
-                    dirs_to_scan.append(cand_dir)
         if SKILLS_DIR.exists():
             dirs_to_scan.append(SKILLS_DIR)
         dirs_to_scan.extend(get_external_skills_dirs())
 
         for scan_dir in dirs_to_scan:
-            _is_proj_tier = scan_dir in project_dirs or (root and scan_dir in _candidate_project_skills_dirs(root))
+            _is_proj_tier = scan_dir in project_dirs
             _iter = (
                 iter_project_skill_files(scan_dir)
                 if _is_proj_tier

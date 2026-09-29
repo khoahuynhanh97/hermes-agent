@@ -78,7 +78,7 @@ def test_preference_auto_promotes(promotion_service, repository):
     assert active[0].version_id == result.version.version_id
 
 
-def test_knowledge_requires_owner_approval(promotion_service, repository):
+def test_knowledge_requires_owner_approval(promotion_service, repository, approval_service):
     candidate = LearningCandidate(
         candidate_id="cand_know",
         owner_user_id="user1",
@@ -100,7 +100,11 @@ def test_knowledge_requires_owner_approval(promotion_service, repository):
     assert result.approval_id is not None
     assert promotion_service.active_versions("user1", kind="knowledge") == ()
 
-    # Now approve it
+    # Promotion cannot turn a pending request into owner approval.
+    with pytest.raises(InvalidCandidate, match="approved"):
+        promotion_service.approve_promotion(result.approval_id, "user1", "cand_know")
+    assert approval_service.get_request(result.approval_id).status.value == "pending"
+    approval_service.approve(result.approval_id)
     promoted_v = promotion_service.approve_promotion(
         approval_id=result.approval_id,
         owner_user_id="user1",
@@ -113,6 +117,63 @@ def test_knowledge_requires_owner_approval(promotion_service, repository):
     active = promotion_service.active_versions("user1", kind="knowledge")
     assert len(active) == 1
     assert active[0].version_id == promoted_v.version_id
+
+    with pytest.raises(InvalidVersion):
+        promotion_service.approve_promotion(result.approval_id, "user1", "cand_know")
+    assert len(repository.get_versions_for_candidate("cand_know")) == 1
+
+
+@pytest.mark.parametrize("field,value", [
+    ("action", "other"), ("owner_user_id", "user2"),
+    ("candidate_id", "other"), ("kind", "procedure"),
+    ("content_digest", "other"), ("expected_version", 2),
+    ("expected_version", None),
+])
+def test_approval_binding_rejects_mismatch(repository, approval_service, field, value):
+    candidate = repository.create_candidate(LearningCandidate(
+        candidate_id="bound", owner_user_id="user1", kind="knowledge",
+        title="Bound knowledge", content="Content", evidence=(sample_evidence(),),
+    ))
+    payload = dict(action="promote_learning", owner_user_id="user1",
+                   candidate_id="bound", kind="knowledge",
+                   content_digest=candidate.compute_digest(), expected_version=1)
+    payload[field] = value
+    receipt = approval_service.submit_request(payload)
+    approval_service.approve(receipt)
+    service = PromotionService(repository, approval_service)
+    with pytest.raises((InvalidCandidate, InvalidVersion)):
+        service.approve_promotion(receipt, "user1", "bound")
+    assert repository.get_versions_for_candidate("bound") == []
+
+
+def test_missing_approval_service_cannot_promote(repository):
+    repository.create_candidate(LearningCandidate(
+        candidate_id="bound", owner_user_id="user1", kind="knowledge",
+        title="Bound knowledge", content="Content", evidence=(sample_evidence(),),
+    ))
+    with pytest.raises(InvalidCandidate):
+        PromotionService(repository).approve_promotion("invented", "user1", "bound")
+    assert repository.get_versions_for_candidate("bound") == []
+
+
+def test_failed_activation_preserves_previous_version(repository, approval_service, db_conn):
+    candidate = repository.create_candidate(LearningCandidate(
+        candidate_id="bound", owner_user_id="user1", kind="knowledge",
+        title="Bound knowledge", content="Content", evidence=(sample_evidence(),),
+    ))
+    prior = repository.create_version("bound", "Prior content")
+    service = PromotionService(repository, approval_service)
+    result = service.request_promotion(candidate, CandidateEvaluation(
+        evaluation_id="eval_atomic", candidate_id="bound", evaluator_name="test",
+        decision="needs_approval", score=0.9, reason="Needs review",
+    ))
+    approval_service.approve(result.approval_id)
+    db_conn.execute("CREATE TRIGGER fail_activation BEFORE INSERT ON learning_version "
+                    "BEGIN SELECT RAISE(ABORT, 'activation failed'); END")
+    import sqlite3
+    with pytest.raises(sqlite3.IntegrityError, match="activation failed"):
+        service.approve_promotion(result.approval_id, "user1", "bound")
+    assert repository.get_version(prior.version_id).status == "active"
 
 
 def test_rollback_reactivates_prior_version_and_revokes_new(promotion_service, repository):

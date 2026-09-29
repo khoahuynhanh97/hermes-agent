@@ -87,6 +87,13 @@ class ResourceIdentity:
     materials: str = ""
     logo_placement: str = ""
     distinctive_features: tuple[str, ...] = ()
+    silhouette: str = ""
+    main_proportions: str = ""
+    product_count: str = ""
+    control_placement: str = ""
+    port_count: str = ""
+    port_placement: str = ""
+    display_shape: str = ""
 
     def __post_init__(self) -> None:
         if not self.description.strip():
@@ -280,6 +287,7 @@ class Storyboard:
     version: int = 1
     created_at: str = ""
     updated_at: str = ""
+    source_scene_version: int = 0
 
     def __post_init__(self) -> None:
         if not self.storyboard_id.strip() or not self.project_id.strip():
@@ -292,13 +300,13 @@ class Storyboard:
 class VideoPrompt:
     scene_id: str
     duration_seconds: int
-    start_visual_state: str
-    end_visual_state: str
-    subject_action: str
-    product_action: str
-    camera_movement: str
-    camera_framing: str
-    environment_motion: str
+    start_visual_state: str = ""
+    end_visual_state: str = ""
+    subject_action: str = ""
+    product_action: str = ""
+    camera_movement: str = ""
+    camera_framing: str = ""
+    environment_motion: str = ""
     motion_constraints: str = ""
     identity_constraints: str = ""
     reference_frame_ids: tuple[str, ...] = ()
@@ -423,6 +431,7 @@ class VideoFactoryProject:
     storyboard_version: int = 0
     video_generation_version: int = 0
     timeline_version: int = 0
+    revision: int = 0
     created_at: str = ""
     updated_at: str = ""
 
@@ -432,3 +441,51 @@ class VideoFactoryProject:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class VideoFactoryArtifact:
+    """Tracked artifact in the canonical project inventory."""
+    artifact_id: str
+    owner_user_id: str
+    workflow_id: str
+    project_id: str
+    kind: str
+    relative_path: str
+    sha256: str
+    scene_id: str = ""
+    frame_role: str = ""
+    version: int = 1
+    attempt: int = 1
+    size: int = 0
+    mime_type: str = ""
+    status: str = "active"
+    parent_artifact_ids: tuple[str, ...] = ()
+    provider_metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: str = ""
+    updated_at: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.artifact_id.strip() or not self.project_id.strip():
+            raise ValueError("artifact_id and project_id are required")
+
+
+@dataclass(frozen=True)
+class RenderBatch:
+    """Durable render batch for multi-scene video generation."""
+    render_batch_id: str
+    owner_user_id: str
+    workflow_id: str
+    project_id: str
+    version: int = 1
+    status: str = "pending"
+    scene_count: int = 0
+    completed_scene_count: int = 0
+    timeline_artifact_id: str | None = None
+    composite_artifact_id: str | None = None
+    created_at: str = ""
+    updated_at: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.render_batch_id.strip() or not self.project_id.strip():
+            raise ValueError("render_batch_id and project_id are required")

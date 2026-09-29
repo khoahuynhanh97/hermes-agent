@@ -1,0 +1,517 @@
+================================================================================
+HERMES AGENT — RUNTIME TRUTH AUDIT (GATE 0 & GATE 1) RAW COMMAND TRANSCRIPT
+Generated At: 2026-08-29T18:48:12.891664+00:00
+Repository Root: D:\work\hermes-upstream-rearchitecture
+================================================================================
+
+--------------------------------------------------------------------------------
+COMMAND: git rev-parse --show-toplevel
+TIMESTAMP: 2026-08-29T18:46:49.833380+00:00
+EXIT CODE: 0
+DURATION: 0.03s
+STDOUT:
+D:/work/hermes-upstream-rearchitecture
+STDERR:
+(empty)
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+COMMAND: git branch --show-current
+TIMESTAMP: 2026-08-29T18:46:49.865097+00:00
+EXIT CODE: 0
+DURATION: 0.03s
+STDOUT:
+codex/hermes-upstream-rearchitecture
+STDERR:
+(empty)
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+COMMAND: git rev-parse HEAD
+TIMESTAMP: 2026-08-29T18:46:49.897719+00:00
+EXIT CODE: 0
+DURATION: 0.03s
+STDOUT:
+b193b1d07e800d7109e77f5ae5f61fa66f2fb454
+STDERR:
+(empty)
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+COMMAND: uv --version
+TIMESTAMP: 2026-08-29T18:46:49.928884+00:00
+EXIT CODE: 0
+DURATION: 0.02s
+STDOUT:
+uv 0.12.1 (329541a50 2026-07-31 x86_64-pc-windows-msvc)
+STDERR:
+(empty)
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+COMMAND: uv run python --version
+TIMESTAMP: 2026-08-29T18:46:49.946109+00:00
+EXIT CODE: 0
+DURATION: 0.07s
+STDOUT:
+Python 3.11.15
+STDERR:
+(empty)
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+COMMAND: cmd /c ver
+TIMESTAMP: 2026-08-29T18:46:50.012737+00:00
+EXIT CODE: 0
+DURATION: 0.02s
+STDOUT:
+
+Microsoft Windows [Version 10.0.26200.8875]
+STDERR:
+(empty)
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+COMMAND: git status --short --untracked-files=all
+TIMESTAMP: 2026-08-29T18:46:50.029351+00:00
+EXIT CODE: 0
+DURATION: 0.06s
+STDOUT:
+ M cli.py
+ M gateway/run.py
+ M hermes_cli/cli_commands_mixin.py
+ M hermes_cli/commands.py
+?? .skills_prompt_snapshot.json
+?? SOUL.md
+?? agent/knowledge_capture_prompt.py
+?? reports/audio.wav
+?? reports/exact_transcript.txt
+?? reports/hermes-project-status-2026-08-29.html
+?? reports/runtime-truth/gate-0-1/audit_report_gate_0_1.md
+?? reports/runtime-truth/gate-0-1/baseline.md
+?? reports/runtime-truth/gate-0-1/command-transcript.txt
+?? reports/runtime-truth/gate-0-1/contradictions.md
+?? reports/runtime-truth/gate-0-1/gate-2-candidates.md
+?? reports/runtime-truth/gate-0-1/gate_0_baseline.json
+?? reports/runtime-truth/gate-0-1/gate_1_runtime_closure.json
+?? reports/runtime-truth/gate-0-1/gate_1_test_inventory.json
+?? reports/runtime-truth/gate-0-1/generate_audit_rework.py
+?? reports/runtime-truth/gate-0-1/generate_manifest.py
+?? reports/runtime-truth/gate-0-1/manifest_comparison.json
+?? reports/runtime-truth/gate-0-1/module-inventory.csv
+?? reports/runtime-truth/gate-0-1/preservation_manifest_end.json
+?? reports/runtime-truth/gate-0-1/preservation_manifest_start.json
+?? reports/runtime-truth/gate-0-1/process-topology.md
+?? reports/runtime-truth/gate-0-1/run_audit.py
+?? reports/runtime-truth/gate-0-1/runtime-call-path.md
+?? reports/tiktok_info.json
+?? reports/tikwm_data.json
+?? reports/video_sample.mp4
+?? skills/media/learning-from-video/SKILL.md
+?? skills/media/learning-from-video/references/procedure-contract.md
+?? tests/agent/test_knowledge_capture_prompt.py
+?? tests/skills/test_learning_from_video_skill.py
+STDERR:
+(empty)
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+COMMAND: git diff --check
+TIMESTAMP: 2026-08-29T18:46:50.087644+00:00
+EXIT CODE: 0
+DURATION: 0.08s
+STDOUT:
+(empty)
+STDERR:
+(empty)
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+COMMAND: uv run hermes start --help
+TIMESTAMP: 2026-08-29T18:46:50.166734+00:00
+EXIT CODE: 0
+DURATION: 1.06s
+STDOUT:
+usage: hermes start [-h] [--mode {development,production}] [--config CONFIG]
+                    [--no-open-browser]
+
+Validate, recover, start, and supervise every Hermes service.
+
+options:
+  -h, --help            show this help message and exit
+  --mode {development,production}
+                        Runtime mode (development|production)
+  --config CONFIG       Path to config.yaml file
+  --no-open-browser     Do not automatically open browser on startup
+STDERR:
+(empty)
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+COMMAND: uv run python -c from hermes_cli.commands import GATEWAY_KNOWN_COMMANDS, resolve_command; bad=sorted(x for x in GATEWAY_KNOWN_COMMANDS if resolve_command(x) is None); print(bad); assert not bad
+TIMESTAMP: 2026-08-29T18:46:51.229898+00:00
+EXIT CODE: 0
+DURATION: 0.33s
+STDOUT:
+[]
+STDERR:
+(empty)
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+COMMAND: uv run ruff check hermes_personal tests/hermes_personal
+TIMESTAMP: 2026-08-29T18:46:51.555542+00:00
+EXIT CODE: 0
+DURATION: 0.07s
+STDOUT:
+All checks passed!
+STDERR:
+(empty)
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+COMMAND: uv run pytest tests/agent/test_knowledge_capture_prompt.py tests/skills/test_learning_from_video_skill.py tests/gateway/test_unknown_command.py tests/hermes_cli/test_commands.py -q -p no:cacheprovider
+TIMESTAMP: 2026-08-29T18:46:51.625032+00:00
+EXIT CODE: 0
+DURATION: 16.91s
+STDOUT:
+........................................................................ [ 84%]
+.............                                                            [100%]
+85 passed in 16.19s
+STDERR:
+(empty)
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+COMMAND: uv run pytest tests/hermes_personal -q -p no:cacheprovider
+TIMESTAMP: 2026-08-29T18:47:08.533204+00:00
+EXIT CODE: 0
+DURATION: 64.36s
+STDOUT:
+........................................................................ [ 10%]
+........................................................................ [ 21%]
+........................................................................ [ 32%]
+........................................................................ [ 43%]
+........................................................................ [ 54%]
+........................................................................ [ 65%]
+........................................................................ [ 76%]
+........................................................................ [ 86%]
+........................................................................ [ 97%]
+...............                                                          [100%]
+============================== warnings summary ===============================
+tests/hermes_personal/runtime/test_gateway_server.py: 7 warnings
+tests/hermes_personal/runtime/test_startup_readiness_lifecycle.py: 13 warnings
+  D:\work\hermes-upstream-rearchitecture\hermes_personal\runtime\gateway_server.py:368: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("shutdown")
+
+tests/hermes_personal/runtime/test_gateway_server.py: 7 warnings
+tests/hermes_personal/runtime/test_startup_readiness_lifecycle.py: 13 warnings
+  D:\work\hermes-upstream-rearchitecture\.venv\Lib\site-packages\fastapi\applications.py:4599: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+663 passed, 40 warnings in 63.54s (0:01:03)
+STDERR:
+(empty)
+--------------------------------------------------------------------------------
+
+
+================================================================================
+GATE 1 REWORK VALIDATION PASS — RAW EVIDENCE SUMMARY
+Timestamp UTC: 2026-08-29T19:00:02.809376+00:00
+================================================================================
+
+--- SECTION 1: PATH CITATION VALIDATION ---
+Total Path Citations Checked: 82
+Nonexistent Citations Found: 0
+All cited paths exist in repository (excluding explicit MISSING_TARGET).
+Exit Code: 0 (SUCCESS)
+
+--- SECTION 2: SYMBOL LINE RESOLUTION ---
+Total Key Symbols Resolved from current HEAD: 24
+  hermes_cli._parser:build_top_level_parser -> hermes_cli/_parser.py:87
+  hermes_cli.main:_plugin_cli_discovery_needed -> hermes_cli/main.py:11735
+  hermes_cli.main:main -> hermes_cli/main.py:12418
+  hermes_cli.plugins:PluginContext.register_cli_command -> hermes_cli/plugins.py:2066
+  hermes_cli.plugins:PluginManager._load_plugin -> hermes_cli/plugins.py:4758
+  hermes_cli.plugins:discover_plugins -> hermes_cli/plugins.py:5699
+  hermes_personal.identity.repository:IdentityRepository -> hermes_personal/identity/repository.py:12
+  hermes_personal.orchestration.event_repository:EventRepository -> hermes_personal/orchestration/event_repository.py:85
+  hermes_personal.orchestration.turn_service:HermesTurnService -> hermes_personal/orchestration/turn_service.py:74
+  hermes_personal.orchestration.upstream_agent:UpstreamAIAgentAdapter -> hermes_personal/orchestration/upstream_agent.py:46
+  hermes_personal.runtime.cli:handle_start -> hermes_personal/runtime/cli.py:44
+  hermes_personal.runtime.cli:setup_start_parser -> hermes_personal/runtime/cli.py:23
+  hermes_personal.runtime.config:RuntimeConfig.from_file -> hermes_personal/runtime/config.py:85
+  hermes_personal.runtime.plugin:register -> hermes_personal/runtime/plugin.py:11
+  hermes_personal.runtime.processes:build_process_topology -> hermes_personal/runtime/processes.py:69
+  hermes_personal.runtime.readiness:ReadinessProbe -> hermes_personal/runtime/readiness.py:55
+  hermes_personal.runtime.readiness:create_readiness_probe -> hermes_personal/runtime/readiness.py:114
+  hermes_personal.runtime.startup:StartupCoordinator.prepare -> hermes_personal/runtime/startup.py:221
+  hermes_personal.runtime.supervisor:DefaultProcessRunner.start -> hermes_personal/runtime/supervisor.py:124
+  hermes_personal.runtime.supervisor:Supervisor -> hermes_personal/runtime/supervisor.py:169
+  hermes_personal.runtime.supervisor:Supervisor.run -> hermes_personal/runtime/supervisor.py:477
+  hermes_personal.sessions.repository:SessionRepository -> hermes_personal/sessions/repository.py:17
+  hermes_personal.workflows.engine:WorkflowEngine -> hermes_personal/workflows/engine.py:21
+  plugins.hermes_personal:register -> plugins/hermes_personal/__init__.py:7
+Exit Code: 0 (SUCCESS)
+
+--- SECTION 3: PRESERVATION MANIFEST COMPARISON ---
+Total Pre-Audit Items Compared: 17/17
+Digest & Size Mismatches: 0
+All 17 original pre-audit files match byte-for-byte.
+Exit Code: 0 (SUCCESS)
+
+--- SECTION 4: FINAL GIT STATUS EVIDENCE ---
+Command: git status --short --untracked-files=all
+Exit Code: 0
+STDOUT:
+ M cli.py
+ M gateway/run.py
+ M hermes_cli/cli_commands_mixin.py
+ M hermes_cli/commands.py
+?? .skills_prompt_snapshot.json
+?? SOUL.md
+?? agent/knowledge_capture_prompt.py
+?? reports/audio.wav
+?? reports/exact_transcript.txt
+?? reports/hermes-project-status-2026-08-29.html
+?? reports/runtime-truth/gate-0-1/audit_report_gate_0_1.md
+?? reports/runtime-truth/gate-0-1/baseline.md
+?? reports/runtime-truth/gate-0-1/command-transcript.txt
+?? reports/runtime-truth/gate-0-1/contradictions.md
+?? reports/runtime-truth/gate-0-1/executive-summary.md
+?? reports/runtime-truth/gate-0-1/gate-2-candidates.md
+?? reports/runtime-truth/gate-0-1/gate_0_baseline.json
+?? reports/runtime-truth/gate-0-1/gate_1_runtime_closure.json
+?? reports/runtime-truth/gate-0-1/gate_1_test_inventory.json
+?? reports/runtime-truth/gate-0-1/generate_audit_rework.py
+?? reports/runtime-truth/gate-0-1/generate_manifest.py
+?? reports/runtime-truth/gate-0-1/manifest_comparison.json
+?? reports/runtime-truth/gate-0-1/module-inventory.csv
+?? reports/runtime-truth/gate-0-1/preservation_manifest_end.json
+?? reports/runtime-truth/gate-0-1/preservation_manifest_start.json
+?? reports/runtime-truth/gate-0-1/process-topology.md
+?? reports/runtime-truth/gate-0-1/run_audit.py
+?? reports/runtime-truth/gate-0-1/runtime-call-path.md
+?? reports/runtime-truth/gate-0-1/validate_and_rebuild_gate1.py
+?? reports/tiktok_info.json
+?? reports/tikwm_data.json
+?? reports/video_sample.mp4
+?? skills/media/learning-from-video/SKILL.md
+?? skills/media/learning-from-video/references/procedure-contract.md
+?? tests/agent/test_knowledge_capture_prompt.py
+?? tests/skills/test_learning_from_video_skill.py
+================================================================================
+
+
+================================================================================
+GATE 1 REWORK VALIDATION PASS — RAW EVIDENCE SUMMARY
+Timestamp UTC: 2026-08-29T19:00:11.307567+00:00
+================================================================================
+
+--- SECTION 1: PATH CITATION VALIDATION ---
+Total Path Citations Checked: 82
+Nonexistent Citations Found: 0
+All cited paths exist in repository (excluding explicit MISSING_TARGET).
+Exit Code: 0 (SUCCESS)
+
+--- SECTION 2: SYMBOL LINE RESOLUTION ---
+Total Key Symbols Resolved from current HEAD: 24
+  hermes_cli._parser:build_top_level_parser -> hermes_cli/_parser.py:87
+  hermes_cli.main:_plugin_cli_discovery_needed -> hermes_cli/main.py:11735
+  hermes_cli.main:main -> hermes_cli/main.py:12418
+  hermes_cli.plugins:PluginContext.register_cli_command -> hermes_cli/plugins.py:2066
+  hermes_cli.plugins:PluginManager._load_plugin -> hermes_cli/plugins.py:4758
+  hermes_cli.plugins:discover_plugins -> hermes_cli/plugins.py:5699
+  hermes_personal.identity.repository:IdentityRepository -> hermes_personal/identity/repository.py:12
+  hermes_personal.orchestration.event_repository:EventRepository -> hermes_personal/orchestration/event_repository.py:85
+  hermes_personal.orchestration.turn_service:HermesTurnService -> hermes_personal/orchestration/turn_service.py:74
+  hermes_personal.orchestration.upstream_agent:UpstreamAIAgentAdapter -> hermes_personal/orchestration/upstream_agent.py:46
+  hermes_personal.runtime.cli:handle_start -> hermes_personal/runtime/cli.py:44
+  hermes_personal.runtime.cli:setup_start_parser -> hermes_personal/runtime/cli.py:23
+  hermes_personal.runtime.config:RuntimeConfig.from_file -> hermes_personal/runtime/config.py:85
+  hermes_personal.runtime.plugin:register -> hermes_personal/runtime/plugin.py:11
+  hermes_personal.runtime.processes:build_process_topology -> hermes_personal/runtime/processes.py:69
+  hermes_personal.runtime.readiness:ReadinessProbe -> hermes_personal/runtime/readiness.py:55
+  hermes_personal.runtime.readiness:create_readiness_probe -> hermes_personal/runtime/readiness.py:114
+  hermes_personal.runtime.startup:StartupCoordinator.prepare -> hermes_personal/runtime/startup.py:221
+  hermes_personal.runtime.supervisor:DefaultProcessRunner.start -> hermes_personal/runtime/supervisor.py:124
+  hermes_personal.runtime.supervisor:Supervisor -> hermes_personal/runtime/supervisor.py:169
+  hermes_personal.runtime.supervisor:Supervisor.run -> hermes_personal/runtime/supervisor.py:477
+  hermes_personal.sessions.repository:SessionRepository -> hermes_personal/sessions/repository.py:17
+  hermes_personal.workflows.engine:WorkflowEngine -> hermes_personal/workflows/engine.py:21
+  plugins.hermes_personal:register -> plugins/hermes_personal/__init__.py:7
+Exit Code: 0 (SUCCESS)
+
+--- SECTION 3: PRESERVATION MANIFEST COMPARISON ---
+Total Pre-Audit Items Compared: 17/17
+Digest & Size Mismatches: 0
+All 17 original pre-audit files match byte-for-byte.
+Exit Code: 0 (SUCCESS)
+
+--- SECTION 4: FINAL GIT STATUS EVIDENCE ---
+Command: git status --short --untracked-files=all
+Exit Code: 0
+STDOUT:
+ M cli.py
+ M gateway/run.py
+ M hermes_cli/cli_commands_mixin.py
+ M hermes_cli/commands.py
+?? .skills_prompt_snapshot.json
+?? SOUL.md
+?? agent/knowledge_capture_prompt.py
+?? reports/audio.wav
+?? reports/exact_transcript.txt
+?? reports/hermes-project-status-2026-08-29.html
+?? reports/runtime-truth/gate-0-1/audit_report_gate_0_1.md
+?? reports/runtime-truth/gate-0-1/baseline.md
+?? reports/runtime-truth/gate-0-1/command-transcript.txt
+?? reports/runtime-truth/gate-0-1/contradictions.md
+?? reports/runtime-truth/gate-0-1/executive-summary.md
+?? reports/runtime-truth/gate-0-1/gate-2-candidates.md
+?? reports/runtime-truth/gate-0-1/gate_0_baseline.json
+?? reports/runtime-truth/gate-0-1/gate_1_runtime_closure.json
+?? reports/runtime-truth/gate-0-1/gate_1_test_inventory.json
+?? reports/runtime-truth/gate-0-1/generate_audit_rework.py
+?? reports/runtime-truth/gate-0-1/generate_manifest.py
+?? reports/runtime-truth/gate-0-1/manifest_comparison.json
+?? reports/runtime-truth/gate-0-1/module-inventory.csv
+?? reports/runtime-truth/gate-0-1/preservation_manifest_end.json
+?? reports/runtime-truth/gate-0-1/preservation_manifest_start.json
+?? reports/runtime-truth/gate-0-1/process-topology.md
+?? reports/runtime-truth/gate-0-1/run_audit.py
+?? reports/runtime-truth/gate-0-1/runtime-call-path.md
+?? reports/runtime-truth/gate-0-1/validate_and_rebuild_gate1.py
+?? reports/tiktok_info.json
+?? reports/tikwm_data.json
+?? reports/video_sample.mp4
+?? skills/media/learning-from-video/SKILL.md
+?? skills/media/learning-from-video/references/procedure-contract.md
+?? tests/agent/test_knowledge_capture_prompt.py
+?? tests/skills/test_learning_from_video_skill.py
+================================================================================
+
+
+================================================================================
+FINAL GATE 1 REWORK & DATA PROVENANCE VALIDATION TRANSCRIPT
+Timestamp UTC: 2026-08-29T19:05:48.140031+00:00
+================================================================================
+
+--- SECTION 1: DYNAMIC ENVIRONMENT METADATA ---
+COMMAND: git branch --show-current
+EXIT CODE: 0
+STDOUT: codex/hermes-upstream-rearchitecture
+
+COMMAND: git rev-parse HEAD
+EXIT CODE: 0
+STDOUT: b193b1d07e800d7109e77f5ae5f61fa66f2fb454
+
+COMMAND: git rev-parse --show-toplevel
+EXIT CODE: 0
+STDOUT: D:/work/hermes-upstream-rearchitecture
+
+COMMAND: uv --version
+EXIT CODE: 0
+STDOUT: uv 0.12.1 (329541a50 2026-07-31 x86_64-pc-windows-msvc)
+
+COMMAND: uv run python --version
+EXIT CODE: 0
+STDOUT: Python 3.11.15
+
+COMMAND: cmd.exe /c ver
+EXIT CODE: 0
+STDOUT: Microsoft Windows [Version 10.0.26200.8875]
+
+--- SECTION 2: PATH CITATION & SEMANTIC VALIDATION ---
+Total Path Citations Checked: 77
+Semantic & Nonexistent Errors Found: 0
+All cited paths exist in repository (excluding explicit MISSING_TARGET).
+All ACTIVE rows have valid source_provenance and exact callers.
+No WORKTREE_UNTRACKED row presented as canonical HEAD.
+Exit Code: 0 (SUCCESS)
+
+--- SECTION 3: SYMBOL LINE RESOLUTION ---
+Total Key Symbols Resolved from current HEAD: 24
+  hermes_cli._parser:build_top_level_parser -> hermes_cli/_parser.py:87
+  hermes_cli.main:_plugin_cli_discovery_needed -> hermes_cli/main.py:11735
+  hermes_cli.main:main -> hermes_cli/main.py:12418
+  hermes_cli.plugins:PluginContext.register_cli_command -> hermes_cli/plugins.py:2066
+  hermes_cli.plugins:PluginManager._load_plugin -> hermes_cli/plugins.py:4758
+  hermes_cli.plugins:discover_plugins -> hermes_cli/plugins.py:5699
+  hermes_personal.identity.repository:IdentityRepository -> hermes_personal/identity/repository.py:12
+  hermes_personal.orchestration.event_repository:EventRepository -> hermes_personal/orchestration/event_repository.py:85
+  hermes_personal.orchestration.turn_service:HermesTurnService -> hermes_personal/orchestration/turn_service.py:74
+  hermes_personal.orchestration.upstream_agent:UpstreamAIAgentAdapter -> hermes_personal/orchestration/upstream_agent.py:46
+  hermes_personal.runtime.cli:handle_start -> hermes_personal/runtime/cli.py:44
+  hermes_personal.runtime.cli:setup_start_parser -> hermes_personal/runtime/cli.py:23
+  hermes_personal.runtime.config:RuntimeConfig.from_file -> hermes_personal/runtime/config.py:85
+  hermes_personal.runtime.plugin:register -> hermes_personal/runtime/plugin.py:11
+  hermes_personal.runtime.processes:build_process_topology -> hermes_personal/runtime/processes.py:69
+  hermes_personal.runtime.readiness:ReadinessProbe -> hermes_personal/runtime/readiness.py:55
+  hermes_personal.runtime.readiness:create_readiness_probe -> hermes_personal/runtime/readiness.py:114
+  hermes_personal.runtime.startup:StartupCoordinator.prepare -> hermes_personal/runtime/startup.py:221
+  hermes_personal.runtime.supervisor:DefaultProcessRunner.start -> hermes_personal/runtime/supervisor.py:124
+  hermes_personal.runtime.supervisor:Supervisor -> hermes_personal/runtime/supervisor.py:169
+  hermes_personal.runtime.supervisor:Supervisor.run -> hermes_personal/runtime/supervisor.py:477
+  hermes_personal.sessions.repository:SessionRepository -> hermes_personal/sessions/repository.py:17
+  hermes_personal.workflows.engine:WorkflowEngine -> hermes_personal/workflows/engine.py:21
+  plugins.hermes_personal:register -> plugins/hermes_personal/__init__.py:7
+Exit Code: 0 (SUCCESS)
+
+--- SECTION 4: PRESERVATION MANIFEST COMPARISON ---
+Total Pre-Audit Items Compared: 17/17
+Digest & Size Mismatches: 0
+All 17 original pre-audit files match byte-for-byte.
+Exit Code: 0 (SUCCESS)
+
+--- SECTION 5: FINAL GIT STATUS EVIDENCE ---
+Command: git status --short --untracked-files=all
+Exit Code: 0
+STDOUT:
+ M cli.py
+ M gateway/run.py
+ M hermes_cli/cli_commands_mixin.py
+ M hermes_cli/commands.py
+?? .skills_prompt_snapshot.json
+?? SOUL.md
+?? agent/knowledge_capture_prompt.py
+?? reports/audio.wav
+?? reports/exact_transcript.txt
+?? reports/hermes-project-status-2026-08-29.html
+?? reports/runtime-truth/gate-0-1/audit_report_gate_0_1.md
+?? reports/runtime-truth/gate-0-1/baseline.md
+?? reports/runtime-truth/gate-0-1/command-transcript.txt
+?? reports/runtime-truth/gate-0-1/contradictions.md
+?? reports/runtime-truth/gate-0-1/executive-summary.md
+?? reports/runtime-truth/gate-0-1/gate-2-candidates.md
+?? reports/runtime-truth/gate-0-1/gate_0_baseline.json
+?? reports/runtime-truth/gate-0-1/gate_1_runtime_closure.json
+?? reports/runtime-truth/gate-0-1/gate_1_test_inventory.json
+?? reports/runtime-truth/gate-0-1/generate_audit_rework.py
+?? reports/runtime-truth/gate-0-1/generate_manifest.py
+?? reports/runtime-truth/gate-0-1/manifest_comparison.json
+?? reports/runtime-truth/gate-0-1/module-inventory.csv
+?? reports/runtime-truth/gate-0-1/preservation_manifest_end.json
+?? reports/runtime-truth/gate-0-1/preservation_manifest_start.json
+?? reports/runtime-truth/gate-0-1/process-topology.md
+?? reports/runtime-truth/gate-0-1/run_audit.py
+?? reports/runtime-truth/gate-0-1/runtime-call-path.md
+?? reports/runtime-truth/gate-0-1/validate_and_rebuild_gate1.py
+?? reports/tiktok_info.json
+?? reports/tikwm_data.json
+?? reports/video_sample.mp4
+?? skills/media/learning-from-video/SKILL.md
+?? skills/media/learning-from-video/references/procedure-contract.md
+?? tests/agent/test_knowledge_capture_prompt.py
+?? tests/skills/test_learning_from_video_skill.py
+================================================================================

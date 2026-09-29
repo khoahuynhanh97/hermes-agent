@@ -1,0 +1,61 @@
+{
+  "code": 0,
+  "msg": "success",
+  "processed_time": 0.4415,
+  "data": {
+    "id": "7678687976422919445",
+    "region": "VN",
+    "title": "Tự động hoá công việc với AI, chỉ với 3 bước và không cần biết code.  #evose #fyp #aiagents #buildaiagents #automation ",
+    "content_desc": [
+      "Tự động hoá công việc với AI, chỉ với 3 bước và không cần biết code. ",
+      "#evose #fyp #aiagents #buildaiagents #automation "
+    ],
+    "cover": "https://p19-common-sign.tiktokcdn-us.com/tos-alisg-p-0037/oog7E1itA3OFjrJQAABAIcSxIY1wLBCCABiLfA~tplv-tiktokx-cropcenter-q:300:400:q70.jpeg?dr=8596&refresh_token=96bc2ebc&x-expires=1788094800&x-signature=%2F%2FXb7Csx%2FnMqnmffoL2DjUm4nk8%3D&t=bacd0480&ps=933b5bde&shp=d05b14bd&shcp=1d1a97fc&idc=useast5&sc=cover&biz_tag=tt_video&s=AWEME_DETAIL",
+    "ai_dynamic_cover": "https://p16-common-sign.tiktokcdn-us.com/tos-alisg-p-0037/oog7E1itA3OFjrJQAABAIcSxIY1wLBCCABiLfA~tplv-tiktokx-origin.image?dr=8606&refresh_token=ef2d7705&x-expires=1788094800&x-signature=TtxNnZxIbZVx6QZF9Ma2amjIvmg%3D&t=bacd0480&ps=4f5296ae&shp=d05b14bd&shcp=1d1a97fc&idc=useast5&biz_tag=tt_video&s=AWEME_DETAIL&sc=dynamic_cover",
+    "origin_cover": "https://p16-common-sign.tiktokcdn-us.com/tos-alisg-p-0037/okZfEeClGD5VLlUIJAIuFdgDIC4gqoaAhejCDA~tplv-tiktokx-shrink-aq:360:360:q75.webp?dr=11731&refresh_token=997c0a4d&x-expires=1788094800&x-signature=HIDYXBV%2FtlQ3eNeT5k8%2BJe88e5k%3D&t=bacd0480&ps=d97f9a4f&shp=d05b14bd&shcp=1d1a97fc&idc=useast5&biz_tag=tt_video&s=AWEME_DETAIL&sc=feed_cover",
+    "duration": 98,
+    "play": "https://v16m.tiktokcdn-us.com/ad78fa4626a2dd6cb6da3c6e07403092/6a932f49/video/tos/alisg/tos-alisg-pve-0037c001/owBjReDLkyCfhHTqQ10ScakEgUwFQEqNBIgAiB/?a=1233&bti=OUBzOTg7QGo6OjZAL3AjLTAzYCMxNDNg&&bt=329&ft=kLx3-yt4ZZo0PDJkup3aQ9FjzCpKJE.C~&mime_type=video_mp4&rc=Ojs4O2dnZGc6NGU0ZzMzZkBpMzNuZHI5cnM1ZDMzODczNEAwMS4vMTA2NWAxMl80MTMvYSNpYV5hMmQ0ZDVhLS1kMWBzcw%3D%3D&vvpl=1&l=202608291311356A3164B287D6EC386CA4&btag=e00090000",
+    "wmplay": "https://v16m.tiktokcdn-us.com/6b13c9572c64c53e0ba1e7746095340b/6a932f49/video/tos/alisg/tos-alisg-pve-0037c001/o0WQEflUEFA1kkggIRDDckqNCBLKhwqQ1BSfBi/?a=1233&bti=OUBzOTg7QGo6OjZAL3AjLTAzYCMxNDNg&&bt=454&ft=kLx3-yt4ZZo0PDJkup3aQ9FjzCpKJE.C~&mime_type=video_mp4&rc=OTg8Ozc4NGg3PGZlOjhkM0BpMzNuZHI5cnM1ZDMzODczNEA2MjMvLWIyXjQxLWEvLy5jYSNpYV5hMmQ0ZDVhLS1kMWBzcw%3D%3D&vvpl=1&l=202608291311356A3164B287D6EC386CA4&btag=e00090000",
+    "size": 4174071,
+    "wm_size": 5756451,
+    "music": "https://v16-ies-music.tiktokcdn-us.com/f1ac5bf0766fe9c6ae2048b73d5b86c3/6a9c15cb/video/tos/alisg/tos-alisg-v-27dcd7/oYVABD4QQDFCB4UfUgjgzQqDXMJ4kC1eEYtBgc/?a=583965&bti=OTg7QGo5QHM6OjZALTAzYCMvcCMxNDNg&&bt=125&ft=kJxKSyt4ZZo0PDJkup3aQ9FjzCpKJE.C~&mime_type=audio_mpeg&rc=M2U2NTU5ODhlNGZlNjg6M0BpM2R1OWs5cjg1ZDMzODU8NEBhLmMyYS1fXzUxYGA1NDMzYSNobGJkMmQ0cDVhLS1kMS1zcw%3D%3D&vvpl=1&l=202608291311356A3164B287D6EC386CA4&btag=e000d0000&shp=d05b14bd&shcp=-",
+    "music_info": {
+      "id": "7678688060131986197",
+      "title": "original sound - evose.ai_vn",
+      "play": "https://v16-ies-music.tiktokcdn-us.com/f1ac5bf0766fe9c6ae2048b73d5b86c3/6a9c15cb/video/tos/alisg/tos-alisg-v-27dcd7/oYVABD4QQDFCB4UfUgjgzQqDXMJ4kC1eEYtBgc/?a=583965&bti=OTg7QGo5QHM6OjZALTAzYCMvcCMxNDNg&&bt=125&ft=kJxKSyt4ZZo0PDJkup3aQ9FjzCpKJE.C~&mime_type=audio_mpeg&rc=M2U2NTU5ODhlNGZlNjg6M0BpM2R1OWs5cjg1ZDMzODU8NEBhLmMyYS1fXzUxYGA1NDMzYSNobGJkMmQ0cDVhLS1kMS1zcw%3D%3D&vvpl=1&l=202608291311356A3164B287D6EC386CA4&btag=e000d0000&shp=d05b14bd&shcp=-",
+      "cover": "https://p16-common-sign.tiktokcdn-us.com/tos-alisg-avt-0068/903c77356c19d95743c25ef1fea973ac~tplv-tiktokx-cropcenter-q:1080:1080:q70.jpeg?dr=8837&refresh_token=c2713348&x-expires=1788094800&x-signature=GWUtgzebx8lH7H1hqq56D%2BHNBiY%3D&t=223449c4&ps=87d6e48a&shp=d05b14bd&shcp=1d1a97fc&idc=useast5&sc=avatar&s=AWEME_DETAIL",
+      "author": "Evose.ai",
+      "original": true,
+      "duration": 98,
+      "album": ""
+    },
+    "play_count": 17640,
+    "digg_count": 758,
+    "comment_count": 8,
+    "share_count": 91,
+    "download_count": 69,
+    "collect_count": 596,
+    "create_time": 1787833869,
+    "anchors": null,
+    "anchors_extras": "",
+    "is_ad": false,
+    "commerce_info": {
+      "adv_promotable": false,
+      "auction_ad_invited": false,
+      "branded_content_type": 0,
+      "is_diversion_ad": 0,
+      "organic_log_extra": "{\"req_id\":\"202608291311356A3164B287D6EC386CA4\"}",
+      "with_comment_filter_words": false
+    },
+    "commercial_video_info": "",
+    "item_comment_settings": 0,
+    "mentioned_users": "",
+    "author": {
+      "id": "7646312637642736657",
+      "unique_id": "evose.ai_vn",
+      "nickname": "Evose.ai",
+      "avatar": "https://p16-common-sign.tiktokcdn-us.com/tos-alisg-avt-0068/903c77356c19d95743c25ef1fea973ac~tplv-tiktokx-cropcenter-q:300:300:q70.jpeg?dr=8834&refresh_token=4a87efde&x-expires=1788094800&x-signature=5%2BfD37bndjCIBs0kkXkGOs0L8Aw%3D&t=223449c4&ps=87d6e48a&shp=d05b14bd&shcp=1d1a97fc&idc=useast5&sc=avatar&s=AWEME_DETAIL"
+    },
+    "is_nff_or_nr": false
+  }
+}

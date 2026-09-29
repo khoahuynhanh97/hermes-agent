@@ -95,6 +95,26 @@ class FakeClock:
         self.now += seconds
 
 
+def test_unknown_exec_probe_does_not_accept_live_child(tmp_path):
+    spec = ProcessSpec("unknown", ("python",), tmp_path, (), True,
+                       ProbeSpec("exec", "unknown_check", initial_delay_seconds=0))
+    supervisor = Supervisor([spec], FakeProcessRunner())
+    assert not supervisor._run_builtin_probe(spec, FakeChildProcess("unknown"))
+
+
+def test_mcp_probe_executes_pid_bound_check(tmp_path):
+    spec = ProcessSpec("mcp", ("python",), tmp_path, ("HERMES_HOME",), True,
+                       ProbeSpec("exec", "mcp_snapshot_check", initial_delay_seconds=0))
+    supervisor = Supervisor([spec], FakeProcessRunner())
+    with patch("hermes_personal.runtime.supervisor.subprocess.run") as run:
+        run.return_value.returncode = 1
+        assert not supervisor._run_builtin_probe(spec, FakeChildProcess("mcp", pid=321))
+        run.return_value.returncode = 0
+        assert supervisor._run_builtin_probe(spec, FakeChildProcess("mcp", pid=321))
+        assert run.call_args.args[0][-2:] == ["--expected-pid", "321"]
+        assert run.call_args.kwargs["shell"] is False
+
+
 @pytest.fixture
 def fake_runner():
     return FakeProcessRunner()

@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hermes Project Status - 29/08/2026</title>
+  <style>
+    :root {
+      --ink: #17201d;
+      --muted: #68736f;
+      --paper: #f6f7f4;
+      --surface: #ffffff;
+      --line: #d8ded9;
+      --green: #13795b;
+      --green-soft: #e3f3ec;
+      --amber: #a85d00;
+      --amber-soft: #fff0d7;
+      --red: #b42318;
+      --red-soft: #fee7e4;
+      --blue: #1f5f99;
+      --blue-soft: #e7f0f8;
+      --nav: #13251f;
+      --nav-muted: #aac0b7;
+      --shadow: 0 8px 24px rgba(19, 37, 31, .08);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--paper);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; min-width: 320px; }
+    button, input { font: inherit; }
+    a { color: inherit; }
+    code { font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace; font-size: .92em; }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    aside {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      background: var(--nav);
+      color: white;
+      padding: 28px 20px;
+      overflow-y: auto;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 30px;
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 38px;
+      height: 38px;
+      border: 1px solid #4d6b60;
+      background: #1c342c;
+      color: #8ce0bd;
+      font-weight: 800;
+    }
+
+    .brand strong { display: block; font-size: 15px; }
+    .brand span { color: var(--nav-muted); font-size: 12px; }
+
+    nav a {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 9px 10px;
+      margin: 2px 0;
+      color: var(--nav-muted);
+      text-decoration: none;
+      font-size: 13px;
+      border-left: 2px solid transparent;
+    }
+
+    nav a:hover, nav a.active {
+      color: white;
+      background: #1b332b;
+      border-left-color: #77d4ad;
+    }
+
+    .nav-dot { width: 7px; height: 7px; background: currentColor; border-radius: 50%; }
+
+    .side-meta {
+      margin-top: 28px;
+      padding-top: 18px;
+      border-top: 1px solid #345046;
+      color: var(--nav-muted);
+      font-size: 11px;
+      line-height: 1.6;
+      overflow-wrap: anywhere;
+    }
+
+    main { min-width: 0; }
+
+    .topbar {
+      min-height: 62px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px clamp(20px, 4vw, 58px);
+      background: rgba(255,255,255,.94);
+      border-bottom: 1px solid var(--line);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    .topbar small { color: var(--muted); }
+    .actions { display: flex; gap: 8px; }
+    .icon-button {
+      width: 36px;
+      height: 36px;
+      border: 1px solid var(--line);
+      background: white;
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+    }
+    .icon-button:hover { border-color: #8da097; background: #f4f7f5; }
+
+    section {
+      padding: 46px clamp(20px, 4vw, 58px);
+      border-bottom: 1px solid var(--line);
+    }
+    section:nth-child(even) { background: #f0f3ef; }
+    .content { width: min(1220px, 100%); margin: 0 auto; }
+
+    .eyebrow {
+      color: var(--green);
+      text-transform: uppercase;
+      font-weight: 800;
+      letter-spacing: .08em;
+      font-size: 11px;
+      margin-bottom: 10px;
+    }
+
+    h1, h2, h3 { margin: 0; letter-spacing: 0; }
+    h1 { max-width: 900px; font-size: clamp(34px, 5vw, 68px); line-height: 1.02; font-weight: 760; }
+    h2 { font-size: clamp(24px, 3vw, 36px); line-height: 1.12; }
+    h3 { font-size: 16px; line-height: 1.3; }
+    p { line-height: 1.65; }
+    .lead { max-width: 850px; color: #4c5954; font-size: 17px; margin: 18px 0 0; }
+
+    .status-line {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin-top: 24px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 28px;
+      padding: 4px 9px;
+      border: 1px solid currentColor;
+      font-size: 12px;
+      font-weight: 750;
+      white-space: nowrap;
+    }
+    .tag::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    .done { color: var(--green); background: var(--green-soft); }
+    .blocked { color: var(--red); background: var(--red-soft); }
+    .open { color: var(--amber); background: var(--amber-soft); }
+    .info { color: var(--blue); background: var(--blue-soft); }
+    .neutral { color: #53605b; background: #edf0ee; }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 1px;
+      margin-top: 34px;
+      border: 1px solid var(--line);
+      background: var(--line);
+      box-shadow: var(--shadow);
+    }
+    .metric { background: var(--surface); padding: 22px; min-height: 132px; }
+    .metric strong { display: block; font-size: 30px; margin: 8px 0 5px; }
+    .metric span { color: var(--muted); font-size: 12px; line-height: 1.45; }
+
+    .section-head {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 24px;
+    }
+    .section-head p { max-width: 650px; margin: 0; color: var(--muted); font-size: 14px; }
+
+    .callout {
+      border-left: 4px solid var(--red);
+      padding: 18px 20px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    .callout strong { display: block; margin-bottom: 7px; }
+    .callout p { margin: 0; color: #56615d; }
+
+    .progress-strip {
+      display: grid;
+      grid-template-columns: repeat(8, 1fr);
+      gap: 5px;
+      margin: 24px 0 10px;
+    }
+    .progress-strip span { height: 10px; background: var(--green); }
+    .progress-caption { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
+
+    .phase-table { width: 100%; border-collapse: collapse; background: var(--surface); }
+    .phase-table th, .phase-table td { padding: 14px 16px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    .phase-table th { background: #e8eeea; color: #4e5b56; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+    .phase-table td { font-size: 13px; line-height: 1.5; }
+    .phase-table tr:last-child td { border-bottom: 0; }
+    .phase-table code { white-space: nowrap; }
+
+    .pipeline {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .node {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      padding: 18px;
+      min-height: 128px;
+      position: relative;
+    }
+    .node::after {
+      content: "→";
+      position: absolute;
+      right: -11px;
+      top: 47px;
+      z-index: 2;
+      color: #6a7772;
+      font-size: 18px;
+    }
+    .node:nth-child(4)::after, .node:nth-child(8)::after { display: none; }
+    .node strong { display: block; margin-bottom: 8px; }
+    .node p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+    .node .tag { margin-top: 12px; }
+
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    .panel { background: var(--surface); border: 1px solid var(--line); padding: 22px; }
+    .panel h3 { margin-bottom: 14px; }
+    .panel p { color: var(--muted); font-size: 13px; margin: 8px 0; }
+    .plain-list { margin: 0; padding: 0; list-style: none; }
+    .plain-list li { padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 13px; line-height: 1.5; }
+    .plain-list li:last-child { border-bottom: 0; }
+
+    .evidence-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .evidence { background: var(--surface); border: 1px solid var(--line); padding: 18px; }
+    .evidence .number { font-size: 25px; font-weight: 800; margin: 10px 0 4px; }
+    .evidence p { margin: 0; color: var(--muted); font-size: 12px; }
+
+    .timeline { border-left: 2px solid #b6c3bd; margin-left: 8px; }
+    .event { position: relative; padding: 0 0 24px 26px; }
+    .event::before { content: ""; position: absolute; left: -7px; top: 4px; width: 12px; height: 12px; background: var(--surface); border: 3px solid var(--green); border-radius: 50%; }
+    .event.blocked-event::before { border-color: var(--red); }
+    .event time { color: var(--muted); font-size: 11px; }
+    .event h3 { margin: 5px 0; }
+    .event p { margin: 0; color: var(--muted); font-size: 13px; }
+
+    .input-list { counter-reset: inputs; margin: 0; padding: 0; list-style: none; }
+    .input-list li {
+      counter-increment: inputs;
+      display: grid;
+      grid-template-columns: 38px minmax(0, 1fr);
+      gap: 14px;
+      align-items: start;
+      padding: 16px 0;
+      border-bottom: 1px solid var(--line);
+      line-height: 1.55;
+    }
+    .input-list li::before {
+      content: counter(inputs, decimal-leading-zero);
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      background: var(--nav);
+      color: white;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .risk-row {
+      display: grid;
+      grid-template-columns: 110px 180px minmax(0, 1fr);
+      gap: 14px;
+      padding: 14px 0;
+      border-bottom: 1px solid var(--line);
+      font-size: 13px;
+      align-items: start;
+    }
+    .risk-row:last-child { border-bottom: 0; }
+
+    .source-box { background: #101915; color: #d9e6e0; padding: 20px; overflow-wrap: anywhere; }
+    .source-box dl { display: grid; grid-template-columns: 170px 1fr; gap: 8px 16px; margin: 0; font-size: 12px; line-height: 1.55; }
+    .source-box dt { color: #8db3a3; }
+    .source-box dd { margin: 0; }
+
+    footer { padding: 26px clamp(20px, 4vw, 58px); color: var(--muted); font-size: 12px; background: white; }
+
+    @media (max-width: 980px) {
+      .shell { grid-template-columns: 1fr; }
+      aside { display: none; }
+      .metrics, .pipeline { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .node:nth-child(2)::after, .node:nth-child(6)::after { display: none; }
+      .node:nth-child(4)::after { display: block; }
+      .evidence-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 640px) {
+      .topbar { position: static; }
+      .topbar small { display: none; }
+      section { padding-top: 34px; padding-bottom: 34px; }
+      .metrics, .pipeline, .two-col, .evidence-grid { grid-template-columns: 1fr; }
+      .node::after { display: none !important; }
+      .section-head { align-items: start; flex-direction: column; }
+      .phase-table { display: block; overflow-x: auto; }
+      .risk-row { grid-template-columns: 1fr; gap: 5px; }
+      .source-box dl { grid-template-columns: 1fr; }
+    }
+
+    @media print {
+      aside, .topbar, .actions { display: none !important; }
+      .shell { display: block; }
+      section { break-inside: avoid; padding: 24px 0; }
+      body { background: white; }
+      .metric, .panel, .node, .evidence, .callout { box-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside>
+      <div class="brand">
+        <div class="brand-mark">H</div>
+        <div><strong>Hermes</strong><span>Project status report</span></div>
+      </div>
+      <nav aria-label="Mục lục">
+        <a href="#summary" class="active"><span class="nav-dot"></span>Tổng quan</a>
+        <a href="#phases"><span class="nav-dot"></span>Tiến độ phase</a>
+        <a href="#architecture"><span class="nav-dot"></span>Kiến trúc</a>
+        <a href="#integration"><span class="nav-dot"></span>PI / Video Factory</a>
+        <a href="#evidence"><span class="nav-dot"></span>Bằng chứng</a>
+        <a href="#timeline"><span class="nav-dot"></span>Mốc gần nhất</a>
+        <a href="#blockers"><span class="nav-dot"></span>Blocker</a>
+        <a href="#risks"><span class="nav-dot"></span>Rủi ro</a>
+        <a href="#sources"><span class="nav-dot"></span>Nguồn dữ liệu</a>
+      </nav>
+      <div class="side-meta">
+        Báo cáo tại thời điểm<br>
+        <strong>29/08/2026 18:00 ICT</strong><br><br>
+        Nhánh<br>
+        <code>codex/hermes-upstream-rearchitecture</code>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div><strong>Hermes Upstream Gateway Rearchitecture</strong><br><small>Snapshot điều hành, kỹ thuật và nghiệm thu</small></div>
+        <div class="actions">
+          <button class="icon-button" type="button" title="In hoặc lưu PDF" aria-label="In hoặc lưu PDF" onclick="window.print()">⎙</button>
+          <button class="icon-button" type="button" title="Về đầu trang" aria-label="Về đầu trang" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+        </div>
+      </header>
+
+      <section id="summary">
+        <div class="content">
+          <div class="eyebrow">Executive status</div>
+          <h1>Baseline đã hoàn tất. Nghiệm thu video thật đang chờ quyền vận hành.</h1>
+          <p class="lead">Hermes đã hoàn thành nền tảng kiến trúc Phase 0-7 và đóng cổng kỹ thuật Task 4 cho Product Intelligence / Video Factory. Dự án chưa đạt <code>MVP_DONE</code> vì chưa có provider render thật, quyền chi tiêu và dữ liệu chạy thật được Operator phê duyệt.</p>
+          <div class="status-line">
+            <span class="tag blocked">Overall: BLOCKED</span>
+            <span class="tag done">Baseline: 8/8 phase</span>
+            <span class="tag open">Task 5: chờ Operator</span>
+            <span class="tag neutral">Owner: PLANNER</span>
+          </div>
+
+          <div class="metrics">
+            <div class="metric"><span>Baseline program</span><strong>8 / 8</strong><span>Phase 0 đến Phase 7 đã được Planner chấp nhận.</span></div>
+            <div class="metric"><span>Live integration gates</span><strong>4 / 5</strong><span>Task 4 đã đóng; Task 5 là nghiệm thu thật cuối cùng.</span></div>
+            <div class="metric"><span>Latest focused verification</span><strong>22 pass</strong><span>VF domain, service, MCP server và client; 2.39 giây.</span></div>
+            <div class="metric"><span>Active worker</span><strong>0</strong><span>Không có lock, PID hay provider call đang chạy.</span></div>
+          </div>
+
+          <div class="callout" style="margin-top:18px">
+            <strong>Kết luận điều hành</strong>
+            <p>Đây là blocker có chủ đích để bảo vệ tiền, dữ liệu và tính trung thực của bằng chứng. Hệ thống không tự giả lập render/export thành công và không được phép gọi provider trả phí khi chưa có 5 đầu vào từ Operator.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="phases">
+        <div class="content">
+          <div class="section-head">
+            <div><div class="eyebrow">Delivery map</div><h2>Tiến độ toàn chương trình</h2></div>
+            <p>Trạng thái dưới đây lấy từ SSOT. Checklist trong plan chỉ là tài liệu hỗ trợ và có một số ô chưa được cập nhật sau các vòng review.</p>
+          </div>
+          <div class="progress-strip" aria-label="8 trên 8 phase hoàn tất"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+          <div class="progress-caption"><span>Phase 0</span><span>8/8 baseline hoàn tất</span><span>Phase 7</span></div>
+          <div style="overflow-x:auto; margin-top:22px">
+            <table class="phase-table">
+              <thead><tr><th>Phase</th><th>Phạm vi</th><th>Kết quả</th><th>Trạng thái</th></tr></thead>
+              <tbody>
+                <tr><td><strong>0</strong></td><td>Khôi phục SSOT và đối chiếu baseline</td><td><code>coordination.md</code> trở thành nguồn điều phối duy nhất.</td><td><span class="tag done">Completed</span></td></tr>
+                <tr><td><strong>1</strong></td><td>Baseline, provenance, contract</td><td>Đóng biên tương thích upstream và contract trung lập kênh.</td><td><span class="tag done">Completed</span></td></tr>
+                <tr><td><strong>2</strong></td><td>Gateway convergence</td><td>Telegram, CLI, Web, Omni đi qua một Agent Turn, identity và handoff rõ ràng.</td><td><span class="tag done">Completed</span></td></tr>
+                <tr><td><strong>3</strong></td><td>Capability catalog</td><td>Snapshot MCP, policy, Tool Search, domain skills và structured errors.</td><td><span class="tag done">Completed</span></td></tr>
+                <tr><td><strong>4</strong></td><td>Durable workflow</td><td>SQLite workflow, approval, budget, jobs, retry và restart recovery.</td><td><span class="tag done">Completed</span></td></tr>
+                <tr><td><strong>5</strong></td><td>Product-to-video</td><td>PI → VF, HITL, artifact ownership, reconciliation và fake-provider E2E.</td><td><span class="tag done">Completed baseline</span></td></tr>
+                <tr><td><strong>6</strong></td><td>Governed learning</td><td>Approved retrieval, skill publication, rollback và metrics.</td><td><span class="tag done">Completed</span></td></tr>
+                <tr><td><strong>7</strong></td><td>Runtime cutover</td><td><code>hermes start</code>, health/readiness, restart, 4-channel cutover, retirement guards.</td><td><span class="tag done">Completed</span></td></tr>
+                <tr><td><strong>Continuation</strong></td><td><code>PERSONAL_HAPPY_PATH_V1</code></td><td>Task 4 source/provenance/discovery đã đóng; Task 5 cần video thật và bằng chứng chi phí.</td><td><span class="tag blocked">Blocked</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="architecture">
+        <div class="content">
+          <div class="section-head">
+            <div><div class="eyebrow">System flow</div><h2>Kiến trúc đã triển khai</h2></div>
+            <p>Mục tiêu là một đường xử lý canonical, có policy và durability, không để mỗi kênh hoặc MCP tự tạo semantics riêng.</p>
+          </div>
+          <div class="pipeline">
+            <div class="node"><strong>1. Ingress</strong><p>Telegram, CLI, Web Chat và Omni Chat chuẩn hóa principal, session và correlation.</p><span class="tag done">Unified</span></div>
+            <div class="node"><strong>2. Agent Turn</strong><p>Một boundary điều phối chung gọi upstream <code>AIAgent</code> mà không fork core loop.</p><span class="tag done">Canonical</span></div>
+            <div class="node"><strong>3. Capability</strong><p>Catalog, immutable snapshots, active pointer, policy và lazy tool schemas.</p><span class="tag done">Governed</span></div>
+            <div class="node"><strong>4. Workflow</strong><p>SQLite aggregate/event log, idempotency, durable outbox, lease-based jobs.</p><span class="tag done">Durable</span></div>
+            <div class="node"><strong>5. Product Intelligence</strong><p>Research, resource pack, lock và provenance bền vững qua MCP contract.</p><span class="tag done">Connected</span></div>
+            <div class="node"><strong>6. Video Factory</strong><p>Brief, scene plan, storyboard và compatibility layer cho Hermes wire contract.</p><span class="tag open">Render fail-closed</span></div>
+            <div class="node"><strong>7. Safety plane</strong><p>Năm HITL gates, budget reservation/ledger, ownership và structured errors.</p><span class="tag done">Enforced</span></div>
+            <div class="node"><strong>8. Runtime & UI</strong><p>Supervisor, readiness, events, operator commands và artifact metadata.</p><span class="tag done">Operational baseline</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="integration">
+        <div class="content">
+          <div class="section-head">
+            <div><div class="eyebrow">Critical path</div><h2>Product Intelligence và Video Factory</h2></div>
+            <p>Đây là phần từng gây blocker chính. Source VF không mất hoàn toàn; hướng đúng là port phần nhỏ nhất và tạo compatibility layer.</p>
+          </div>
+          <div class="two-col">
+            <article class="panel">
+              <h3>Product Intelligence</h3>
+              <div class="status-line" style="margin:0 0 10px"><span class="tag done">Task 4 accepted</span></div>
+              <ul class="plain-list">
+                <li><strong><code>3784d2d</code></strong> nối <code>lock_resource_pack</code> vào store/service thật, bỏ giá trị hard-coded.</li>
+                <li><strong><code>5b62d9d</code></strong> thêm mapping phục hồi bền vững, lock ID theo version và replay idempotent.</li>
+                <li><strong><code>112548d</code></strong> bổ sung schema/API persistence cho lock và focused repository tests.</li>
+                <li>Protocol discovery xác nhận server <code>product-intelligence 1.29.1</code> và 5 wire tools có schema typed.</li>
+              </ul>
+            </article>
+            <article class="panel">
+              <h3>Video Factory</h3>
+              <div class="status-line" style="margin:0 0 10px"><span class="tag open">Provider pending</span></div>
+              <ul class="plain-list">
+                <li><strong><code>ba4c8ee9e2</code></strong> port domain/service/repository/MCP runtime từ source có provenance.</li>
+                <li><strong><code>91b5ccfccf</code></strong> bỏ mock URL, synthetic success và substring job inference.</li>
+                <li><strong><code>549d14845e</code></strong> yêu cầu pack thật, approval thật và structured errors.</li>
+                <li><strong><code>882f61df3f</code></strong> làm sạch MCP schemas, expose <code>scenes</code>/<code>frames</code>, bỏ synthetic <code>kwargs</code>.</li>
+              </ul>
+            </article>
+          </div>
+          <div class="callout" style="margin-top:18px; border-left-color:var(--amber)">
+            <strong>Biên hiện tại của Video Factory</strong>
+            <p><code>create_brief</code>, <code>create_scene_plan</code>, <code>create_storyboard</code> đã có contract và safety gates. <code>render</code>/<code>export</code> cố ý fail-closed khi chưa cấu hình provider thật; file tồn tại không đồng nghĩa live-ready.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="evidence">
+        <div class="content">
+          <div class="section-head">
+            <div><div class="eyebrow">Verification</div><h2>Bằng chứng gần nhất</h2></div>
+            <p>Planner Review 124 dùng static review trên report/diff/transcript; Planner không tự chạy lại test hay provider.</p>
+          </div>
+          <div class="evidence-grid">
+            <div class="evidence"><span class="tag done">PI persistence</span><div class="number">53 passed</div><p>Repository, resource pack và MCP surface trong Worker 115.</p></div>
+            <div class="evidence"><span class="tag done">VF safety</span><div class="number">21 passed</div><p>Focused offline tests sau khi loại synthetic provenance và auto-approval.</p></div>
+            <div class="evidence"><span class="tag done">VF wire schema</span><div class="number">22 passed</div><p>Latest focused suite, Ruff sạch và <code>git diff --check</code> sạch.</p></div>
+            <div class="evidence"><span class="tag info">MCP protocol</span><div class="number">2025-11-25</div><p>Real stdio initialize + tools/list, isolated state, 15 giây timeout.</p></div>
+            <div class="evidence"><span class="tag info">Tool discovery</span><div class="number">11 + 23</div><p>PI tools và VF tools; VF gồm 17 canonical + 6 compatibility.</p></div>
+            <div class="evidence"><span class="tag neutral">Runtime cleanup</span><div class="number">0 active</div><p>Run exit code 0; PID 1648 và worker lock không còn.</p></div>
+          </div>
+          <p style="color:var(--muted);font-size:12px;margin-top:14px">Lưu ý: test offline và protocol discovery chứng minh contract/startup/schema, không thay thế bằng chứng video được provider thật tạo ra.</p>
+        </div>
+      </section>
+
+      <section id="timeline">
+        <div class="content">
+          <div class="section-head">
+            <div><div class="eyebrow">Recent history</div><h2>Dòng thời gian quyết định</h2></div>
+            <p>Các vòng rework chủ yếu loại bỏ bằng chứng giả, làm rõ provenance và khóa đúng biên HITL.</p>
+          </div>
+          <div class="timeline">
+            <div class="event"><time>29/08/2026 10:30 UTC</time><h3>Planner Review 124 đóng Task 4</h3><p>Chấp nhận commit <code>882f61df3f</code> và protocol-level schema evidence; chuyển sang BLOCKED cho Task 5.</p></div>
+            <div class="event"><time>Worker 120</time><h3>Schema MCP thực được xác nhận</h3><p>PI/VF khởi tạo qua stdio, list tools thành công, schemas không còn <code>kwargs</code> giả.</p></div>
+            <div class="event"><time>Worker 118</time><h3>Loại synthetic provenance và auto-approval</h3><p>VF chỉ nhận locked Resource Pack thật và dừng đúng tại các HITL gates.</p></div>
+            <div class="event"><time>Worker 116-117</time><h3>Port VF có provenance, rồi làm sạch compatibility</h3><p>Reuse source từ nhánh hiện hữu; loại mock completion, mock URLs và inferred job states.</p></div>
+            <div class="event"><time>Worker 113-115</time><h3>PI lock trở thành durable và self-contained</h3><p>Lock store, version semantics, SQLite repository và restart lookup được hoàn thiện theo phạm vi Operator cho phép.</p></div>
+            <div class="event blocked-event"><time>Hiện tại</time><h3>Chờ quyền chạy happy path thật</h3><p>Không dispatch worker mới và không gọi provider cho tới khi đủ 5 đầu vào Operator.</p></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="blockers">
+        <div class="content">
+          <div class="section-head">
+            <div><div class="eyebrow">Operator decision</div><h2>5 đầu vào để mở khóa Task 5</h2></div>
+            <p>Cần đủ cả năm. Lịch heartbeat không phải quyền chi tiêu và không cấp quyền publish.</p>
+          </div>
+          <div class="panel">
+            <ol class="input-list">
+              <li><div><strong>Provider render/generation thật</strong><br>Chỉ định provider và source/package integration sẽ dùng cho <code>render</code>/<code>export</code>.</div></li>
+              <li><div><strong>Credentials đã cấu hình cục bộ</strong><br>Xác nhận secret đã có qua cơ chế bí mật; không gửi giá trị secret trong chat hoặc report.</div></li>
+              <li><div><strong>Quyền chi tiêu chính xác</strong><br>Nêu currency, cap tối đa và quyền riêng cho research/acquisition, generation, render, export, publish. Publish mặc định cấm.</div></li>
+              <li><div><strong>Input và run identity</strong><br>Một URL sản phẩm + variant chính xác, owner ID, cùng <code>HERMES_HOME</code>/SQLite path hoặc thư mục được phép tạo isolated run home.</div></li>
+              <li><div><strong>Supervised HITL</strong><br>Xác nhận Operator sẽ xử lý đủ năm approval prompts trong phiên nghiệm thu có giám sát.</div></li>
+            </ol>
+          </div>
+        </div>
+      </section>
+
+      <section id="risks">
+        <div class="content">
+          <div class="section-head">
+            <div><div class="eyebrow">Risk register</div><h2>Rủi ro và biện pháp kiểm soát</h2></div>
+            <p>Phạm vi MVP là một máy, một owner và SQLite. Distributed/HA hardening được tách khỏi tiêu chí hoàn tất MVP.</p>
+          </div>
+          <div class="panel">
+            <div class="risk-row"><span class="tag blocked">High</span><strong>Chưa có video thật</strong><span>Không được tuyên bố <code>MVP_DONE</code> cho tới khi artifact video đọc được, không rỗng và có provider job IDs thật.</span></div>
+            <div class="risk-row"><span class="tag open">Medium</span><strong>Provider integration</strong><span><code>render</code>/<code>export</code> đang fail-closed; cần bounded assignment sau khi Operator chọn provider/source.</span></div>
+            <div class="risk-row"><span class="tag open">Medium</span><strong>Chi phí ngoài ý muốn</strong><span>Budget reservation/ledger và HITL đã có, nhưng vẫn cần cap/currency/allowed operations rõ ràng trước live run.</span></div>
+            <div class="risk-row"><span class="tag info">Controlled</span><strong>Provenance giả</strong><span>Synthetic packs, assets, mock URLs và substring job completion đã bị loại khỏi accepted path.</span></div>
+            <div class="risk-row"><span class="tag info">Deferred</span><strong>Scale/HA</strong><span>Multi-worker, multi-tenant, distributed outbox, load/soak và HA không chặn <code>PERSONAL_HAPPY_PATH_V1</code>.</span></div>
+            <div class="risk-row"><span class="tag neutral">Process</span><strong>Plan/SSOT lệch nhau</strong><span>Một số checkbox trong plan chưa phản ánh vòng review mới; mọi quyết định phải đọc từ SSOT trước.</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="content">
+          <div class="section-head">
+            <div><div class="eyebrow">Audit trail</div><h2>Nguồn và độ tin cậy</h2></div>
+            <p>Báo cáo là snapshot tĩnh; khi SSOT đổi, trạng thái trong file này không tự cập nhật.</p>
+          </div>
+          <div class="source-box">
+            <dl>
+              <dt>SSOT</dt><dd><code>D:\work\hermes-upstream-rearchitecture\.hermes\coordination.md</code></dd>
+              <dt>SSOT SHA256</dt><dd><code>DC36C39E286ED39F8B3B8023BA4E5A1DE495D5AB713AAFEBA5501354DF208EE6</code></dd>
+              <dt>Branch / HEAD</dt><dd><code>codex/hermes-upstream-rearchitecture @ 060124c1a254</code></dd>
+              <dt>Working tree</dt><dd>Chỉ <code>.hermes/coordination.md</code> đang modified tại thời điểm chụp; không bị thay đổi bởi báo cáo này.</dd>
+              <dt>Current owner</dt><dd><code>PLANNER</code>; worker lock không tồn tại.</dd>
+              <dt>Supporting plan</dt><dd><code>docs/superpowers/plans/2026-08-28-hermes-personal-live-integration.md</code></dd>
+              <dt>Operational docs</dt><dd><code>docs/hermes-personal/</code> và các Gate 1-7 plans.</dd>
+              <dt>Evidence caveat</dt><dd>Thư mục <code>.agents/reports</code> không tồn tại trong checkout hiện tại; bằng chứng report dùng nội dung được lưu trong SSOT và git history.</dd>
+            </dl>
+          </div>
+        </div>
+      </section>
+
+      <footer>
+        <div class="content">Hermes project status snapshot · Generated from SSOT and local Git evidence · 29/08/2026</div>
+      </footer>
+    </main>
+  </div>
+
+  <script>
+    const links = [...document.querySelectorAll('nav a')];
+    const sections = links.map(link => document.querySelector(link.getAttribute('href'))).filter(Boolean);
+    const observer = new IntersectionObserver(entries => {
+      const visible = entries.filter(entry => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (!visible) return;
+      links.forEach(link => link.classList.toggle('active', link.getAttribute('href') === '#' + visible.target.id));
+    }, { rootMargin: '-15% 0px -72% 0px', threshold: [0, .25, .5] });
+    sections.forEach(section => observer.observe(section));
+  </script>
+</body>
+</html>

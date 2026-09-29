@@ -1,0 +1,124 @@
+{
+  "item_count": 17,
+  "items": [
+    {
+      "path": ".skills_prompt_snapshot.json",
+      "status": "untracked",
+      "git_status_code": "??",
+      "size_bytes": 49973,
+      "sha256": "66a24457b7fba146e876a8871a700945ec42c0a844609fd2a3ac9b5788d4fd05"
+    },
+    {
+      "path": "SOUL.md",
+      "status": "untracked",
+      "git_status_code": "??",
+      "size_bytes": 513,
+      "sha256": "2765a846e1bb371d78d3b93b403dfb0f8d1ba1a9895edb5f608367abfe81194d"
+    },
+    {
+      "path": "agent/knowledge_capture_prompt.py",
+      "status": "untracked",
+      "git_status_code": "??",
+      "size_bytes": 5612,
+      "sha256": "0ad00ef9fc267495a2ea0ab4294a4fe836ae88527ac18f9b7f9dd3172297bcf5"
+    },
+    {
+      "path": "cli.py",
+      "status": "tracked_modified",
+      "git_status_code": " M",
+      "size_bytes": 999499,
+      "sha256": "c7cd9222546c603694aabbd2a78b92c4a352e797dea6cfba1c64f92751942982"
+    },
+    {
+      "path": "gateway/run.py",
+      "status": "tracked_modified",
+      "git_status_code": " M",
+      "size_bytes": 1507095,
+      "sha256": "4a2a1630f8f3875b941ba826c65404861d8c40db02919cd18e35535efd621938"
+    },
+    {
+      "path": "hermes_cli/cli_commands_mixin.py",
+      "status": "tracked_modified",
+      "git_status_code": " M",
+      "size_bytes": 172314,
+      "sha256": "02ebc1752c7030e9dfde0b248bbc8296cd4ce2d893e988d02c0d086fd9c8b82c"
+    },
+    {
+      "path": "hermes_cli/commands.py",
+      "status": "tracked_modified",
+      "git_status_code": " M",
+      "size_bytes": 106713,
+      "sha256": "5caa4b1093f24b5114a679efcefd9f00a349d4682ac7c99debdaa943aabd4c17"
+    },
+    {
+      "path": "reports/audio.wav",
+      "status": "untracked",
+      "git_status_code": "??",
+      "size_bytes": 3163284,
+      "sha256": "58bfe4819b3867a2b093ac3e77b5cb0cd248107aec030fa22314268333d9206b"
+    },
+    {
+      "path": "reports/exact_transcript.txt",
+      "status": "untracked",
+      "git_status_code": "??",
+      "size_bytes": 7161,
+      "sha256": "d67326474557f6359ed496769c28e7815f73bf60ed399287b295259008cb3a4b"
+    },
+    {
+      "path": "reports/hermes-project-status-2026-08-29.html",
+      "status": "untracked",
+      "git_status_code": "??",
+      "size_bytes": 32230,
+      "sha256": "b5b551956bb51a585bb90f6e2883d7528e06dedd6b1dee7d465bee5efcc8f37e"
+    },
+    {
+      "path": "reports/tiktok_info.json",
+      "status": "untracked",
+      "git_status_code": "??",
+      "size_bytes": 2158,
+      "sha256": "74fcf4f3497175e0e4419d273fc59655a25b2c82db2375fdf157d4296213d822"
+    },
+    {
+      "path": "reports/tikwm_data.json",
+      "status": "untracked",
+      "git_status_code": "??",
+      "size_bytes": 5149,
+      "sha256": "7c8713c3f9b9773f062081e88f170fe5917af435d23ab1833a692e108976ee2e"
+    },
+    {
+      "path": "reports/video_sample.mp4",
+      "status": "untracked",
+      "git_status_code": "??",
+      "size_bytes": 4174071,
+      "sha256": "29bf733075227ef9feedf9f441a92d7dba4df8f34b23333acfab4aee922e96d3"
+    },
+    {
+      "path": "skills/media/learning-from-video/SKILL.md",
+      "status": "untracked",
+      "git_status_code": "??",
+      "size_bytes": 5031,
+      "sha256": "81c382668ffc82a17b8d68d402509dd2bc50bc09cc243f7822b1e461d59a10ba"
+    },
+    {
+      "path": "skills/media/learning-from-video/references/procedure-contract.md",
+      "status": "untracked",
+      "git_status_code": "??",
+      "size_bytes": 4841,
+      "sha256": "77a570d0dd2442039f42e45b880fe4dd4dc950bb2388f4b20a185f4a16618e94"
+    },
+    {
+      "path": "tests/agent/test_knowledge_capture_prompt.py",
+      "status": "untracked",
+      "git_status_code": "??",
+      "size_bytes": 17551,
+      "sha256": "3865bc0c4a0342904636374fe19135d2a34ffe20519d15b69d56133b12918a5e"
+    },
+    {
+      "path": "tests/skills/test_learning_from_video_skill.py",
+      "status": "untracked",
+      "git_status_code": "??",
+      "size_bytes": 10220,
+      "sha256": "4f3ccf84e6701d0cd2febe4b39fbdf5a5cbaf690284f9e0c7e9afcaa25010a97"
+    }
+  ]
+}

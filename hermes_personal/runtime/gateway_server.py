@@ -11,8 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from hermes_personal.application import (
     EventsAPI,
@@ -347,6 +347,18 @@ def create_gateway_application(
         snapshots=snapshots,
         provider_mode=provider_mode,
     )
+    env_origins = os.environ.get("HERMES_CORS_ORIGINS")
+    allowed_origins = (
+        [o.strip() for o in env_origins.split(",") if o.strip()]
+        if env_origins
+        else [
+            "http://localhost:8642",
+            "http://127.0.0.1:8642",
+            "http://localhost:8000",
+            "http://127.0.0.1:8000",
+            "http://localhost:3000",
+        ]
+    )
     app = create_application(
         health_api=health_api_instance,
         events_api=EventsAPI(events, auth_validator=validate_token, command_handler=cmd_handler),
@@ -358,12 +370,164 @@ def create_gateway_application(
         turn_authenticator=StaticBearerAuthenticator(
             api_key, owner_user_id, external_subject
         ),
+        cors_allowed_origins=allowed_origins,
     )
 
     @app.get("/healthz", include_in_schema=False)
     def healthz() -> JSONResponse:
         status_code, body = health_api_instance.handle_ready()
         return JSONResponse(status_code=status_code, content=body)
+
+    @app.get("/api/personal/product-video/candidates")
+    def get_product_video_candidates(target_date: str | None = None) -> JSONResponse:
+        from datetime import date
+        from hermes_personal.product_video.candidate_service import DailyCandidateService
+
+        service = DailyCandidateService(connection)
+        parsed_date = date.fromisoformat(target_date) if target_date else None
+        try:
+            candidates = service.get_candidates(target_date=parsed_date)
+            return JSONResponse(
+                content={
+                    "ok": True,
+                    "source_date": candidates[0].source_date if candidates else (target_date or ""),
+                    "candidates": [c.to_dict() for c in candidates],
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+
+    @app.post("/api/personal/product-video/start-batch")
+    async def start_product_video_batch(request: Request) -> JSONResponse:
+        from datetime import date
+        from hermes_personal.product_video.candidate_service import DailyCandidateService
+        from hermes_personal.product_video.automation.repository import DailyImportRepository
+
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+        service = DailyCandidateService(connection)
+        minimum_daily = int(body.get("minimum_daily") or 0)
+        target_date = date.fromisoformat(body["target_date"]) if body.get("target_date") else (date.today() if minimum_daily else None)
+        owner = str(body.get("owner_id") or owner_user_id)
+
+        try:
+            if minimum_daily < 0 or minimum_daily > 5:
+                raise ValueError("minimum_daily must be between 0 and 5")
+            if body.get("auto"):
+                limit = int(body.get("limit") or 5)
+                if minimum_daily > limit:
+                    raise ValueError("minimum_daily cannot exceed limit")
+                res = service.start_auto(limit=limit, owner_user_id=owner, target_date=target_date)
+            else:
+                keys = list(body.get("product_keys") or [])
+                res = service.start_selection(product_keys=keys, owner_user_id=owner, target_date=target_date)
+            from dataclasses import asdict, is_dataclass
+
+            started_list = [asdict(s) if is_dataclass(s) else dict(s) for s in res.started]
+            skipped_list = [asdict(s) if is_dataclass(s) else dict(s) for s in res.skipped]
+            daily_started_total = None
+            if minimum_daily and target_date is not None:
+                rows = DailyImportRepository(connection).get_all_for_date(target_date.isoformat())
+                daily_started_total = sum(row["status"] == "started" for row in rows.values())
+            shortfall = daily_started_total is not None and daily_started_total < minimum_daily
+            return JSONResponse(
+                status_code=409 if res.has_errors or shortfall else 200,
+                content={
+                    "ok": not (res.has_errors or shortfall),
+                    "started": started_list,
+                    "skipped": skipped_list,
+                    "started_workflows": [s["workflow_id"] for s in started_list],
+                    "daily_started_total": daily_started_total,
+                    "minimum_daily": minimum_daily,
+                    "error": "INSUFFICIENT_DAILY_PRODUCTS" if shortfall else ("BATCH_START_FAILED" if res.has_errors else None),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+
+    @app.get("/api/personal/product-video/workflows/{workflow_id}")
+    def get_product_video_workflow(workflow_id: str) -> JSONResponse:
+        from hermes_personal.product_video.automation.coordinator import ProductVideoCoordinator
+
+        coord = ProductVideoCoordinator(connection=connection)
+        status = coord.get_workflow_status(workflow_id)
+        if status is None:
+            return JSONResponse(status_code=404, content={"ok": False, "error": f"Workflow {workflow_id} not found"})
+        return JSONResponse(content={"ok": True, "workflow": status})
+
+    @app.get("/api/personal/product-video/assets/{source_date}/{source_batch_id}/{asset_path:path}")
+    def get_product_video_asset(
+        source_date: str,
+        source_batch_id: str,
+        asset_path: str,
+    ) -> Response:
+        import mimetypes
+        import re
+        from hermes_personal.product_video.automation.importer import DEFAULT_EXCHANGE_INBOX
+
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", source_date):
+            return JSONResponse(status_code=400, content={"ok": False, "error": "Invalid date format"})
+        if not re.match(r"^[a-zA-Z0-9_\-]+$", source_batch_id):
+            return JSONResponse(status_code=400, content={"ok": False, "error": "Invalid batch_id format"})
+
+        env_inbox = os.environ.get("HERMES_EXCHANGE_INBOX")
+        inbox_root = Path(env_inbox).resolve() if env_inbox else DEFAULT_EXCHANGE_INBOX.resolve()
+        batch_dir = (inbox_root / source_date / source_batch_id).resolve()
+
+        try:
+            batch_dir.relative_to(inbox_root)
+        except ValueError:
+            return JSONResponse(status_code=403, content={"ok": False, "error": "Access denied"})
+
+        if not batch_dir.is_dir():
+            return JSONResponse(status_code=404, content={"ok": False, "error": "Batch directory not found"})
+
+        target_file = (batch_dir / asset_path).resolve()
+        try:
+            target_file.relative_to(batch_dir)
+        except ValueError:
+            return JSONResponse(status_code=403, content={"ok": False, "error": "Access denied: path traversal detected"})
+
+        if target_file.is_symlink():
+            return JSONResponse(status_code=403, content={"ok": False, "error": "Access denied: symlinks prohibited"})
+
+        allowed_extensions = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+        if target_file.suffix.lower() not in allowed_extensions:
+            return JSONResponse(status_code=400, content={"ok": False, "error": "Unsupported media asset extension"})
+
+        if not target_file.is_file():
+            return JSONResponse(status_code=404, content={"ok": False, "error": "Asset not found"})
+
+        mime_type, _ = mimetypes.guess_type(str(target_file))
+        return FileResponse(target_file, media_type=mime_type or "application/octet-stream")
+
+    @app.get("/personal/product-video", response_class=HTMLResponse)
+    @app.get("/api/personal/product-video/console", response_class=HTMLResponse)
+    def get_product_video_operator_console() -> HTMLResponse:
+        from hermes_personal.product_video.operator_console import render_operator_console_html
+
+        return HTMLResponse(content=render_operator_console_html())
+
+    @app.post("/api/personal/product-video/approve-lock")
+    async def approve_product_lock(request: Request) -> JSONResponse:
+        from hermes_personal.application.operator_handler import approve_and_advance_workflow
+
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+        target_id = str(body.get("target_id") or body.get("approval_id") or "")
+        if not target_id:
+            return JSONResponse(status_code=400, content={"ok": False, "error": "target_id or approval_id is required"})
+        owner = str(body.get("owner_id") or owner_user_id)
+
+        try:
+            res = approve_and_advance_workflow(connection=connection, target_id=target_id, owner_user_id=owner)
+            return JSONResponse(content={"ok": True, "result": res})
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
 
     @app.on_event("shutdown")
     def _shutdown_gateway() -> None:

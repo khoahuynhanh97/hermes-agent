@@ -1,0 +1,529 @@
+{
+  "timestamp_utc": "2026-08-29T18:19:07.751610+00:00",
+  "summary": {
+    "total_test_files": 74,
+    "total_tests_estimated": 676,
+    "hermes_personal_files": 70,
+    "promoted_upstream_files": 4
+  },
+  "inventory": [
+    {
+      "test_file": "tests/hermes_personal/application/test_security_middleware.py",
+      "category": "hermes_personal/application",
+      "test_count": 10,
+      "proves": "Proves hermes_personal application contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/capabilities/test_catalog_acceptance.py",
+      "category": "hermes_personal/capabilities",
+      "test_count": 8,
+      "proves": "Proves hermes_personal capabilities contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/capabilities/test_discovery.py",
+      "category": "hermes_personal/capabilities",
+      "test_count": 12,
+      "proves": "Proves hermes_personal capabilities contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/capabilities/test_domain_skills.py",
+      "category": "hermes_personal/capabilities",
+      "test_count": 4,
+      "proves": "Proves hermes_personal capabilities contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/capabilities/test_manifest.py",
+      "category": "hermes_personal/capabilities",
+      "test_count": 5,
+      "proves": "Proves hermes_personal capabilities contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/capabilities/test_policy.py",
+      "category": "hermes_personal/capabilities",
+      "test_count": 24,
+      "proves": "Proves hermes_personal capabilities contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/capabilities/test_search.py",
+      "category": "hermes_personal/capabilities",
+      "test_count": 7,
+      "proves": "Proves hermes_personal capabilities contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/capabilities/test_service.py",
+      "category": "hermes_personal/capabilities",
+      "test_count": 13,
+      "proves": "Proves hermes_personal capabilities contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/capabilities/test_snapshots.py",
+      "category": "hermes_personal/capabilities",
+      "test_count": 7,
+      "proves": "Proves hermes_personal capabilities contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/contracts/test_capability.py",
+      "category": "hermes_personal/contracts",
+      "test_count": 3,
+      "proves": "Proves hermes_personal contracts contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/contracts/test_operator_events.py",
+      "category": "hermes_personal/contracts",
+      "test_count": 3,
+      "proves": "Proves hermes_personal contracts contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/contracts/test_turn.py",
+      "category": "hermes_personal/contracts",
+      "test_count": 3,
+      "proves": "Proves hermes_personal contracts contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/cutover/test_parity.py",
+      "category": "hermes_personal/cutover",
+      "test_count": 5,
+      "proves": "Proves hermes_personal cutover contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/cutover/test_retirement.py",
+      "category": "hermes_personal/cutover",
+      "test_count": 3,
+      "proves": "Proves hermes_personal cutover contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/e2e/test_four_channel_orchestration.py",
+      "category": "hermes_personal/e2e",
+      "test_count": 6,
+      "proves": "Proves hermes_personal e2e contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/e2e/test_runtime_smoke.py",
+      "category": "hermes_personal/e2e",
+      "test_count": 1,
+      "proves": "Proves hermes_personal e2e contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/e2e/test_security_boundaries.py",
+      "category": "hermes_personal/e2e",
+      "test_count": 10,
+      "proves": "Proves hermes_personal e2e contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/e2e/test_supervisor_recovery.py",
+      "category": "hermes_personal/e2e",
+      "test_count": 6,
+      "proves": "Proves hermes_personal e2e contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/gateway/test_channel_equivalence.py",
+      "category": "hermes_personal/gateway",
+      "test_count": 13,
+      "proves": "Proves hermes_personal gateway contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/gateway/test_event_repository.py",
+      "category": "hermes_personal/gateway",
+      "test_count": 17,
+      "proves": "Proves hermes_personal gateway contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/gateway/test_gateway_acceptance.py",
+      "category": "hermes_personal/gateway",
+      "test_count": 3,
+      "proves": "Proves hermes_personal gateway contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/gateway/test_identity_repository.py",
+      "category": "hermes_personal/gateway",
+      "test_count": 5,
+      "proves": "Proves hermes_personal gateway contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/gateway/test_no_semantic_router.py",
+      "category": "hermes_personal/gateway",
+      "test_count": 3,
+      "proves": "Proves hermes_personal gateway contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/gateway/test_session_repository.py",
+      "category": "hermes_personal/gateway",
+      "test_count": 10,
+      "proves": "Proves hermes_personal gateway contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/gateway/test_turn_service.py",
+      "category": "hermes_personal/gateway",
+      "test_count": 40,
+      "proves": "Proves hermes_personal gateway contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/gateway/test_upstream_agent_adapter.py",
+      "category": "hermes_personal/gateway",
+      "test_count": 10,
+      "proves": "Proves hermes_personal gateway contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/learning/test_context_integration.py",
+      "category": "hermes_personal/learning",
+      "test_count": 2,
+      "proves": "Proves hermes_personal learning contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/learning/test_evaluator.py",
+      "category": "hermes_personal/learning",
+      "test_count": 8,
+      "proves": "Proves hermes_personal learning contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/learning/test_learning_e2e.py",
+      "category": "hermes_personal/learning",
+      "test_count": 1,
+      "proves": "Proves hermes_personal learning contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/learning/test_memory_policy.py",
+      "category": "hermes_personal/learning",
+      "test_count": 5,
+      "proves": "Proves hermes_personal learning contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/learning/test_promotion.py",
+      "category": "hermes_personal/learning",
+      "test_count": 4,
+      "proves": "Proves hermes_personal learning contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/learning/test_repository.py",
+      "category": "hermes_personal/learning",
+      "test_count": 9,
+      "proves": "Proves hermes_personal learning contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/learning/test_retrieval.py",
+      "category": "hermes_personal/learning",
+      "test_count": 8,
+      "proves": "Proves hermes_personal learning contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/learning/test_skill_publisher.py",
+      "category": "hermes_personal/learning",
+      "test_count": 4,
+      "proves": "Proves hermes_personal learning contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/migration/test_reconciliation.py",
+      "category": "hermes_personal/migration",
+      "test_count": 8,
+      "proves": "Proves hermes_personal migration contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/product/test_research.py",
+      "category": "hermes_personal/product",
+      "test_count": 1,
+      "proves": "Proves hermes_personal product contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/product/test_resource_pack.py",
+      "category": "hermes_personal/product",
+      "test_count": 1,
+      "proves": "Proves hermes_personal product contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/product_video/test_binding.py",
+      "category": "hermes_personal/product_video",
+      "test_count": 38,
+      "proves": "Proves hermes_personal product_video contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/product_video/test_handlers.py",
+      "category": "hermes_personal/product_video",
+      "test_count": 11,
+      "proves": "Proves hermes_personal product_video contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/product_video/test_integration_contracts.py",
+      "category": "hermes_personal/product_video",
+      "test_count": 2,
+      "proves": "Proves hermes_personal product_video contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/product_video/test_job_handlers.py",
+      "category": "hermes_personal/product_video",
+      "test_count": 15,
+      "proves": "Proves hermes_personal product_video contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/product_video/test_pi_mcp_contract.py",
+      "category": "hermes_personal/product_video",
+      "test_count": 8,
+      "proves": "Proves hermes_personal product_video contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/product_video/test_product_intelligence_client.py",
+      "category": "hermes_personal/product_video",
+      "test_count": 5,
+      "proves": "Proves hermes_personal product_video contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/product_video/test_product_to_video_e2e.py",
+      "category": "hermes_personal/product_video",
+      "test_count": 1,
+      "proves": "Proves hermes_personal product_video contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/product_video/test_restart_recovery.py",
+      "category": "hermes_personal/product_video",
+      "test_count": 10,
+      "proves": "Proves hermes_personal product_video contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/product_video/test_video_factory_client.py",
+      "category": "hermes_personal/product_video",
+      "test_count": 2,
+      "proves": "Proves hermes_personal product_video contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/runtime/test_application_api.py",
+      "category": "hermes_personal/runtime",
+      "test_count": 10,
+      "proves": "Proves hermes_personal runtime contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/runtime/test_cli.py",
+      "category": "hermes_personal/runtime",
+      "test_count": 8,
+      "proves": "Proves hermes_personal runtime contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/runtime/test_gateway_server.py",
+      "category": "hermes_personal/runtime",
+      "test_count": 7,
+      "proves": "Proves hermes_personal runtime contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/runtime/test_no_fake_progress.py",
+      "category": "hermes_personal/runtime",
+      "test_count": 3,
+      "proves": "Proves hermes_personal runtime contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/runtime/test_observability.py",
+      "category": "hermes_personal/runtime",
+      "test_count": 11,
+      "proves": "Proves hermes_personal runtime contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/runtime/test_processes.py",
+      "category": "hermes_personal/runtime",
+      "test_count": 11,
+      "proves": "Proves hermes_personal runtime contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/runtime/test_startup.py",
+      "category": "hermes_personal/runtime",
+      "test_count": 6,
+      "proves": "Proves hermes_personal runtime contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/runtime/test_startup_readiness_lifecycle.py",
+      "category": "hermes_personal/runtime",
+      "test_count": 9,
+      "proves": "Proves hermes_personal runtime contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/runtime/test_supervisor.py",
+      "category": "hermes_personal/runtime",
+      "test_count": 22,
+      "proves": "Proves hermes_personal runtime contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/test_contract_architecture.py",
+      "category": "hermes_personal/hermes_personal",
+      "test_count": 1,
+      "proves": "Proves hermes_personal hermes_personal contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/test_provenance.py",
+      "category": "hermes_personal/hermes_personal",
+      "test_count": 1,
+      "proves": "Proves hermes_personal hermes_personal contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/test_upstream_compatibility.py",
+      "category": "hermes_personal/hermes_personal",
+      "test_count": 3,
+      "proves": "Proves hermes_personal hermes_personal contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/workflows/test_approvals.py",
+      "category": "hermes_personal/workflows",
+      "test_count": 5,
+      "proves": "Proves hermes_personal workflows contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/workflows/test_budgets.py",
+      "category": "hermes_personal/workflows",
+      "test_count": 17,
+      "proves": "Proves hermes_personal workflows contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/workflows/test_definitions.py",
+      "category": "hermes_personal/workflows",
+      "test_count": 5,
+      "proves": "Proves hermes_personal workflows contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/workflows/test_engine.py",
+      "category": "hermes_personal/workflows",
+      "test_count": 10,
+      "proves": "Proves hermes_personal workflows contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/workflows/test_jobs.py",
+      "category": "hermes_personal/workflows",
+      "test_count": 4,
+      "proves": "Proves hermes_personal workflows contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/workflows/test_outbox_dispatcher.py",
+      "category": "hermes_personal/workflows",
+      "test_count": 8,
+      "proves": "Proves hermes_personal workflows contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/workflows/test_outbox_repository.py",
+      "category": "hermes_personal/workflows",
+      "test_count": 21,
+      "proves": "Proves hermes_personal workflows contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/workflows/test_product_video_outbox.py",
+      "category": "hermes_personal/workflows",
+      "test_count": 40,
+      "proves": "Proves hermes_personal workflows contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/workflows/test_recovery.py",
+      "category": "hermes_personal/workflows",
+      "test_count": 3,
+      "proves": "Proves hermes_personal workflows contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/workflows/test_worker.py",
+      "category": "hermes_personal/workflows",
+      "test_count": 3,
+      "proves": "Proves hermes_personal workflows contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/workflows/test_workflow_acceptance.py",
+      "category": "hermes_personal/workflows",
+      "test_count": 6,
+      "proves": "Proves hermes_personal workflows contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/hermes_personal/workflows/test_workflow_repository.py",
+      "category": "hermes_personal/workflows",
+      "test_count": 3,
+      "proves": "Proves hermes_personal workflows contracts and functionality",
+      "tier": "Tier A (Direct hermes_personal)"
+    },
+    {
+      "test_file": "tests/agent/test_knowledge_capture_prompt.py",
+      "category": "agent / prompt_engine",
+      "test_count": 16,
+      "proves": "Proves KnowledgeCaptureInputError / ProcedureContractError exception hierarchy, mode locking, dynamic contract loader, CLI/gateway dispatch and error handling.",
+      "tier": "Tier A (Promoted Upstream)"
+    },
+    {
+      "test_file": "tests/skills/test_learning_from_video_skill.py",
+      "category": "skills / media",
+      "test_count": 10,
+      "proves": "Proves SKILL.md HARDLINE structure, frontmatter metadata, system prompt visibility in <available_skills>, and runtime skill_view contract loading.",
+      "tier": "Tier A (Promoted Upstream)"
+    },
+    {
+      "test_file": "tests/gateway/test_unknown_command.py",
+      "category": "gateway / command_guard",
+      "test_count": 8,
+      "proves": "Proves unknown slash command guard prevents silent fallthrough and preserves strict role alternation.",
+      "tier": "Tier A (Promoted Upstream)"
+    },
+    {
+      "test_file": "tests/hermes_cli/test_commands.py",
+      "category": "hermes_cli / command_registry",
+      "test_count": 51,
+      "proves": "Proves COMMAND_REGISTRY, resolve_command case insensitivity, alias resolution, and Slack 50-cap parity.",
+      "tier": "Tier A (Promoted Upstream)"
+    }
+  ]
+}

@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from enum import Enum
 from pathlib import Path
 from typing import Any, Iterator
 
 from hermes_personal.integrations.video_factory.domain import (
+    VideoFactoryArtifact, RenderBatch,
     ABVariantSet, AssetReference, Claim, ClaimStatus, CreativeBrief,
     FinalApprovalStatus, FrameGenerationStatus, FramePrompt, GeneratedScene,
     HookVariant, ProjectStatus, RawIdea, ResourceIdentity, ResourcePack,
@@ -17,6 +18,10 @@ from hermes_personal.integrations.video_factory.domain import (
     VideoGenerationStatus, VideoPrompt,
 )
 from hermes_personal.integrations.video_factory.ports import VideoFactoryRepository
+
+
+class VideoFactoryConflictError(ValueError):
+    """A project snapshot was based on an older committed revision."""
 
 
 def _json(value: Any) -> Any:
@@ -171,6 +176,49 @@ def _ab_variant_set(value: dict | None) -> ABVariantSet | None:
     return ABVariantSet(**data)
 
 
+
+def _artifact_from_row(row: Any) -> VideoFactoryArtifact:
+    parent_ids = json.loads(row["parent_artifact_ids_json"]) if row["parent_artifact_ids_json"] else []
+    prov_meta = json.loads(row["provider_metadata_json"]) if row["provider_metadata_json"] else {}
+    return VideoFactoryArtifact(
+        artifact_id=row["artifact_id"],
+        owner_user_id=row["owner_user_id"],
+        workflow_id=row["workflow_id"],
+        project_id=row["project_id"],
+        kind=row["kind"],
+        scene_id=row["scene_id"],
+        frame_role=row["frame_role"],
+        version=row["version"],
+        attempt=row["attempt"],
+        relative_path=row["relative_path"],
+        sha256=row["sha256"],
+        size=row["size"],
+        mime_type=row["mime_type"],
+        status=row["status"],
+        parent_artifact_ids=tuple(parent_ids),
+        provider_metadata=prov_meta,
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _batch_from_row(row: Any) -> RenderBatch:
+    return RenderBatch(
+        render_batch_id=row["render_batch_id"],
+        owner_user_id=row["owner_user_id"],
+        workflow_id=row["workflow_id"],
+        project_id=row["project_id"],
+        version=row["version"],
+        status=row["status"],
+        scene_count=row["scene_count"],
+        completed_scene_count=row["completed_scene_count"],
+        timeline_artifact_id=row["timeline_artifact_id"],
+        composite_artifact_id=row["composite_artifact_id"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
 class SQLiteVideoFactoryRepository(VideoFactoryRepository):
     SCHEMA_DDL = """
     CREATE TABLE IF NOT EXISTS video_factory_projects (
@@ -198,12 +246,52 @@ class SQLiteVideoFactoryRepository(VideoFactoryRepository):
         storyboard_version INTEGER NOT NULL DEFAULT 0,
         video_generation_version INTEGER NOT NULL DEFAULT 0,
         timeline_version INTEGER NOT NULL DEFAULT 0,
+        revision INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         UNIQUE(owner_user_id, id)
     );
     CREATE INDEX IF NOT EXISTS idx_video_factory_owner_updated
     ON video_factory_projects(owner_user_id, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS video_factory_artifacts (
+        artifact_id TEXT PRIMARY KEY,
+        owner_user_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        scene_id TEXT NOT NULL DEFAULT '',
+        frame_role TEXT NOT NULL DEFAULT '',
+        version INTEGER NOT NULL DEFAULT 1,
+        attempt INTEGER NOT NULL DEFAULT 1,
+        relative_path TEXT NOT NULL,
+        sha256 TEXT NOT NULL,
+        size INTEGER NOT NULL DEFAULT 0,
+        mime_type TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'active',
+        parent_artifact_ids_json TEXT NOT NULL DEFAULT '[]',
+        provider_metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_vf_artifacts_proj ON video_factory_artifacts(project_id, kind);
+    CREATE INDEX IF NOT EXISTS idx_vf_artifacts_sha ON video_factory_artifacts(sha256);
+
+    CREATE TABLE IF NOT EXISTS video_factory_render_batches (
+        render_batch_id TEXT PRIMARY KEY,
+        owner_user_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1,
+        status TEXT NOT NULL DEFAULT 'pending',
+        scene_count INTEGER NOT NULL DEFAULT 0,
+        completed_scene_count INTEGER NOT NULL DEFAULT 0,
+        timeline_artifact_id TEXT,
+        composite_artifact_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_vf_batches_proj ON video_factory_render_batches(project_id, version);
     """
 
     def __init__(self, database: Any) -> None:
@@ -231,6 +319,12 @@ class SQLiteVideoFactoryRepository(VideoFactoryRepository):
         conn = self._connect()
         try:
             conn.executescript(self.SCHEMA_DDL)
+            cur = conn.execute("PRAGMA table_info(video_factory_projects)")
+            cols = {r[1] for r in cur.fetchall()}
+            if "ab_variants_json" not in cols:
+                conn.execute("ALTER TABLE video_factory_projects ADD COLUMN ab_variants_json TEXT NOT NULL DEFAULT '{}'")
+            if "revision" not in cols:
+                conn.execute("ALTER TABLE video_factory_projects ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
         finally:
             conn.close()
 
@@ -280,7 +374,7 @@ class SQLiteVideoFactoryRepository(VideoFactoryRepository):
             scenes_data = [_json(asdict(scene)) for scene in project.generated_scenes]
             ab_variants_json = _dump(project.ab_variants) if project.ab_variants else "{}"
 
-            conn.execute(
+            cursor = conn.execute(
                 """UPDATE video_factory_projects SET 
                    status=?, resource_pack_json=?, raw_idea_json=?,
                    creative_brief_json=?, scene_plan_json=?, 
@@ -290,8 +384,8 @@ class SQLiteVideoFactoryRepository(VideoFactoryRepository):
                    ab_variants_json=?,
                    resource_version=?, idea_version=?, brief_version=?, scene_version=?,
                    storyboard_version=?, video_generation_version=?, timeline_version=?,
-                   updated_at=? 
-                   WHERE id=? AND owner_user_id=?""",
+                   updated_at=?, revision=revision+1
+                   WHERE id=? AND owner_user_id=? AND revision=?""",
                 (
                     project.status.value,
                     _dump(project.resource_pack) if project.resource_pack else "{}",
@@ -318,9 +412,23 @@ class SQLiteVideoFactoryRepository(VideoFactoryRepository):
                     project.updated_at,
                     project.id,
                     project.owner_user_id,
+                    project.revision,
                 ),
             )
-        return project
+            if cursor.rowcount != 1:
+                row = conn.execute(
+                    "SELECT * FROM video_factory_projects WHERE id=? AND owner_user_id=?",
+                    (project.id, project.owner_user_id),
+                ).fetchone()
+                if row is None:
+                    raise ValueError("Video Factory project is missing or owned by another user")
+                current = self._from_row(row)
+                if replace(project, revision=current.revision, updated_at=current.updated_at) == current:
+                    return current
+                raise VideoFactoryConflictError(
+                    f"VIDEO_FACTORY_CONFLICT: project {project.id} changed since revision {project.revision}"
+                )
+        return replace(project, revision=project.revision + 1)
 
     def _from_row(self, row: Any) -> VideoFactoryProject:
         try:
@@ -375,6 +483,128 @@ class SQLiteVideoFactoryRepository(VideoFactoryRepository):
             storyboard_version=storyboard_version,
             video_generation_version=video_generation_version,
             timeline_version=timeline_version,
+            revision=row["revision"] if "revision" in row.keys() else 0,
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
+
+    def save_artifact(self, artifact: VideoFactoryArtifact) -> VideoFactoryArtifact:
+        # Enforce workspace-relative path only
+        p = Path(artifact.relative_path)
+        if p.is_absolute() or ".." in p.parts:
+            raise ValueError(f"Artifact relative_path must be workspace-relative and without traversal: {artifact.relative_path}")
+
+        parents_json = json.dumps(list(artifact.parent_artifact_ids), ensure_ascii=True)
+        meta_json = json.dumps(artifact.provider_metadata, ensure_ascii=True)
+        with self._transaction(immediate=True) as conn:
+            # Check collision across different owner or project
+            existing = conn.execute(
+                "SELECT owner_user_id, project_id FROM video_factory_artifacts WHERE artifact_id = ?",
+                (artifact.artifact_id,),
+            ).fetchone()
+            if existing and (existing["owner_user_id"] != artifact.owner_user_id or existing["project_id"] != artifact.project_id):
+                raise ValueError(
+                    f"Artifact ID collision: artifact {artifact.artifact_id} already exists for owner {existing['owner_user_id']} / project {existing['project_id']}"
+                )
+
+            conn.execute(
+                """
+                INSERT INTO video_factory_artifacts (
+                    artifact_id, owner_user_id, workflow_id, project_id, kind,
+                    scene_id, frame_role, version, attempt, relative_path,
+                    sha256, size, mime_type, status, parent_artifact_ids_json,
+                    provider_metadata_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(artifact_id) DO UPDATE SET
+                    workflow_id=excluded.workflow_id,
+                    kind=excluded.kind,
+                    scene_id=excluded.scene_id,
+                    frame_role=excluded.frame_role,
+                    version=excluded.version,
+                    attempt=excluded.attempt,
+                    relative_path=excluded.relative_path,
+                    sha256=excluded.sha256,
+                    size=excluded.size,
+                    mime_type=excluded.mime_type,
+                    status=excluded.status,
+                    parent_artifact_ids_json=excluded.parent_artifact_ids_json,
+                    provider_metadata_json=excluded.provider_metadata_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    artifact.artifact_id, artifact.owner_user_id, artifact.workflow_id,
+                    artifact.project_id, artifact.kind, artifact.scene_id,
+                    artifact.frame_role, artifact.version, artifact.attempt,
+                    artifact.relative_path, artifact.sha256, artifact.size,
+                    artifact.mime_type, artifact.status, parents_json,
+                    meta_json, artifact.created_at, artifact.updated_at
+                ),
+            )
+        return artifact
+
+    def get_artifact(self, artifact_id: str, owner_user_id: str) -> VideoFactoryArtifact | None:
+        if not owner_user_id:
+            raise ValueError("owner_user_id is required to fetch an artifact")
+        with self._transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM video_factory_artifacts WHERE artifact_id = ? AND owner_user_id = ?",
+                (artifact_id, owner_user_id),
+            ).fetchone()
+        return _artifact_from_row(row) if row else None
+
+    def list_artifacts(self, project_id: str, owner_user_id: str, kind: str | None = None) -> list[VideoFactoryArtifact]:
+        if not owner_user_id:
+            raise ValueError("owner_user_id is required to list artifacts")
+        with self._transaction() as conn:
+            query = "SELECT * FROM video_factory_artifacts WHERE project_id = ? AND owner_user_id = ?"
+            params: list[Any] = [project_id, owner_user_id]
+            if kind:
+                query += " AND kind = ?"
+                params.append(kind)
+            query += " ORDER BY created_at ASC"
+            rows = conn.execute(query, tuple(params)).fetchall()
+        return [_artifact_from_row(row) for row in rows]
+
+    def save_render_batch(self, batch: RenderBatch) -> RenderBatch:
+        with self._transaction(immediate=True) as conn:
+            conn.execute(
+                """
+                INSERT INTO video_factory_render_batches (
+                    render_batch_id, owner_user_id, workflow_id, project_id,
+                    version, status, scene_count, completed_scene_count,
+                    timeline_artifact_id, composite_artifact_id,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(render_batch_id) DO UPDATE SET
+                    status=excluded.status,
+                    scene_count=excluded.scene_count,
+                    completed_scene_count=excluded.completed_scene_count,
+                    timeline_artifact_id=excluded.timeline_artifact_id,
+                    composite_artifact_id=excluded.composite_artifact_id,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    batch.render_batch_id, batch.owner_user_id, batch.workflow_id,
+                    batch.project_id, batch.version, batch.status,
+                    batch.scene_count, batch.completed_scene_count,
+                    batch.timeline_artifact_id, batch.composite_artifact_id,
+                    batch.created_at, batch.updated_at
+                ),
+            )
+        return batch
+
+    def get_render_batch(self, render_batch_id: str) -> RenderBatch | None:
+        with self._transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM video_factory_render_batches WHERE render_batch_id = ?",
+                (render_batch_id,),
+            ).fetchone()
+        return _batch_from_row(row) if row else None
+
+    def list_render_batches(self, project_id: str) -> list[RenderBatch]:
+        with self._transaction() as conn:
+            rows = conn.execute(
+                "SELECT * FROM video_factory_render_batches WHERE project_id = ? ORDER BY created_at ASC",
+                (project_id,),
+            ).fetchall()
+        return [_batch_from_row(row) for row in rows]

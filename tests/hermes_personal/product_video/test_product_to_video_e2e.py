@@ -118,15 +118,9 @@ def test_full_fourteen_state_product_to_video_e2e(workflow_env):
     assert research_art["idempotency_key"] == "idemp_res_1"
     assert research_art["pdp_url"] == pdp_url
 
-    # 3. State 3: AwaitingProductLock (HITL Gate 1 - Web approval)
-    transition_to(ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK, version=3)
-    # Assert HITL gate strictly blocks dispatch before human approval
-    assert handlers.resource_pack_job(ctx_res, research_art).code == "HITL_APPROVAL_REQUIRED"
-    handle_hitl_gate("AwaitingProductLock", channel="web", version=3)
-
-    # 4. State 4: BUILDING_RESOURCE_PACK
-    transition_to(ProductVideoWorkflowState.BUILDING_RESOURCE_PACK, version=4)
-    ctx_pack = JobContext(workflow_id=wf_id, job_id="job_pack", expected_version=4, idempotency_key="idemp_pack_1")
+    # 3. State 3: BUILDING_RESOURCE_PACK
+    transition_to(ProductVideoWorkflowState.BUILDING_RESOURCE_PACK, version=3)
+    ctx_pack = JobContext(workflow_id=wf_id, job_id="job_pack", expected_version=3, idempotency_key="idemp_pack_1")
     res_pack = handlers.resource_pack_job(ctx_pack, research_art)
     assert isinstance(res_pack, JobSucceeded)
     pack_art = res_pack.artifact_ref
@@ -137,7 +131,16 @@ def test_full_fourteen_state_product_to_video_e2e(workflow_env):
     assert pack_art["workflow_id"] == wf_id
     assert pack_art["idempotency_key"] == "idemp_pack_1"
 
-    res_lock = handlers.lock_job(ctx_pack, pack_art)
+    # 4. State 4: AwaitingProductLock (HITL Gate 1 - Web approval)
+    transition_to(ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK, version=4)
+    # Assert HITL gate strictly blocks dispatch before human approval
+    assert handlers.lock_job(ctx_pack, pack_art).code == "HITL_APPROVAL_REQUIRED"
+    handle_hitl_gate("AwaitingProductLock", channel="web", version=4)
+
+    # 5. State 5: LOCKING_RESOURCE_PACK
+    transition_to(ProductVideoWorkflowState.LOCKING_RESOURCE_PACK, version=5)
+    ctx_lock = JobContext(workflow_id=wf_id, job_id="job_lock", expected_version=5, idempotency_key="idemp_lock_1")
+    res_lock = handlers.lock_job(ctx_lock, pack_art)
     assert isinstance(res_lock, JobSucceeded)
     locked_pack = res_lock.artifact_ref
     assert locked_pack["owner"] == "product_intelligence"
@@ -148,80 +151,81 @@ def test_full_fourteen_state_product_to_video_e2e(workflow_env):
     assert locked_pack["manifest_digest"].startswith("sha256:")
     assert "resource_pack_id" in locked_pack
 
-    # 5. State 5: CREATING_BRIEF (Paid call: $5)
-    transition_to(ProductVideoWorkflowState.CREATING_BRIEF, version=5)
-    ctx_brief = JobContext(workflow_id=wf_id, job_id="job_brief", expected_version=5, idempotency_key="idemp_brief_1")
+    # 6. State 6: CREATING_BRIEF (Paid call: $5)
+    transition_to(ProductVideoWorkflowState.CREATING_BRIEF, version=6)
+    ctx_brief = JobContext(workflow_id=wf_id, job_id="job_brief", expected_version=6, idempotency_key="idemp_brief_1")
     res_brief = handlers.creative_brief_job(ctx_brief, locked_pack["resource_pack_id"], brief_config={"platform": "tiktok", "pdp_url": pdp_url})
     assert isinstance(res_brief, JobSucceeded)
     brief_art = res_brief.artifact_ref
     assert_vf_artifact(brief_art, expected_idemp_key="idemp_brief_1")
-    assert get_allocated_budget("video_factory") == 5
+    assert get_allocated_budget("video_factory", owner_user_id="user") == 5
 
-    # 6. State 6: AwaitingBriefApproval (HITL Gate 2 - CLI approval)
-    transition_to(ProductVideoWorkflowState.AWAITING_BRIEF_APPROVAL, version=6)
+    # 7. State 7: AwaitingBriefApproval (HITL Gate 2 - CLI approval)
+    transition_to(ProductVideoWorkflowState.AWAITING_BRIEF_APPROVAL, version=7)
     assert handlers.scene_plan_job(ctx_brief, brief_art["artifact_ref"]).code == "HITL_APPROVAL_REQUIRED"
-    handle_hitl_gate("AwaitingBriefApproval", channel="cli", version=6)
+    handle_hitl_gate("AwaitingBriefApproval", channel="cli", version=7)
 
-    # 7. State 7: CREATING_SCENE_PLAN (Paid call: $5)
-    transition_to(ProductVideoWorkflowState.CREATING_SCENE_PLAN, version=7)
-    ctx_scene = JobContext(workflow_id=wf_id, job_id="job_scene", expected_version=7, idempotency_key="idemp_scene_1")
+    # 8. State 8: CREATING_SCENE_PLAN (Paid call: $5)
+    transition_to(ProductVideoWorkflowState.CREATING_SCENE_PLAN, version=8)
+    ctx_scene = JobContext(workflow_id=wf_id, job_id="job_scene", expected_version=8, idempotency_key="idemp_scene_1")
     res_scene = handlers.scene_plan_job(ctx_scene, brief_art["artifact_ref"])
     assert isinstance(res_scene, JobSucceeded)
     scene_art = res_scene.artifact_ref
     assert_vf_artifact(scene_art, expected_idemp_key="idemp_scene_1")
-    assert get_allocated_budget("video_factory") == 10  # 5 + 5
+    assert get_allocated_budget("video_factory", owner_user_id="user") == 10  # 5 + 5
 
-    # 8. State 8: AwaitingSceneApproval (HITL Gate 3 - Web approval)
-    transition_to(ProductVideoWorkflowState.AWAITING_SCENE_APPROVAL, version=8)
+    # 9. State 9: AwaitingSceneApproval (HITL Gate 3 - Web approval)
+    transition_to(ProductVideoWorkflowState.AWAITING_SCENE_APPROVAL, version=9)
     assert handlers.storyboard_job(ctx_scene, scene_art["artifact_ref"]).code == "HITL_APPROVAL_REQUIRED"
-    handle_hitl_gate("AwaitingSceneApproval", channel="web", version=8)
+    handle_hitl_gate("AwaitingSceneApproval", channel="web", version=9)
 
-    # 9. State 9: CREATING_STORYBOARD (Paid call: $10)
-    transition_to(ProductVideoWorkflowState.CREATING_STORYBOARD, version=9)
-    ctx_story = JobContext(workflow_id=wf_id, job_id="job_story", expected_version=9, idempotency_key="idemp_story_1")
+    # 10. State 10: CREATING_STORYBOARD (Paid call: $10)
+    transition_to(ProductVideoWorkflowState.CREATING_STORYBOARD, version=10)
+    ctx_story = JobContext(workflow_id=wf_id, job_id="job_story", expected_version=10, idempotency_key="idemp_story_1")
     res_story = handlers.storyboard_job(ctx_story, scene_art["artifact_ref"])
     assert isinstance(res_story, JobSucceeded)
     story_art = res_story.artifact_ref
     assert_vf_artifact(story_art, expected_idemp_key="idemp_story_1")
-    assert get_allocated_budget("video_factory") == 20  # 10 + 10
+    assert get_allocated_budget("video_factory", owner_user_id="user") == 20  # 10 + 10
 
-    # 10. State 10: AwaitingStoryboardApproval (HITL Gate 4 - Telegram approval)
-    transition_to(ProductVideoWorkflowState.AWAITING_STORYBOARD_APPROVAL, version=10)
+    # 11. State 11: AwaitingStoryboardApproval (HITL Gate 4 - Telegram approval)
+    transition_to(ProductVideoWorkflowState.AWAITING_STORYBOARD_APPROVAL, version=11)
     assert handlers.render_job(ctx_story, story_art["artifact_ref"]).code == "HITL_APPROVAL_REQUIRED"
-    handle_hitl_gate("AwaitingStoryboardApproval", channel="telegram", version=10)
+    handle_hitl_gate("AwaitingStoryboardApproval", channel="telegram", version=11)
 
-    # 11. State 11: RENDERING (Paid call: $50)
-    transition_to(ProductVideoWorkflowState.RENDERING, version=11)
-    ctx_render = JobContext(workflow_id=wf_id, job_id="job_render", expected_version=11, idempotency_key="idemp_render_1")
+    # 12. State 12: RENDERING (Paid call: $50)
+    transition_to(ProductVideoWorkflowState.RENDERING, version=12)
+    ctx_render = JobContext(workflow_id=wf_id, job_id="job_render", expected_version=12, idempotency_key="idemp_render_1")
     res_render = handlers.render_job(ctx_render, story_art["artifact_ref"])
     assert isinstance(res_render, JobSucceeded)
     render_art = res_render.artifact_ref
     assert_vf_artifact(render_art, expected_idemp_key="idemp_render_1")
-    assert get_allocated_budget("video_factory") == 70  # 20 + 50
+    assert get_allocated_budget("video_factory", owner_user_id="user") == 70  # 20 + 50
 
-    # 12. State 12: AwaitingFinalApproval (HITL Gate 5 - Telegram final approval)
-    transition_to(ProductVideoWorkflowState.AWAITING_FINAL_APPROVAL, version=12)
+    # 13. State 13: AwaitingFinalApproval (HITL Gate 5 - Telegram final approval)
+    transition_to(ProductVideoWorkflowState.AWAITING_FINAL_APPROVAL, version=13)
     assert handlers.export_job(ctx_render, render_art["artifact_ref"]).code == "HITL_APPROVAL_REQUIRED"
-    handle_hitl_gate("AwaitingFinalApproval", channel="telegram", version=12)
+    handle_hitl_gate("AwaitingFinalApproval", channel="telegram", version=13)
 
-    # 13. State 13: EXPORTING (Paid call: $20)
-    transition_to(ProductVideoWorkflowState.EXPORTING, version=13)
-    ctx_export = JobContext(workflow_id=wf_id, job_id="job_export", expected_version=13, idempotency_key="idemp_export_1")
+    # 14. State 14: EXPORTING (Paid call: $20)
+    transition_to(ProductVideoWorkflowState.EXPORTING, version=14)
+    ctx_export = JobContext(workflow_id=wf_id, job_id="job_export", expected_version=14, idempotency_key="idemp_export_1")
     res_export = handlers.export_job(ctx_export, render_art["artifact_ref"])
     assert isinstance(res_export, JobSucceeded)
     export_art = res_export.artifact_ref
     assert_vf_artifact(export_art, expected_idemp_key="idemp_export_1")
-    assert get_allocated_budget("video_factory") == 90  # 70 + 20
+    assert get_allocated_budget("video_factory", owner_user_id="user") == 90  # 70 + 20
 
-    # 14. State 14: COMPLETED
-    transition_to(ProductVideoWorkflowState.COMPLETED, version=14)
+    # 15. State 15: COMPLETED
+    transition_to(ProductVideoWorkflowState.COMPLETED, version=15)
 
-    # Assert 1: Exact 14 state sequence traversed in strict order
+    # Assert 1: Exact state sequence traversed in strict order
     expected_states = [
         "idle",
         "researching",
-        "AwaitingProductLock",
         "building_resource_pack",
+        "AwaitingProductLock",
+        "locking_resource_pack",
         "creating_brief",
         "AwaitingBriefApproval",
         "creating_scene_plan",
@@ -241,4 +245,4 @@ def test_full_fourteen_state_product_to_video_e2e(workflow_env):
         assert approval_service.get_request(aid).status == ApprovalStatus.APPROVED
 
     # Assert 3: Real BudgetEngine committed exactly $90 for video_factory
-    assert get_allocated_budget("video_factory") == 90
+    assert get_allocated_budget("video_factory", owner_user_id="user") == 90

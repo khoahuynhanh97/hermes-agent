@@ -125,6 +125,36 @@ def test_worker_stops_on_fatal_persistence_error(tmp_path):
         OutboxRepository.record_failure = orig_record  # type: ignore
 
 
+def test_configured_worker_wires_grounded_creative_generator(tmp_path, monkeypatch):
+    """Configured workers must not silently fall back to an empty legacy brief."""
+    import hermes_personal.product_video.handlers as handlers_module
+
+    creative_generator = object()
+    captured = {}
+    monkeypatch.setattr(
+        handlers_module,
+        "create_configured_creative_generator",
+        lambda: creative_generator,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        handlers_module,
+        "create_product_video_topic_handlers",
+        lambda **kwargs: captured.update(kwargs) or {},
+    )
+    monkeypatch.setattr("tools.mcp_tool.discover_mcp_tools", lambda: None)
+
+    from hermes_personal.workflows.worker import run_worker
+
+    run_worker(
+        db_path=tmp_path / "configured-worker.db",
+        provider_mode="configured",
+        once=True,
+    )
+
+    assert captured["creative_generator"] is creative_generator
+
+
 def test_worker_main_uses_canonical_hermes_home_and_respects_explicit_db_path(tmp_path, monkeypatch):
     """Test that worker.main resolves canonical hermes home, isolates config/dotenv, and respects explicit --db-path."""
     import os
@@ -189,3 +219,37 @@ def test_worker_main_uses_canonical_hermes_home_and_respects_explicit_db_path(tm
     assert exit_code_explicit == 0
     assert recorded_run_calls[-1]["db_path"] == explicit_db
     assert recorded_dotenv_homes[-1] == env_home
+
+
+def test_worker_main_once_scopes_daily_work_and_returns_failure(tmp_path, monkeypatch):
+    import hermes_personal.workflows.worker as worker_module
+    from hermes_personal.workflows.outbox_dispatcher import DispatchReport
+
+    monkeypatch.setattr("hermes_cli.env_loader.load_hermes_dotenv", lambda **kwargs: None)
+    monkeypatch.setattr("hermes_cli.config.load_config", lambda: {})
+    recorded = []
+
+    def mock_run_worker(**kwargs):
+        recorded.append(kwargs)
+        return DispatchReport(claimed=1, succeeded=0, failed=1, quarantined=0)
+
+    monkeypatch.setattr(worker_module, "run_worker", mock_run_worker)
+
+    exit_code = worker_module.main(
+        [
+            "--db-path",
+            str(tmp_path / "worker.db"),
+            "--provider-mode",
+            "fake",
+            "--once",
+            "--batch-size",
+            "5",
+            "--workflow-id-prefix",
+            "pv-daily-",
+        ]
+    )
+
+    assert exit_code == 1
+    assert recorded[0]["once"] is True
+    assert recorded[0]["batch_size"] == 5
+    assert recorded[0]["workflow_id_prefix"] == "pv-daily-"

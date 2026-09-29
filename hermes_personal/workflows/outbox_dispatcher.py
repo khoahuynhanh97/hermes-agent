@@ -68,10 +68,19 @@ class OutboxDispatcher:
         self.topic_handlers = topic_handlers
 
     def process_batch(
-        self, batch_size: int = 10, now_iso: str | None = None
+        self,
+        batch_size: int = 10,
+        now_iso: str | None = None,
+        workflow_id_prefix: str | None = None,
+        workflow_ids: list[str] | None = None,
     ) -> DispatchReport:
         claims = self.repository.claim(
-            self.worker_id, self.lease_duration_seconds, batch_size, now_iso
+            self.worker_id,
+            self.lease_duration_seconds,
+            batch_size,
+            now_iso,
+            workflow_id_prefix=workflow_id_prefix,
+            workflow_ids=workflow_ids,
         )
         claimed_count = len(claims)
         succeeded = 0
@@ -145,7 +154,7 @@ class OutboxDispatcher:
                 raise RuntimeError(
                     f"delivery_unconfigured: no handler registered for topic {envelope.topic!r}"
                 )
-            hb = lambda ext=60.0: self.repository.extend_lease(
+            hb = lambda ext=300.0: self.repository.extend_lease(
                 claim.outbox_id, claim.lease_token, self.worker_id, extension_seconds=ext
             )
             import inspect

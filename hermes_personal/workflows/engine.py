@@ -113,20 +113,57 @@ class WorkflowEngine:
         if wf_data is not None:
             aggregate_dict, version = wf_data
             state = aggregate_dict.get("state", "initial")
-            self._cache[workflow_id] = {"state": state, "version": version}
+            entry = dict(aggregate_dict)
+            entry["state"] = state
+            entry["version"] = version
+            self._cache[workflow_id] = entry
             return state, version
         return None
 
-    def set_workflow_state(self, workflow_id: str, state: str, version: int = 1) -> None:
+    def set_workflow_state(
+        self,
+        workflow_id: str,
+        state: str,
+        version: int = 1,
+        project_id: str | None = None,
+        owner_user_id: str | None = None,
+        **extra_agg: Any,
+    ) -> None:
         """Helper to register/update workflow state directly for tests or execution."""
+        existing: dict[str, Any] = {}
+        if hasattr(self, "repo") and self.repo is not None:
+            data = self.repo.get_workflow(workflow_id)
+            if data:
+                existing = data[0]
+        agg = dict(existing)
+        agg["state"] = state
+        if project_id is not None:
+            agg["project_id"] = project_id
+        elif "project_id" not in agg and (
+            state.startswith("creating_")
+            or state.startswith("awaiting_")
+            or state in ("researching", "building_resource_pack", "rendering", "exporting")
+        ):
+            agg["project_id"] = f"proj_{workflow_id}"
+
+        if owner_user_id is not None:
+            agg["owner_user_id"] = owner_user_id
+        elif "owner_user_id" not in agg and (
+            state.startswith("creating_")
+            or state.startswith("awaiting_")
+            or state in ("researching", "building_resource_pack", "rendering", "exporting")
+        ):
+            agg["owner_user_id"] = "test_owner"
+
+        agg.update(extra_agg)
         with self.repo.conn:
             cur = self.repo.conn.cursor()
             cur.execute(
                 "INSERT INTO workflow (workflow_id, aggregate_json, version) VALUES (?, ?, ?) "
                 "ON CONFLICT(workflow_id) DO UPDATE SET aggregate_json=excluded.aggregate_json, version=excluded.version",
-                (workflow_id, json.dumps({"state": state}), version),
+                (workflow_id, json.dumps(agg), version),
             )
-        self._cache[workflow_id] = {"state": state, "version": version}
+        self._cache[workflow_id] = dict(agg, version=version)
 
     # ---------------------------------------------------------------------
     # Internal helpers
