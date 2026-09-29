@@ -25,6 +25,12 @@ DEFAULT_EXCHANGE_INBOX = Path(r"D:\work\Personal\hermes-product-video-exchange\i
 _AMBIGUOUS_VARIANT = re.compile(r"\b\d+\s*[a-zA-Z]*\s*/\s*\d+", re.IGNORECASE)
 _URL_LIKE_NAME = re.compile(r"^[^\s/]+\.[a-z]{2,}(?:\.[a-z]{2,})?/", re.IGNORECASE)
 _PRICE_LIKE_MODEL = re.compile(r"^\d+(?:[.,]\d+)?\s*(?:k|tr|đ|vnd)$", re.IGNORECASE)
+_PROMOTIONAL_NOISE_MODEL = re.compile(
+    r"^(?:sale|top|giam|giảm|hot|deal|combo|freeship|chinh\s*hang|chính\s*hãng)\b|\b\d+\s*%"
+    r"|^[^\w\s]+|\b\d+\s*(?:k|tr|đ|vnd|usd)\b",
+    re.IGNORECASE,
+)
+_RANKING_LIST_PATTERN = re.compile(r"^top\s*\d+\b", re.IGNORECASE)
 
 
 def _identity_words(value: str) -> str:
@@ -139,12 +145,21 @@ class ExchangeImporter:
             return False, "missing product name", []
         if _URL_LIKE_NAME.match(product.name.strip()):
             return False, "product name is a URL or marketplace slug", []
+        
+        # Check for ranking list pattern in product name
+        if _RANKING_LIST_PATTERN.match(product.name.strip()):
+            return False, "product name is a ranking article/listicle, not a single product", []
+        
         normalized_name = f" {_identity_words(product.name)} "
         brand = _identity_words(product.brand)
         if not brand or f" {brand} " not in normalized_name:
             return False, "product name does not identify brand", []
         if not _identity_words(product.model) or _PRICE_LIKE_MODEL.match(product.model.strip()):
             return False, "product model is missing or looks like a price", []
+        
+        # Check for promotional noise in model
+        if _PROMOTIONAL_NOISE_MODEL.search(product.model.strip()):
+            return False, "product model contains promotional or ranking noise (e.g. Sale/Top/Deal/%)", []
 
         if _AMBIGUOUS_VARIANT.search(product.name):
             return False, "ambiguous product variant", []
@@ -286,6 +301,16 @@ def publish_daily_run_to_exchange(
 
             if _PRICE_LIKE_MODEL.match(model):
                 master_repo.mark_rejected(canonical_key, "PRICE_LIKE_MODEL")
+                continue
+
+            # Check for promotional noise in model
+            if _PROMOTIONAL_NOISE_MODEL.search(model):
+                master_repo.mark_rejected(canonical_key, "PROMOTIONAL_NOISE_MODEL")
+                continue
+
+            # Check for ranking list pattern in name
+            if _RANKING_LIST_PATTERN.match(name):
+                master_repo.mark_rejected(canonical_key, "RANKING_LIST_TITLE")
                 continue
 
             # Verify at least 2 images exist

@@ -329,3 +329,154 @@ def test_deduplication_across_batches(mock_daily_run: Path, temp_db: sqlite3.Con
     # Should only have 1 product now (Baseus), Xiaomi blocked by cooldown
     assert len(manifest_2["products"]) == 1
     assert manifest_2["products"][0]["brand"] == "Baseus"
+
+
+def test_promotional_noise_rejection(tmp_path: Path, temp_db: sqlite3.Connection):
+    """Test rejection of promotional and ranking noise in product models and titles."""
+    run_dir = tmp_path / "daily_runs" / "2026-09-29"
+    run_dir.mkdir(parents=True)
+
+    # Create products with promotional noise
+    products_data = {
+        "date": "2026-09-29",
+        "products": [
+            {
+                "id": "prod_promo_001",
+                "name": "Xiaomi Sale 40% Redmi Watch",
+                "brand": "Xiaomi",
+                "model": "Sale 40",  # Promotional noise
+                "hot_reason": "Sale event",
+                "images": [
+                    {"asset_id": "img_001_01", "local_path": "images/prod_001_01.jpg", "match_score": 1.0},
+                    {"asset_id": "img_001_02", "local_path": "images/prod_001_02.jpg", "match_score": 1.0},
+                ],
+            },
+            {
+                "id": "prod_promo_002",
+                "name": "Top 12 Loa Bluetooth JBL Tốt Nhất 2026",
+                "brand": "JBL",
+                "model": "Top 12",  # Ranking noise
+                "hot_reason": "Top ranking",
+                "images": [
+                    {"asset_id": "img_002_01", "local_path": "images/prod_002_01.jpg", "match_score": 1.0},
+                    {"asset_id": "img_002_02", "local_path": "images/prod_002_02.jpg", "match_score": 1.0},
+                ],
+            },
+            {
+                "id": "prod_promo_003",
+                "name": "Anker PowerConf Giảm 50%",
+                "brand": "Anker",
+                "model": "Giảm 50%",  # Discount noise
+                "hot_reason": "Flash sale",
+                "images": [
+                    {"asset_id": "img_003_01", "local_path": "images/prod_003_01.jpg", "match_score": 1.0},
+                    {"asset_id": "img_003_02", "local_path": "images/prod_003_02.jpg", "match_score": 1.0},
+                ],
+            },
+            {
+                "id": "prod_promo_004",
+                "name": "Samsung Galaxy Deal 99k",
+                "brand": "Samsung",
+                "model": "Deal 99k",  # Deal + price noise
+                "hot_reason": "Mega deal",
+                "images": [
+                    {"asset_id": "img_004_01", "local_path": "images/prod_004_01.jpg", "match_score": 1.0},
+                    {"asset_id": "img_004_02", "local_path": "images/prod_004_02.jpg", "match_score": 1.0},
+                ],
+            },
+            {
+                "id": "prod_valid_001",
+                "name": "Xiaomi Redmi Watch 5 Active",
+                "brand": "Xiaomi",
+                "model": "Redmi Watch 5 Active",  # Valid model
+                "hot_reason": "Best seller",
+                "images": [
+                    {"asset_id": "img_005_01", "local_path": "images/prod_005_01.jpg", "match_score": 1.0},
+                    {"asset_id": "img_005_02", "local_path": "images/prod_005_02.jpg", "match_score": 1.0},
+                ],
+            },
+            {
+                "id": "prod_valid_002",
+                "name": "JBL Flip 6",
+                "brand": "JBL",
+                "model": "Flip 6",  # Valid model
+                "hot_reason": "Waterproof speaker",
+                "images": [
+                    {"asset_id": "img_006_01", "local_path": "images/prod_006_01.jpg", "match_score": 1.0},
+                    {"asset_id": "img_006_02", "local_path": "images/prod_006_02.jpg", "match_score": 1.0},
+                ],
+            },
+            {
+                "id": "prod_valid_003",
+                "name": "Baseus Bowie WM02",
+                "brand": "Baseus",
+                "model": "Bowie WM02",  # Valid model
+                "hot_reason": "ANC earbuds",
+                "images": [
+                    {"asset_id": "img_007_01", "local_path": "images/prod_007_01.jpg", "match_score": 1.0},
+                    {"asset_id": "img_007_02", "local_path": "images/prod_007_02.jpg", "match_score": 1.0},
+                ],
+            },
+        ],
+    }
+
+    (run_dir / "products.json").write_text(json.dumps(products_data, ensure_ascii=False), encoding="utf-8")
+
+    # Create dummy images
+    img_dir = run_dir / "images"
+    img_dir.mkdir()
+    for i in range(1, 8):
+        for j in range(1, 3):
+            img_file = img_dir / f"prod_00{i}_0{j}.jpg"
+            img_file.write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 100)
+
+    # Publish with gatekeeper
+    inbox_root = tmp_path / "exchange_inbox"
+    batch_dir = publish_daily_run_to_exchange(
+        source_run_dir=run_dir,
+        inbox_root=inbox_root,
+        master_catalog_conn=temp_db,
+        cooldown_days=30,
+        max_products=5,
+    )
+
+    # Verify manifest only contains valid products
+    manifest_file = batch_dir / "manifest.json"
+    manifest_data = json.loads(manifest_file.read_text(encoding="utf-8"))
+    products = manifest_data.get("products") or []
+
+    # Should only have 3 valid products (Xiaomi Redmi Watch, JBL Flip 6, Baseus Bowie)
+    assert len(products) == 3
+
+    product_models = [p["model"] for p in products]
+    assert "Redmi Watch 5 Active" in product_models
+    assert "Flip 6" in product_models
+    assert "Bowie WM02" in product_models
+
+    # Verify promotional models were rejected
+    assert "Sale 40" not in product_models
+    assert "Top 12" not in product_models
+    assert "Giảm 50%" not in product_models
+    assert "Deal 99k" not in product_models
+
+    # Verify master catalog rejection reasons
+    repo = DailyImportRepository(temp_db)
+
+    # Check rejected entries
+    sale_key = compute_canonical_product_key("Xiaomi", "Sale 40", None)
+    sale_entry = repo.get_master_catalog_entry(sale_key)
+    assert sale_entry is not None
+    assert sale_entry["status"] == "rejected"
+    assert "PROMOTIONAL_NOISE_MODEL" in (sale_entry["rejection_reason"] or "")
+
+    top_key = compute_canonical_product_key("JBL", "Top 12", None)
+    top_entry = repo.get_master_catalog_entry(top_key)
+    assert top_entry is not None
+    assert top_entry["status"] == "rejected"
+    assert "PROMOTIONAL_NOISE_MODEL" in (top_entry["rejection_reason"] or "")
+
+    # Verify valid entries were admitted
+    xiaomi_key = compute_canonical_product_key("Xiaomi", "Redmi Watch 5 Active", None)
+    xiaomi_entry = repo.get_master_catalog_entry(xiaomi_key)
+    assert xiaomi_entry is not None
+    assert xiaomi_entry["status"] == "admitted"
