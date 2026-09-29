@@ -965,7 +965,39 @@ class ProductVideoJobHandlers:
                 job_id=ctx.job_id,
                 idempotency_key=ctx.idempotency_key,
             )
-            res = JobSucceeded(artifact_ref=result, next_command={"command": "lock_resource_pack"})
+            # Auto-run Image QC to check if cleanable failures exist
+            # This is a preview QC run - not persisted yet, just for routing decision
+            qc_result, qc_eligible = self._run_preview_image_qc(
+                workflow_id=ctx.workflow_id,
+                resource_pack=result,
+                product_metadata=extract_product_from_resource_pack(result),
+            )
+
+            # Store QC metadata for retry handler
+            result_with_qc = dict(result)
+            result_with_qc["_initial_qc_preview"] = {
+                "verdict": qc_result.verdict.value if hasattr(qc_result.verdict, 'value') else str(qc_result.verdict),
+                "score": qc_result.score,
+                "is_cleanable": is_cleanable_failure(qc_result),
+                "findings_summary": {
+                    "eligible_count": len(qc_eligible),
+                    "total_items": len(qc_result.findings.get("items", [])),
+                }
+            }
+
+            if qc_result.verdict == QCVerdict.FAIL and is_cleanable_failure(qc_result):
+                # Cleanable failure - trigger auto-retry with image cleaning
+                res = JobSucceeded(
+                    artifact_ref=result_with_qc,
+                    next_command={"command": "retry_image_qc"}
+                )
+            else:
+                # Pass or terminal failure - proceed to normal flow
+                res = JobSucceeded(
+                    artifact_ref=result_with_qc,
+                    next_command={"command": "lock_resource_pack"}
+                )
+
             if cache_key:
                 self._idempotency_cache[cache_key] = res
             return res
@@ -983,6 +1015,7 @@ class ProductVideoJobHandlers:
             {
                 ProductVideoWorkflowState.LOCKING_RESOURCE_PACK,
                 ProductVideoWorkflowState.BUILDING_RESOURCE_PACK,
+                ProductVideoWorkflowState.RETRYING_IMAGE_QC,
             },
             inputs,
             provider_family="product_intelligence",
@@ -2039,6 +2072,7 @@ class ProductVideoJobHandlers:
         return {
             "product_video.research": self.research_job,
             "product_video.resource_pack": self.resource_pack_job,
+            "product_video.retry_image_qc": self.retry_image_qc_job,
             "product_video.lock": self.lock_job,
             "product_video.creative_brief": self.creative_brief_job,
             "product_video.scene_plan": self.scene_plan_job,
@@ -2348,6 +2382,12 @@ def create_product_video_topic_handlers(
                             next_agg["state"] = next_validated.value
                             is_hitl = True
                             gate_name = "AwaitingProductLock"
+                    elif job_name == "product_video.retry_image_qc":
+                        # Transitions back to AwaitingProductLock if retry passed, or terminal fail
+                        next_validated = transition(ProductVideoWorkflowState.RETRYING_IMAGE_QC, ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK)
+                        next_agg["state"] = next_validated.value
+                        is_hitl = True
+                        gate_name = "AwaitingProductLock"
                     elif job_name == "product_video.lock":
                         next_validated = transition(ProductVideoWorkflowState.BUILDING_RESOURCE_PACK, ProductVideoWorkflowState.CREATING_BRIEF)
                         next_agg["state"] = next_validated.value
