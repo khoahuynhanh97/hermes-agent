@@ -2210,19 +2210,42 @@ def get_job_status(
                         "code": "FILE_NOT_FOUND",
                     }
                 disk_sha = compute_file_sha256(p_out)
-                if not stored_sha:
-                    stored_sha = f"sha256:{disk_sha}"
-                    try:
-                        conn_up = sqlite3.connect(_db_path())
-                        with conn_up:
-                            conn_up.execute(
-                                "UPDATE video_factory_scene_operation SET output_sha256 = ?, updated_at = CURRENT_TIMESTAMP WHERE scene_id = ? OR operation_id = ?",
-                                (stored_sha, op["scene_id"], op.get("operation_id", "")),
-                            )
-                        conn_up.close()
-                    except Exception:
-                        pass
-                elif disk_sha != stored_sha.removeprefix("sha256:"):
+                stored_sha = op.get("output_sha256") or ""
+                
+                # Validate using the operation store's finalization method
+                # This replaces the direct SQL update and backfilling
+                if not stored_sha or disk_sha != stored_sha.removeprefix("sha256:"):
+                    # Need to validate and finalize
+                    from hermes_personal.integrations.video_factory.scene_renderer import SceneRenderOperationStore
+                    from hermes_personal.integrations.video_factory.ports import VideoGenerationResult
+                    
+                    op_store = SceneRenderOperationStore(_db_path())
+                    provider_result = VideoGenerationResult(
+                        request_id=op.get("operation_id", ""),
+                        status="completed",
+                        provider_operation_id=prov_op_id,
+                        video_path=op_output,
+                    )
+                    
+                    # This validates and transitions state
+                    final_state = op_store.finalize_provider_result(op.get("operation_id", ""), provider_result)
+                    
+                    # Check if validation succeeded
+                    if final_state["status"] != "completed":
+                        return {
+                            "ok": False,
+                            "status": "failed",
+                            "job_id": job_id,
+                            "error": f"SCENE_VALIDATION_FAILED: {op['scene_id']} - {final_state.get('error_message', 'unknown validation error')}",
+                            "code": final_state.get("error_code", "SCENE_VALIDATION_FAILED"),
+                        }
+                    
+                    # Validation passed - get the validated digest
+                    stored_sha = final_state.get("output_sha256") or ""
+                    if stored_sha:
+                        stored_sha = stored_sha if stored_sha.startswith("sha256:") else f"sha256:{stored_sha}"
+                
+                if stored_sha and disk_sha != stored_sha.removeprefix("sha256:"):
                     return {
                         "ok": False,
                         "status": "failed",
