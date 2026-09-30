@@ -144,3 +144,70 @@ def test_invalid_video_creates_no_export_directory(tmp_path: Path) -> None:
         )
 
     assert not (tmp_path / "exports" / "export_proj-123_v1").exists()
+
+
+def test_build_export_package_with_scenes(tmp_path: Path) -> None:
+    """Verify export package includes scenes/ subfolder with individual scene clips."""
+    source = _write_video(tmp_path / "source.mp4", frames=144, color=32)
+    
+    # Create mock scene video clips
+    scene_01 = _write_video(tmp_path / "scene_01.mp4", frames=24, color=50)
+    scene_02 = _write_video(tmp_path / "scene_02.mp4", frames=36, color=80)
+    scene_03 = _write_video(tmp_path / "scene_03.mp4", frames=48, color=120)
+    
+    package = build_export_package(
+        source_video=source,
+        exports_root=tmp_path / "exports",
+        project_id="proj-scenes-123",
+        version="v1",
+        product_identity="JBL PartyBox 310",
+        verified_claims=["Bluetooth 5.1", "240W output"],
+        cta="Tìm hiểu thêm",
+        provenance={
+            "approvals": {"final_video": "approval-final"},
+            "scenes": [
+                {"scene_id": "scene_01", "video_path": str(scene_01), "asset_id": "asset_scene_01"},
+                {"scene_id": "scene_02", "video_path": str(scene_02), "asset_id": "asset_scene_02"},
+                {"scene_id": "scene_03", "video_path": str(scene_03), "asset_id": "asset_scene_03"},
+            ],
+            "qc": {"video": {"status": "PASS"}},
+        },
+    )
+    
+    # Verify export directory structure
+    assert package.directory.exists()
+    assert package.video_path.name == "final.mp4"
+    assert package.caption_path.name == "caption.txt"
+    assert package.metadata_path.name == "metadata.json"
+    
+    # Verify scenes/ subfolder exists with scene clips
+    scenes_dir = package.directory / "scenes"
+    assert scenes_dir.exists()
+    assert scenes_dir.is_dir()
+    
+    scene_01_path = scenes_dir / "scene_01.mp4"
+    scene_02_path = scenes_dir / "scene_02.mp4"
+    scene_03_path = scenes_dir / "scene_03.mp4"
+    
+    assert scene_01_path.is_file()
+    assert scene_02_path.is_file()
+    assert scene_03_path.is_file()
+    
+    # Verify scene clips match source files
+    assert scene_01_path.read_bytes() == scene_01.read_bytes()
+    assert scene_02_path.read_bytes() == scene_02.read_bytes()
+    assert scene_03_path.read_bytes() == scene_03.read_bytes()
+    
+    # Verify metadata.json includes scene files with SHA-256 digests
+    metadata = json.loads(package.metadata_path.read_text(encoding="utf-8"))
+    assert "scenes/scene_01.mp4" in metadata["files"]
+    assert "scenes/scene_02.mp4" in metadata["files"]
+    assert "scenes/scene_03.mp4" in metadata["files"]
+    
+    assert "sha256" in metadata["files"]["scenes/scene_01.mp4"]
+    assert "size_bytes" in metadata["files"]["scenes/scene_01.mp4"]
+    assert metadata["files"]["scenes/scene_01.mp4"]["size_bytes"] > 0
+    
+    # Verify provenance includes scenes data
+    assert "scenes" in metadata["provenance"]
+    assert len(metadata["provenance"]["scenes"]) == 3

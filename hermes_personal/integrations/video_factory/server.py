@@ -3985,6 +3985,32 @@ def export(
         }
         for scene in project.generated_scenes
     ]
+    
+    # Collect scene video clips for export package
+    scenes_list = []
+    for scene in project.generated_scenes:
+        scene_video_path = None
+        # Try to find the scene's video file from the generated asset
+        if scene.generated_asset_id:
+            # Look for video file in workspace
+            workspace = _workspace_path().resolve()
+            potential_paths = [
+                workspace / "scenes" / f"{scene.scene_id}.mp4",
+                workspace / "renders" / f"{scene.scene_id}.mp4",
+                workspace / "videos" / f"{scene.scene_id}.mp4",
+            ]
+            for path in potential_paths:
+                if path.is_file():
+                    scene_video_path = str(path)
+                    break
+        
+        if scene_video_path:
+            scenes_list.append({
+                "scene_id": scene.scene_id,
+                "video_path": scene_video_path,
+                "asset_id": scene.generated_asset_id,
+            })
+    
     provider_operations = scene_operations
     artifact_digests = {"composite": source_sha256}
     artifact_digests.update({
@@ -4014,6 +4040,7 @@ def export(
         "spend": spend,
         "references": selected_references,
         "provider_operations": provider_operations,
+        "scenes": scenes_list,
         "render_plan_sha256": render_plan_hash,
         "resource_pack_id": project.resource_pack.id if project.resource_pack else None,
         "brief_approval": project.brief_approval,

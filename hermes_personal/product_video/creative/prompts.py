@@ -28,7 +28,7 @@ GROUNDING RULES
 
 
 CREATIVE_DIRECTION_PROMPT_V2 = """TASK
-Create one focused CreativeBriefV2 for a vertical TikTok/Reels short-form product video (16–50s).
+Create one focused CreativeBriefV2 for a vertical TikTok/Reels short-form product video (30–50s).
 
 INPUT
 research_dossier={research_dossier_json}
@@ -46,7 +46,11 @@ DEEP PRODUCT REASONING & CREATIVE DECISIONS
    - before_after_transformation: Contrast a verified use situation before and after the product interaction without unsupported performance claims.
 
 3. Target Duration & Pacing:
-   - Select target_duration_seconds between 16 and 50 seconds using a sum of provider-supported 4s, 6s, and 8s scenes.
+   - Select target_duration_seconds between 30 and 50 seconds (preferred targets: 30s, 36s, 40s, 42s, 48s) using a sum of provider-supported 4s, 6s, and 8s scenes.
+   - The narrative must follow a strong 3-part arc:
+     * Hook (4-6s): Immediate problem setup or tactile sensory hook that grabs attention.
+     * Demonstrations (6-8s per scene, 3-5 scenes): Observable key features and product interactions showing value.
+     * Payoff & CTA (6-8s): Resolution and clear, compliant call to action.
 
 4. Audience, Promise & Evidence:
    - Select the most compelling audience situation from the dossier.
@@ -66,16 +70,16 @@ Return one CreativeBriefV2 JSON object."""
 
 
 SCRIPT_SCENE_PLAN_PROMPT_V2 = """TASK
-Convert the approved creative direction into a rich, cinematic ScriptScenePlanV2 (16–50s).
+Convert the approved creative direction into a rich, cinematic ScriptScenePlanV2 (30–50s).
 
 INPUT
 research_dossier={research_dossier_json}
 approved_brief={creative_brief_json}
 
 STORY & SCENE PACING REQUIREMENTS
-- Plan between 4 and 10 scenes matching target_duration_seconds (between 16 and 50 seconds).
+- Plan between 5 and 8 scenes matching target_duration_seconds (strictly between 30 and 50 seconds).
 - Each scene duration_seconds must be exactly 4, 6, or 8 seconds (generative video standard). The sum of all scene durations must equal target_duration_seconds exactly.
-  (Pacing examples: 20s = 6 + 4 + 4 + 6 or 5x4s; 30s = 5x6s or 6+8+6+6+4; 40s = 5x8s or 6+6+8+8+6+6; 48s = 8x6s or 6x8s).
+  (Standard generative pacing examples: 30s = 5x6s or 6+8+6+6+4; 36s = 6x6s; 40s = 5x8s or 6+6+8+8+6+6; 42s = 6+6+6+6+6+6+6; 48s = 6x8s or 8x6s).
 - Narrative Arc & Progression:
   * Opening Scene (Hook): Immediate visual hook or problem setup with active interaction (NEVER a static title card or empty camera sweep).
   * Middle Scenes (Exploration & Key Demonstrations): Varied visual setups and observable product interactions supported by the supplied evidence.

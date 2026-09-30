@@ -41,9 +41,20 @@ def _image(path: Path, color: str) -> None:
     Image.new("RGB", (120, 120), color=color).save(path)
 
 
-def test_script_prompt_duration_example_uses_four_scenes() -> None:
-    assert "8 + 4 + 8" not in SCRIPT_SCENE_PLAN_PROMPT_V2
-    assert "6 + 4 + 4 + 6" in SCRIPT_SCENE_PLAN_PROMPT_V2
+def test_script_prompt_duration_example_uses_five_to_eight_scenes() -> None:
+    """Verify script prompt examples reflect 30-50s duration with 5-8 scenes."""
+    # Should NOT contain old short-duration examples
+    assert "6 + 4 + 4 + 6" not in SCRIPT_SCENE_PLAN_PROMPT_V2
+    assert "5x4s" not in SCRIPT_SCENE_PLAN_PROMPT_V2
+    
+    # Should contain new 30-50s examples
+    assert "30s = 5x6s" in SCRIPT_SCENE_PLAN_PROMPT_V2 or "30s = 6+8+6+6+4" in SCRIPT_SCENE_PLAN_PROMPT_V2
+    assert "40s = 5x8s" in SCRIPT_SCENE_PLAN_PROMPT_V2 or "40s = 6+6+8+8+6+6" in SCRIPT_SCENE_PLAN_PROMPT_V2
+    assert "48s = 6x8s" in SCRIPT_SCENE_PLAN_PROMPT_V2 or "48s = 8x6s" in SCRIPT_SCENE_PLAN_PROMPT_V2
+    
+    # Should specify 5-8 scenes and 30-50s range
+    assert "5 and 8 scenes" in SCRIPT_SCENE_PLAN_PROMPT_V2 or "5 8 scenes" in SCRIPT_SCENE_PLAN_PROMPT_V2
+    assert "30 and 50 seconds" in SCRIPT_SCENE_PLAN_PROMPT_V2 or "30 50 seconds" in SCRIPT_SCENE_PLAN_PROMPT_V2
 
 
 def _qc_response(score: int, *, view_angle: str, suitability: list[str]) -> dict[str, Any]:

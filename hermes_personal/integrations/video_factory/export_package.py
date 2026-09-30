@@ -205,8 +205,10 @@ def build_export_package(
         metadata_path = stage / "metadata.json"
         keyframes_dir = stage / "keyframes"
         qc_dir = stage / "qc"
+        scenes_dir = stage / "scenes"
         keyframes_dir.mkdir(parents=True, exist_ok=True)
         qc_dir.mkdir(parents=True, exist_ok=True)
+        scenes_dir.mkdir(parents=True, exist_ok=True)
 
         shutil.copy2(source, video_path)
         copied_probe = probe_video(video_path, decode_all=True)
@@ -248,6 +250,22 @@ def build_export_package(
                         "size_bytes": dest.stat().st_size,
                     }
 
+        # Snapshot scene video clips if provided in provenance
+        scenes_snapshot: dict[str, Any] = {}
+        scenes_list = provenance_data.get("scenes") or []
+        if isinstance(scenes_list, list):
+            for scene_data in scenes_list:
+                if isinstance(scene_data, dict):
+                    scene_path = scene_data.get("video_path") or scene_data.get("file_path") or scene_data.get("path")
+                    scene_id = scene_data.get("scene_id") or scene_data.get("id") or "scene"
+                    if scene_path and Path(scene_path).is_file():
+                        dest = scenes_dir / f"{scene_id}.mp4"
+                        shutil.copy2(Path(scene_path), dest)
+                        scenes_snapshot[f"scenes/{scene_id}.mp4"] = {
+                            "sha256": _sha256(dest),
+                            "size_bytes": dest.stat().st_size,
+                        }
+
         files_map = {
             "final.mp4": {
                 "sha256": copied_probe.sha256,
@@ -260,6 +278,7 @@ def build_export_package(
         }
         files_map.update(keyframes_snapshot)
         files_map.update(qc_snapshot)
+        files_map.update(scenes_snapshot)
 
         metadata = {
             "schema_version": "product-video-export-v2",
