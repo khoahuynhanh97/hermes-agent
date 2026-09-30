@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import time
 from dataclasses import asdict, is_dataclass, replace
@@ -58,6 +59,8 @@ from hermes_personal.product_video.mcp_adapters import (
 
 from hermes_personal.workflows.jobs import JobDispatcher, JobResult, JobSpec, JobStatus
 from hermes_personal.workflows.repository import WorkflowRepository
+
+logger = logging.getLogger(__name__)
 
 
 def _qc_context(data: dict[str, Any], workflow_id: str | None = None) -> dict[str, Any]:
@@ -787,6 +790,114 @@ class ProductVideoJobHandlers:
             binding_reasons={key: reason for key, (_wire, reason) in resolved.items() if reason},
         )
 
+    def _get_workflow_state_and_version(self, ctx: JobContext) -> tuple[str, int] | None:
+        """Load state and version through public WorkflowEngine or WorkflowRepository methods."""
+        if self.workflow_engine:
+            return self.workflow_engine.get_workflow_state(ctx.workflow_id)
+        if self.workflow_repository:
+            data = self.workflow_repository.get_workflow(ctx.workflow_id)
+            if data is not None:
+                agg, ver = data
+                return agg.get("state", "initial"), ver
+        return None
+
+    def retry_image_qc_job(self, ctx: JobContext, resource_pack: dict, **kwargs: Any) -> JobSucceeded | JobFailed:
+        """Auto-retry Image QC with image cleaning for recoverable failures."""
+        from hermes_personal.product_video.qc.auto_retry_helpers import (
+            extract_artifacts_from_qc,
+            is_cleanable_failure,
+            replace_images_in_resource_pack,
+        )
+        
+        # 1. Validate state
+        err = self._validate_state_and_version(
+            ctx,
+            {ProductVideoWorkflowState.RETRYING_IMAGE_QC, ProductVideoWorkflowState.BUILDING_RESOURCE_PACK},
+            {"resource_pack": resource_pack},
+        )
+        if err:
+            return err
+        
+        # 2. Extract original QC report
+        initial_qc = resource_pack.get("initial_qc_report")
+        if not initial_qc or initial_qc.get("verdict") != "FAIL":
+            return JobFailed(
+                retryable=False,
+                code="INVALID_STATE",
+                message="retry_image_qc_job requires a FAIL QC report"
+            )
+        
+        # 3. Check retry count (max 1 retry to avoid infinite loops)
+        retry_count = resource_pack.get("image_qc_retry_count", 0)
+        if retry_count >= 1:
+            return JobFailed(
+                retryable=False,
+                code="MAX_RETRIES_EXCEEDED",
+                message="Image QC already retried once; manual review required"
+            )
+        
+        # 4. Check if failure is cleanable
+        if not is_cleanable_failure(initial_qc):
+            return JobFailed(
+                retryable=False,
+                code="NON_CLEANABLE_FAILURE",
+                message="Image QC failure is terminal; manual review required"
+            )
+        
+        # 5. Run Image Cleaner
+        from hermes_personal.product_video.preprocessing.image_cleaner import ProductImageCleaner
+        
+        cleaner = ProductImageCleaner()
+        cleaning_result = cleaner.clean_resource_pack(
+            resource_pack=resource_pack,
+            output_dir=None,  # Auto-generates in workspace
+            detected_artifacts=extract_artifacts_from_qc(initial_qc),
+        )
+        
+        if not cleaning_result.get("cleaned_images"):
+            return JobFailed(
+                retryable=False,
+                code="CLEANING_FAILED",
+                message="Image Cleaner produced no cleaned images"
+            )
+        
+        # 6. Update resource pack with cleaned images
+        cleaned_pack = replace_images_in_resource_pack(
+            resource_pack=resource_pack,
+            cleaned_images=cleaning_result["cleaned_images"]
+        )
+        cleaned_pack["image_qc_retry_count"] = retry_count + 1
+        cleaned_pack["cleaning_summary"] = cleaning_result.get("summary")
+        
+        # 7. Re-run Image QC on cleaned images
+        from hermes_personal.product_video.qc.image_qc import run_image_qc
+        from hermes_personal.product_video.qc.contracts import QCVerdict
+        from hermes_personal.product_video.qc.repository import QCReportRepository
+        
+        product = resource_pack.get("research_snapshot", {}).get("product")
+        retry_qc_report, retry_eligible = run_image_qc(
+            workflow_id=ctx.workflow_id,
+            resource_pack=cleaned_pack,
+            product=product,
+            repo=QCReportRepository(ctx.connection) if hasattr(ctx, 'connection') else None,
+            attempt_id=f"retry_{retry_count + 1}",
+        )
+        
+        cleaned_pack["retry_qc_report"] = retry_qc_report.to_dict() if hasattr(retry_qc_report, 'to_dict') else retry_qc_report
+        
+        if retry_qc_report.verdict == QCVerdict.PASS:
+            # SUCCESS: Cleaned images passed QC
+            return JobSucceeded(
+                artifact_ref=cleaned_pack,
+                next_command={"command": "lock_resource_pack"}
+            )
+        else:
+            # FAIL: Cleaning did not fix the issue -> terminal failure
+            return JobFailed(
+                retryable=False,
+                code="IMAGE_QC_TERMINAL_FAILURE",
+                message=f"Image QC failed after cleaning: {retry_qc_report.findings.get('recovery_reason', 'unknown')}"
+            )
 
     def _resolve_keyframe_provider(self) -> KeyframeGenerationPort:
         """Resolve Google Flow Keyframe Provider for storyboard generation."""
@@ -863,6 +974,40 @@ class ProductVideoJobHandlers:
 
         return None
 
+    def _run_preview_image_qc(
+        self,
+        workflow_id: str,
+        resource_pack: dict,
+        product_metadata: dict | None = None,
+        owner_user_id: str = "",
+        project_id: str = "",
+    ) -> tuple[dict, list]:
+        """Run preview Image QC on resource pack to determine if retry is needed."""
+        from hermes_personal.product_video.qc.image_qc import run_image_qc
+        from hermes_personal.product_video.qc.repository import QCReportRepository
+        
+        # Extract connection from workflow repository if available
+        connection = self.workflow_repository.conn if self.workflow_repository else None
+        repo = QCReportRepository(connection) if connection else None
+        
+        # If not provided, try to extract from resource pack
+        if not owner_user_id:
+            owner_user_id = resource_pack.get("owner_user_id", "test_user")
+        if not project_id:
+            project_id = resource_pack.get("project_id", f"proj_{workflow_id}")
+        
+        qc_report, eligible_items = run_image_qc(
+            workflow_id=workflow_id,
+            resource_pack=resource_pack,
+            product=product_metadata,
+            repo=repo,
+            attempt_id="preview_qc",
+            owner_user_id=owner_user_id,
+            project_id=project_id,
+        )
+        
+        return qc_report.to_dict() if hasattr(qc_report, 'to_dict') else qc_report, eligible_items
+
     def research_job(self, ctx: JobContext, product_name: str, keywords: list[str], pdp_url: str | None = None, **kwargs: Any) -> JobSucceeded | JobFailed:
         inputs = {"product_name": product_name, "keywords": keywords}
         err = self._validate_state_and_version(
@@ -915,6 +1060,12 @@ class ProductVideoJobHandlers:
             return JobFailed(retryable=True, code="PI_RESEARCH_FAILED", message=str(e))
 
     def resource_pack_job(self, ctx: JobContext, research_result: dict, **kwargs: Any) -> JobSucceeded | JobFailed:
+        from hermes_personal.product_video.qc.auto_retry_helpers import (
+            extract_product_from_resource_pack,
+            is_cleanable_failure,
+        )
+        from hermes_personal.product_video.qc.models import QCVerdict
+        
         inputs = {"research_result": research_result}
         err = self._validate_state_and_version(
             ctx,
@@ -966,32 +1117,59 @@ class ProductVideoJobHandlers:
             )
             # Auto-run Image QC to check if cleanable failures exist
             # This is a preview QC run - not persisted yet, just for routing decision
-            qc_result, qc_eligible = self._run_preview_image_qc(
-                workflow_id=ctx.workflow_id,
-                resource_pack=result,
-                product_metadata=extract_product_from_resource_pack(result),
+            # Skip QC if in fake/test mode or missing required metadata
+            qc_result = None
+            qc_eligible = []
+            
+            # Only run preview QC if we have minimum required metadata
+            has_required_metadata = (
+                result.get("resource_pack_id") 
+                and result.get("version")
+                and ctx.owner_user_id
             )
+            
+            if has_required_metadata and getattr(self, "provider_mode", "fake") == "configured":
+                try:
+                    qc_result, qc_eligible = self._run_preview_image_qc(
+                        workflow_id=ctx.workflow_id,
+                        resource_pack=result,
+                        product_metadata=extract_product_from_resource_pack(result),
+                        owner_user_id=ctx.owner_user_id,
+                        project_id=kwargs.get("project_id", f"proj_{ctx.workflow_id}"),
+                    )
+                except Exception as e:
+                    # If preview QC fails, log but don't block the workflow
+                    logger.warning(f"Preview Image QC failed for {ctx.workflow_id}: {e}")
 
             # Store QC metadata for retry handler
             result_with_qc = dict(result)
-            result_with_qc["_initial_qc_preview"] = {
-                "verdict": qc_result.verdict.value if hasattr(qc_result.verdict, 'value') else str(qc_result.verdict),
-                "score": qc_result.score,
-                "is_cleanable": is_cleanable_failure(qc_result),
-                "findings_summary": {
-                    "eligible_count": len(qc_eligible),
-                    "total_items": len(qc_result.findings.get("items", [])),
+            
+            if qc_result:
+                result_with_qc["_initial_qc_preview"] = {
+                    "verdict": qc_result.get("verdict") if isinstance(qc_result, dict) else (qc_result.verdict.value if hasattr(qc_result.verdict, 'value') else str(qc_result.verdict)),
+                    "score": qc_result.get("score") if isinstance(qc_result, dict) else qc_result.score,
+                    "is_cleanable": is_cleanable_failure(qc_result),
+                    "findings_summary": {
+                        "eligible_count": len(qc_eligible),
+                        "total_items": len((qc_result.get("findings", {}) if isinstance(qc_result, dict) else qc_result.findings).get("items", [])),
+                    }
                 }
-            }
-
-            if qc_result.verdict == QCVerdict.FAIL and is_cleanable_failure(qc_result):
-                # Cleanable failure - trigger auto-retry with image cleaning
-                res = JobSucceeded(
-                    artifact_ref=result_with_qc,
-                    next_command={"command": "retry_image_qc"}
-                )
+                
+                verdict = qc_result.get("verdict") if isinstance(qc_result, dict) else qc_result.verdict
+                if verdict == QCVerdict.FAIL and is_cleanable_failure(qc_result):
+                    # Cleanable failure - trigger auto-retry with image cleaning
+                    res = JobSucceeded(
+                        artifact_ref=result_with_qc,
+                        next_command={"command": "retry_image_qc"}
+                    )
+                else:
+                    # Pass or terminal failure - proceed to normal flow
+                    res = JobSucceeded(
+                        artifact_ref=result_with_qc,
+                        next_command={"command": "lock_resource_pack"}
+                    )
             else:
-                # Pass or terminal failure - proceed to normal flow
+                # No QC result (fake mode or missing metadata) - proceed to normal flow
                 res = JobSucceeded(
                     artifact_ref=result_with_qc,
                     next_command={"command": "lock_resource_pack"}

@@ -179,8 +179,9 @@ def test_illegal_workflow_state_rejection(test_engine):
 def test_register_product_video_job_handlers(test_engine):
     dispatcher = JobDispatcher()
     registered = register_product_video_job_handlers(dispatcher, workflow_engine=test_engine)
-    assert len(registered) == 8
+    assert len(registered) == 9  # Updated: added retry_image_qc_job
     assert "product_video.research" in registered
+    assert "product_video.retry_image_qc" in registered
     assert "product_video.creative_brief" in registered
     assert "product_video.render" in registered
     assert registered.dispatcher is dispatcher
