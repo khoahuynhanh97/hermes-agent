@@ -788,16 +788,15 @@ class ProductVideoJobHandlers:
         )
 
 
-    def _get_workflow_state_and_version(self, ctx: JobContext) -> tuple[str, int] | None:
-        """Load state and version through public WorkflowEngine or WorkflowRepository methods."""
-        if self.workflow_engine:
-            return self.workflow_engine.get_workflow_state(ctx.workflow_id)
-        if self.workflow_repository:
-            data = self.workflow_repository.get_workflow(ctx.workflow_id)
-            if data is not None:
-                agg, ver = data
-                return agg.get("state", "initial"), ver
-        return None
+    def _resolve_keyframe_provider(self) -> KeyframeGenerationPort:
+        """Resolve Google Flow Keyframe Provider for storyboard generation."""
+        from hermes_personal.integrations.video_factory.google_flow_keyframe_provider import GoogleFlowKeyframeProvider
+        # Path resolved from hermes config.yaml (standard hermes-personal location)
+        return GoogleFlowKeyframeProvider(
+            profile_path=Path.home() / ".config" / "hermes" / "google-flow-profile",
+            chrome_profile_directory="Default",
+        )
+
 
     def _validate_state_and_version(
         self,
