@@ -37,6 +37,81 @@ from hermes_personal.workflows.repository import WorkflowRepository
 from hermes_personal.workflows.worker import run_worker
 
 
+def cmd_open_folder(args: argparse.Namespace) -> int:
+    """Open VideoAI hub folder in Windows File Explorer."""
+    import os
+    import subprocess
+    from hermes_personal.product_video.storage.video_hub import (
+        find_latest_video,
+        get_video_ai_hub_root,
+    )
+    
+    hub_root = Path(args.hub_root) if args.hub_root else get_video_ai_hub_root()
+    
+    if args.latest:
+        folder = find_latest_video(hub_root, brand=args.brand)
+        if not folder:
+            print("No video folders found in hub")
+            return 1
+        target = folder
+    else:
+        if not hub_root.exists():
+            print(f"Hub root does not exist: {hub_root}")
+            return 1
+        target = hub_root
+    
+    print(f"Opening: {target}")
+    
+    try:
+        if os.name == 'nt':
+            os.startfile(str(target))
+        else:
+            subprocess.run(["xdg-open", str(target)], check=True)
+        return 0
+    except Exception as e:
+        print(f"Failed to open folder: {e}")
+        return 1
+
+
+def cmd_sync_video_hub(args: argparse.Namespace) -> int:
+    """Sync all historical exports to VideoAI hub."""
+    from hermes_personal.product_video.storage.video_hub import (
+        sync_all_exports_to_hub,
+        get_video_ai_hub_root,
+    )
+    
+    # Resolve exports root
+    if args.exports_root:
+        exports_root = Path(args.exports_root)
+    else:
+        workspace = Path(os.getenv("HERMES_VIDEO_FACTORY_WORKSPACE", 
+                                   get_hermes_home() / "video_factory_workspace"))
+        exports_root = workspace / "exports"
+    
+    hub_root = Path(args.hub_root) if args.hub_root else get_video_ai_hub_root()
+    
+    print(f"Syncing exports from: {exports_root}")
+    print(f"To VideoAI hub: {hub_root}")
+    print()
+    
+    result = sync_all_exports_to_hub(exports_root, hub_root)
+    
+    if args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        print(f"✓ Synced: {result['total_synced']}")
+        print(f"⊘ Skipped: {result['skipped']}")
+        print(f"✗ Errors: {result['errors']}")
+        
+        if result['synced_folders']:
+            print("\nSynced folders:")
+            for item in result['synced_folders']:
+                print(f"  • [{item['product']}]")
+                print(f"    → {item['hub_path']}")
+    
+    return 0 if result['errors'] == 0 else 1
+
+
 def _resolve_db_path(db_path_arg: str | None) -> Path:
     if db_path_arg:
         return Path(db_path_arg)
@@ -1252,6 +1327,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_recover.add_argument("--authorization-max-cost-usd", type=float, default=None)
     p_recover.add_argument("--authorization-campaign-id", default=None)
     p_recover.set_defaults(func=cmd_recover_keyframe)
+
+    # open-folder
+    p_open = subparsers.add_parser("open-folder", help="Open VideoAI hub folder in File Explorer")
+    p_open.add_argument("--latest", action="store_true", help="Open the most recently modified video folder")
+    p_open.add_argument("--brand", default=None, help="Filter by brand name")
+    p_open.add_argument("--hub-root", default=None, help="Custom VideoAI hub root directory")
+    p_open.set_defaults(func=cmd_open_folder)
+
+    # sync-video-hub
+    p_sync = subparsers.add_parser("sync-video-hub", help="Sync all historical exports to VideoAI hub")
+    p_sync.add_argument("--exports-root", default=None, help="Custom exports root directory")
+    p_sync.add_argument("--hub-root", default=None, help="Custom VideoAI hub root directory")
+    p_sync.add_argument("--json", action="store_true", help="Output results as JSON")
+    p_sync.set_defaults(func=cmd_sync_video_hub)
 
     return parser
 

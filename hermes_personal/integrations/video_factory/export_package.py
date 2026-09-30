@@ -304,7 +304,7 @@ def build_export_package(
         if stage.exists():
             shutil.rmtree(stage)
 
-    return ExportPackage(
+    package = ExportPackage(
         directory=target,
         video_path=target / "final.mp4",
         caption_path=target / "caption.txt",
@@ -312,3 +312,29 @@ def build_export_package(
         video_sha256=probe.sha256,
         caption_sha256=caption_sha256,
     )
+    
+    # Mirror to VideoAI Hub (fail-safe: never break core export on hub errors)
+    try:
+        from hermes_personal.product_video.storage.video_hub import mirror_export_to_hub
+        
+        brand = provenance_data.get("brand") or provenance_data.get("product_brand")
+        hub_folder = mirror_export_to_hub(
+            export_dir=target,
+            product_identity=identity,
+            brand=brand,
+        )
+        
+        # Update metadata to include hub path
+        metadata["video_ai_hub_path"] = str(hub_folder)
+        package.metadata_path.write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+            newline="\n",
+        )
+    except Exception as e:
+        # Log but don't fail the export
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Failed to mirror export to VideoAI hub: {e}")
+    
+    return package
