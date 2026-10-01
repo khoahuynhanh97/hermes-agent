@@ -69,6 +69,23 @@ def run_image_qc(
 ) -> tuple[QCReport, list[ImageQCItem]]:
     """Run multimodal vision QC on all candidate images in the resource pack."""
     raw_rp = _unwrap_resource_pack(resource_pack)
+    if isinstance(product, dict):
+        product = NormalizedProduct(
+            brand=str(product.get("brand") or "").strip(),
+            model=str(product.get("model") or "").strip(),
+            variant=str(product.get("variant") or "").strip(),
+            display_name=str(product.get("display_name") or product.get("name") or "").strip(),
+            category=str(product.get("category") or "Thiết bị tiện ích"),
+            verified_claims=list(product.get("verified_claims") or []),
+            approved_media=list(product.get("approved_media") or []),
+            source_context=dict(product.get("source_context") or {}),
+        )
+    elif product is None:
+        product = NormalizedProduct(
+            brand=str(raw_rp.get("brand") or "").strip(),
+            model=str(raw_rp.get("model") or "").strip(),
+            display_name=str(raw_rp.get("product_identity") or "").strip(),
+        )
     owner_user_id = str(owner_user_id or raw_rp.get("owner_user_id") or "").strip()
     project_id = str(project_id or raw_rp.get("project_id") or "").strip()
     if not owner_user_id or not project_id:

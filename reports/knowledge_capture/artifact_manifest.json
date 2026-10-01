@@ -1,9 +1,9 @@
 {
-  "source_url": "https://vt.tiktok.com/ZSbkp6buE/",
-  "resolved_url": "https://www.tiktok.com/@mindang.com/video/7690481116658076949",
-  "sha256": "9c110cf558142d3fae240ea40537f078356d652173d869487b0320810c163d96",
-  "byte_size": 1952817,
-  "duration_seconds": 46,
+  "source_url": "https://www.facebook.com/share/v/19mufz8wLz/",
+  "resolved_url": "https://www.facebook.com/reel/1655693766113773/",
+  "sha256": "24edcbd97073fc6b72ef600798d0e7c69e97a3af80fb53603f0004ac54a6e6a3",
+  "byte_size": 23291052,
+  "duration_seconds": 123,
   "has_audio": true,
   "transcription_method": "openai-whisper base model (FP32 on CPU), language=Vietnamese",
   "artifacts": {

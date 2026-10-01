@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -84,9 +85,15 @@ def cmd_sync_video_hub(args: argparse.Namespace) -> int:
     if args.exports_root:
         exports_root = Path(args.exports_root)
     else:
-        workspace = Path(os.getenv("HERMES_VIDEO_FACTORY_WORKSPACE", 
-                                   get_hermes_home() / "video_factory_workspace"))
-        exports_root = workspace / "exports"
+        try:
+            from hermes_personal.product_video.storage.layout import ProductVideoWorkspaceLayout
+            layout = ProductVideoWorkspaceLayout()
+            exports_root = layout.exports_dir
+        except Exception:
+            workspace = Path(os.getenv("HERMES_VIDEO_FACTORY_WORKSPACE", 
+                                       get_hermes_home() / "video_factory_workspace"))
+            exports_root = workspace / "exports"
+
     
     hub_root = Path(args.hub_root) if args.hub_root else get_video_ai_hub_root()
     

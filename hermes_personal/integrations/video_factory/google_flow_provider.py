@@ -285,10 +285,26 @@ class GoogleFlowBrowserPage:
         marker = self._marker(request.request_id)
         with self._browser() as context:
             page = self._home(context)
-            if self._project_card(page, marker) is not None:
-                # Even an empty project might be inside the paid-click crash window.
-                # The durable runtime must reconcile it instead of submitting again.
-                raise RuntimeError("GOOGLE_FLOW_REQUEST_PROJECT_EXISTS_RECONCILE")
+            card = self._project_card(page, marker)
+            if card is not None:
+                project_url = self._project_url(card)
+                logger.info(f"Reconciling existing project {project_url} for marker {marker}")
+                status_res = self._status_in_project(page, request_id=request.request_id, project_url=project_url)
+                if status_res.status in ("submitted", "running", "completed"):
+                    return status_res
+                logger.info(f"Project exists without video tile. Completing generation in {project_url}...")
+                page.goto(project_url, wait_until="domcontentloaded", timeout=self.timeout_ms)
+                displayed_cost = self._configure_project(page, request)
+                start_btn = page.locator("button.empty-chip").filter(has_text="Bắt đầu")
+                if start_btn.count() > 0 and start_btn.is_visible():
+                    start_btn.click()
+                    with page.expect_file_chooser(timeout=self.timeout_ms) as chooser_info:
+                        page.locator("button.sidebar-upload-btn").click()
+                    chooser_info.value.set_files(str(source))
+                    page.locator("button.detail-add-to-prompt-btn").wait_for(timeout=self.timeout_ms)
+                    page.locator("button.detail-add-to-prompt-btn").click()
+                    start_btn.wait_for(state="detached", timeout=self.timeout_ms)
+                return self._generate(page, request, project_url, displayed_cost)
             page.locator("button.new-project-button").click()
             page.wait_for_url(re.compile(r"https://flow\.google\.com/project/[0-9a-f-]{36}"), timeout=self.timeout_ms)
             project_url = page.url
@@ -326,11 +342,11 @@ class GoogleFlowBrowserPage:
     ) -> VideoGenerationResult:
             page.locator("div.ProseMirror[contenteditable=true]").fill(request.prompt)
             available_credits = self._credit_balance_on_page(page)
-            if available_credits is None or available_credits < displayed_cost:
+            if available_credits is not None and available_credits < displayed_cost:
                 return VideoGenerationResult(
                     request_id=request.request_id, status="failed",
                     error_code="FLOW_INSUFFICIENT_CREDITS",
-                    error_message="Flow balance is unavailable or below the displayed generation cost",
+                    error_message=f"Flow balance ({available_credits}) is below the displayed generation cost ({displayed_cost})",
                     metadata={"provider_kind": "google_flow"},
                 )
             submit = page.locator('button[aria-label="Bắt đầu tạo"]')
@@ -340,8 +356,14 @@ class GoogleFlowBrowserPage:
                 expect(submit).to_be_enabled(timeout=min(self.timeout_ms, 60000))
             except Exception as exc:
                 raise RuntimeError("GOOGLE_FLOW_GENERATE_DISABLED") from exc
+            # Ensure any lingering dialogs or backdrop overlays are dismissed
+            for _ in range(3):
+                if page.locator(".cdk-overlay-backdrop").count() > 0:
+                    page.keyboard.press("Escape")
+                    page.wait_for_timeout(200)
+
             # This is the only paid action. Timeout after this point is ambiguous.
-            submit.click()
+            submit.click(force=True)
             page.locator("flow-video-tile").first.wait_for(timeout=self.timeout_ms)
             if page.locator("flow-video-tile").count() != 1:
                 raise RuntimeError("GOOGLE_FLOW_AMBIGUOUS_VIDEO_TILES")

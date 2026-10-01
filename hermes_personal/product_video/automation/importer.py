@@ -204,7 +204,7 @@ def publish_daily_run_to_exchange(
     batch_id: str | None = None,
     master_catalog_conn: Any | None = None,
     cooldown_days: int = 30,
-    max_products: int = 5,
+    max_products: int = 10,
 ) -> Path:
     """Atomically publish a Product-Intelligence run to the independent exchange inbox with gatekeeper checks.
 
@@ -219,7 +219,7 @@ def publish_daily_run_to_exchange(
         batch_id: Optional batch ID override
         master_catalog_conn: SQLite connection for deduplication tracking
         cooldown_days: Days to block recently produced products (default: 30)
-        max_products: Maximum products to include in batch (default: 5)
+        max_products: Maximum products to include in batch (default: 10)
     
     Returns:
         Path to published batch directory with READY marker
