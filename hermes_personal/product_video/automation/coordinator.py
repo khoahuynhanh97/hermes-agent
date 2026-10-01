@@ -20,12 +20,10 @@ from hermes_personal.workflows.worker import run_worker
 from .contracts import (
     BatchStartResult,
     CandidateItem,
-    ExchangeProduct,
     SkippedProduct,
     StartedProduct,
 )
 from .importer import (
-    DEFAULT_EXCHANGE_INBOX,
     ExchangeImporter,
 )
 from .repository import DailyImportRepository

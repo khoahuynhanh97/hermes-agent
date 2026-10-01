@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from .composer import InvalidVideoArtifact, VideoExpectation, probe_video, validate_export
+from .composer import VideoExpectation, probe_video, validate_export
 
 
 class ExportPackageConflict(RuntimeError):

@@ -1,13 +1,10 @@
 ﻿"""Safe retention and reachability-checked artifact cleanup for Video Factory."""
 from __future__ import annotations
 
-import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
-from hermes_personal.integrations.video_factory.domain import VideoFactoryProject
 from hermes_personal.integrations.video_factory.ports import VideoFactoryRepository
 from hermes_personal.product_video.storage.layout import ProductVideoWorkspaceLayout, get_workspace_layout
 

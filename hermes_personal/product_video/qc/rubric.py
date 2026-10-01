@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-from typing import Any
 
 
 IMAGE_QC_SYSTEM_PROMPT = """You are a rigorous AI Quality Control inspector for e-commerce marketing media.

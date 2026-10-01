@@ -25,7 +25,6 @@ DEFAULT_SOURCE_ROOT = Path(r"D:\work\Personal\Product-Intelligence\data\daily_ru
 
 from hermes_personal.product_video.automation.repository import (
     DailyImportRepository,
-    _LEDGER_SCHEMA,
 )
 
 _AMBIGUOUS_VARIANT = re.compile(r"\b\d+\s*[a-zA-Z]*\s*/\s*\d+", re.IGNORECASE)

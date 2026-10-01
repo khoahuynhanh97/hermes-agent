@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Mapping, Sequence
 
 from hermes_personal.product_video.qc.models import QCReport, QCStage, QCVerdict
 

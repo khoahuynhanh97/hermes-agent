@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import re
+
+from fastapi import FastAPI
+
 from fastapi import FastAPI
 
 from hermes_personal.application.events_api import EventsAPI, create_events_router
@@ -11,6 +15,8 @@ from hermes_personal.application.middleware import (
 from hermes_personal.application.turn_api import TurnAuthenticator, create_turn_router
 from hermes_personal.gateway.normalizers import ChannelTurnNormalizer
 from hermes_personal.orchestration import HermesTurnService
+
+DIGEST_REGEX = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def create_application(

@@ -5,11 +5,10 @@ import math
 import os
 from fractions import Fraction
 from pathlib import Path
-from typing import Any
 
 import av
 import numpy as np
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 
 def get_default_font(size: int = 32):

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from hermes_constants import get_hermes_home
-from hermes_personal.memos.models import PersonalMemo
+from hermes_personal.memos.models import PersonalMemo as PersonalMemo
 from hermes_personal.memos.repository import MemoRepository
 from hermes_personal.storage.sqlite import connect
 

@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 from hermes_personal.observability.health import ComponentHealth, HealthReport, HealthStatus
 from hermes_personal.observability.redaction import redact
-from hermes_personal.runtime.processes import ProcessSpec, RestartPolicy
+from hermes_personal.runtime.processes import ProcessSpec
 
 
 class ChildProcess(abc.ABC):

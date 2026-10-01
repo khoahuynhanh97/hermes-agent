@@ -17,7 +17,7 @@ from hermes_constants import get_hermes_home
 from hermes_personal.learning.models import (
     EvidenceRef,
     LearningCandidate,
-    LearningKind,
+    LearningKind as LearningKind,
 )
 from hermes_personal.learning.promotion import PromotionService
 from hermes_personal.learning.repository import LearningRepository

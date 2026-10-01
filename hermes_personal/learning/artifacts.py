@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import shutil
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from hermes_constants import get_hermes_home
-from hermes_personal.storage.sqlite import connect
 
 
 @dataclass(frozen=True)

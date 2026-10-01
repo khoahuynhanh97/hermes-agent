@@ -5,7 +5,6 @@ import json
 import sqlite3
 import uuid
 from datetime import datetime, timezone
-from typing import Sequence
 
 from hermes_personal.learning.models import (
     CandidateEvaluation,

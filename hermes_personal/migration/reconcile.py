@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import datetime
 import hashlib
-import json
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
 
 from .inventory import EntityRecord, SourceInventory, ContextInventory, compute_context_checksum
 

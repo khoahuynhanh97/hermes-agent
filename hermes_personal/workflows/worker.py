@@ -41,10 +41,8 @@ def run_worker(
         stop_event = threading.Event()
 
     from hermes_personal.product_video.provider_runtime import (
-        resolve_polling_setting,
         resolve_provider_mode,
         validate_polling_setting,
-        validate_provider_mode,
     )
 
     _provider_mode = resolve_provider_mode(

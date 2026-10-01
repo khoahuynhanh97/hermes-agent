@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Any
 
 @dataclass(frozen=True)
 class ArtifactRef:

@@ -7,11 +7,10 @@ from pathlib import Path
 from typing import Any
 
 from hermes_personal.integrations.video_factory.domain import (
-    CreativeBrief, FinalApprovalStatus, FrameGenerationStatus, FramePrompt,
-    GeneratedScene, ProjectStatus, RawIdea, ResourceIdentity, ResourcePack,
-    ScenePlan, Storyboard, StoryboardApprovalStatus, StoryboardFrame, Timeline,
-    TimelineClip, TimelineStatus, VideoFactoryProject, VideoGenerationStatus,
-    VideoPrompt, new_id,
+    CreativeBrief, FinalApprovalStatus, FrameGenerationStatus, GeneratedScene, ProjectStatus, RawIdea, ResourceIdentity, ResourcePack,
+    ScenePlan, Storyboard, StoryboardApprovalStatus, Timeline,
+    TimelineStatus, VideoFactoryProject, VideoGenerationStatus,
+    new_id,
 )
 from hermes_personal.integrations.video_factory.ports import VideoFactoryRepository
 

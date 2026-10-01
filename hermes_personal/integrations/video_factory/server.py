@@ -266,7 +266,7 @@ def _caption_product_name(project: VideoFactoryProject) -> str:
     return identity
 
 
-from hermes_constants import get_hermes_home, display_hermes_home
+from hermes_constants import get_hermes_home
 
 
 def _db_path() -> Path:
@@ -3808,7 +3808,7 @@ def export(
 
     try:
         from hermes_personal.product_video.qc.repository import QCReportRepository
-        from hermes_personal.product_video.qc.models import QCStage, QCVerdict
+        from hermes_personal.product_video.qc.models import QCStage
 
         appr_svc = _approval_service()
         db_candidates: list[tuple[sqlite3.Connection, bool]] = []

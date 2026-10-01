@@ -43,5 +43,5 @@ __all__ = [
     "create_storyboard",
     "render",
     "get_job_status",
-    "export",
+    "export", "AssetReference", "Claim", "ClaimStatus", "FinalApprovalStatus", "FrameGenerationStatus", "FramePrompt", "GeneratedScene", "ProjectStatus", "RawIdea", "ResourceIdentity", "Scene", "StoryboardApprovalStatus", "StoryboardFrame", "Timeline", "TimelineClip", "TimelineStatus", "VideoGenerationStatus", "VideoPrompt",
 ]

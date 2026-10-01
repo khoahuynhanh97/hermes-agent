@@ -33,7 +33,6 @@ from hermes_personal.product_video.qc.video_qc import compute_file_sha256
 from hermes_personal.storage.sqlite import connect
 from hermes_personal.workflows.approvals import ApprovalService
 from hermes_personal.workflows.envelope import build_envelope
-from hermes_personal.workflows.outbox_repository import OutboxRepository
 from hermes_personal.workflows.repository import WorkflowRepository
 from hermes_personal.workflows.worker import run_worker
 

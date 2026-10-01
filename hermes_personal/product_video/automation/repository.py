@@ -271,7 +271,7 @@ class DailyImportRepository:
         Returns:
             (is_available, rejection_reason)
         """
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timezone
 
         row = self.connection.execute(
             "SELECT status, last_produced_date, cooldown_until FROM product_master_catalog WHERE canonical_product_key = ?",

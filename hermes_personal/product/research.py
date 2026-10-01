@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Dict, Any
+from typing import Any
 
 @dataclass(frozen=True, slots=True)
 class ResearchSpec:

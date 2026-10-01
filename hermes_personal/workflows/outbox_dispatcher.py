@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Callable, Dict, Optional
+from dataclasses import dataclass
+from typing import Callable, Dict
 
 from hermes_personal.workflows.envelope import (
     MalformedEnvelopeError,

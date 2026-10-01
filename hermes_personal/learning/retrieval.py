@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Sequence
 
 from hermes_personal.learning.models import LearningKind
 from hermes_personal.learning.repository import LearningRepository
