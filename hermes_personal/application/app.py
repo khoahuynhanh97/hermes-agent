@@ -8,6 +8,8 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
+from hermes_personal.application.candidate_api import create_candidate_router
+from fastapi.responses import RedirectResponse
 from hermes_personal.application.events_api import EventsAPI, create_events_router
 from hermes_personal.application.health_api import HealthAPI, create_health_router
 from hermes_personal.application.kanban_api import create_kanban_router
@@ -61,11 +63,19 @@ def create_application(
         authenticator=turn_authenticator,
     )
     kanban_router = create_kanban_router(connection=kanban_connection)
+    candidate_router = create_candidate_router(connection=kanban_connection)
 
     app.include_router(health_router)
     app.include_router(events_router)
     app.include_router(turn_router)
     app.include_router(kanban_router)
+    app.include_router(candidate_router)
+
+    @app.get("/", include_in_schema=False)
+    async def root_redirect() -> RedirectResponse:
+        """Redirect root to products catalog."""
+        return RedirectResponse(url="/products")
+
 
     # Mount the operator dashboard static assets + entrypoint
     static_dir = Path(__file__).parent / "static"

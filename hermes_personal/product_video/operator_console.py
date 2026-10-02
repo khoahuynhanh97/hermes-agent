@@ -53,9 +53,10 @@ def render_operator_console_html(initial_candidates: list[dict[str, Any]] | None
           <h1 class="text-xl font-bold tracking-tight text-[var(--foreground)]">Product Video Operator Console</h1>
           <span id="batchDateBadge" class="text-xs px-2.5 py-0.5 rounded-full bg-blue-500/20 text-blue-400 font-mono border border-blue-500/30">Today</span>
         </div>
-        <p class="text-xs text-[var(--muted-foreground)] mt-1">
-          Hệ thống điều hành sản xuất video sản phẩm hàng ngày — Quản lý ứng viên, phê duyệt Product Lock & giám sát quy trình.
-        </p>
+        <div class="flex items-center gap-3 mt-2 text-xs">
+          <a href="/products" class="px-2.5 py-1 rounded-md bg-blue-600 text-white font-medium">🛒 1. Chọn Sản Phẩm & Tạo Video</a>
+          <a href="/dashboard" class="px-2.5 py-1 rounded-md bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 font-medium transition">🎬 2. Theo Dõi & Duyệt Cổng (Kanban)</a>
+        </div>
       </div>
 
       <div class="flex items-center gap-2.5">
