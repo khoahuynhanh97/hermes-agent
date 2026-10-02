@@ -95,27 +95,25 @@ def _get_kanban_cards(connection: sqlite3.Connection, owner_user_id: str | None 
                 card["target_duration"] = artifact["target_duration"]
                 break
 
-        # Map state to column
-        if state == ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK.value:
+        # Robust state to column mapping
+        s = str(state or "").strip().lower()
+        if s in ("awaitingproductlock", "awaiting_product_lock"):
             columns["awaiting_product_lock"].append(card)
-        elif state == ProductVideoWorkflowState.AWAITING_BRIEF_APPROVAL.value:
+        elif s in ("awaitingbriefapproval", "awaiting_brief_approval"):
             columns["awaiting_brief_approval"].append(card)
-        elif state == ProductVideoWorkflowState.AWAITING_SCENE_APPROVAL.value:
+        elif s in ("awaitingsceneapproval", "awaiting_scene_approval", "awaitingsceneplanapproval", "awaiting_scene_plan_approval"):
             columns["awaiting_scene_plan_approval"].append(card)
-        elif state == ProductVideoWorkflowState.AWAITING_STORYBOARD_APPROVAL.value:
+        elif s in ("awaitingstoryboardapproval", "awaiting_storyboard_approval"):
             columns["awaiting_storyboard_approval"].append(card)
-        elif state in (
-            ProductVideoWorkflowState.RENDERING.value,
-            ProductVideoWorkflowState.CREATING_SCENE_PLAN.value,
-            ProductVideoWorkflowState.CREATING_STORYBOARD.value,
-        ):
-            columns["in_production"].append(card)
-        elif state == ProductVideoWorkflowState.AWAITING_FINAL_APPROVAL.value:
+        elif s in ("awaitingfinalapproval", "awaiting_final_approval"):
             columns["awaiting_final_approval"].append(card)
-        elif state == ProductVideoWorkflowState.COMPLETED.value:
+        elif s in ("completed", "done", "success"):
             columns["completed"].append(card)
-        elif state in (ProductVideoWorkflowState.FAILED.value, ProductVideoWorkflowState.WAITING_FOR_OPERATOR.value):
+        elif s in ("waitingforoperator", "waiting_for_operator", "error", "failed"):
             columns["error"].append(card)
+        else:
+            # All in-progress active pipeline states (researching, building_resource_pack, rendering, exporting, etc.)
+            columns["in_production"].append(card)
     
     return columns
 
