@@ -13,7 +13,11 @@ This package splits the monolithic handlers.py (2,866 lines) into focused module
 All methods are mixed into the ProductVideoJobHandlers class via the _base module.
 Public API and sub-components are re-exported here for 100% backward compatibility.
 """
+
 from __future__ import annotations
+
+# Re-export budget functions for compatibility
+from hermes_personal.workflows.budgets import reserve_budget, commit_budget, release_budget, get_reservation
 
 # Import the main class from base
 from hermes_personal.product_video.handlers._base import ProductVideoJobHandlers
@@ -35,6 +39,7 @@ from hermes_personal.product_video.handlers.common import (
     _paid_budget_kwargs,
     _is_qc_pass,
     _qc_report_payload,
+    _confirm_vf_storyboard_write,
 )
 
 # Re-export workflow state and contracts that tests/external code may import
@@ -72,6 +77,10 @@ from hermes_personal.product_video.provider_runtime import (
 
 # Re-export for backward compatibility
 __all__ = [
+    "reserve_budget",
+    "commit_budget",
+    "release_budget",
+    "get_reservation",
     "ProductVideoJobHandlers",
     "create_product_video_topic_handlers",
     "register_product_video_job_handlers",
@@ -107,4 +116,5 @@ __all__ = [
     "resolve_provider_mode",
     "validate_polling_setting",
     "validate_provider_mode",
+    "_confirm_vf_storyboard_write",
 ]

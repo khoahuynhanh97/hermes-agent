@@ -24,6 +24,9 @@ from hermes_personal.product_video.mcp_adapters import (
 from hermes_personal.product_video.handlers.common import (
     _paid_budget_kwargs,
     _video_factory_brief_config,
+    _confirm_vf_storyboard_write,
+    _locked_research_dossier,
+    _recover_creative_brief,
 )
 
 logger = logging.getLogger(__name__)

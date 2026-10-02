@@ -29,6 +29,13 @@ from hermes_personal.product_video.workflow_state import (
 from hermes_personal.workflows.jobs import JobDispatcher
 from hermes_personal.workflows.repository import WorkflowRepository
 
+from hermes_personal.product_video.handlers.common import (
+    _is_qc_pass,
+    _locked_research_dossier,
+    _qc_context,
+    _qc_report_payload,
+)
+
 # Import the ProductVideoJobHandlers class
 from hermes_personal.product_video.handlers._base import ProductVideoJobHandlers
 

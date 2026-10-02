@@ -88,6 +88,13 @@ def _get_kanban_cards(connection: sqlite3.Connection, owner_user_id: str | None 
         if isinstance(qc_auth, dict):
             card["estimated_cost"] = qc_auth.get("workflow_max_cost_usd", qc_auth.get("max_cost_usd"))
         
+        # Add target duration if available
+        for artifact_key in ("creative_brief", "scene_plan", "latest_artifact"):
+            artifact = agg.get(artifact_key)
+            if isinstance(artifact, dict) and artifact.get("target_duration"):
+                card["target_duration"] = artifact["target_duration"]
+                break
+
         # Map state to column
         if state == ProductVideoWorkflowState.AWAITING_PRODUCT_LOCK.value:
             columns["awaiting_product_lock"].append(card)
@@ -151,6 +158,35 @@ def _get_workflow_detail(connection: sqlite3.Connection, workflow_id: str) -> di
     except sqlite3.OperationalError:
         pass
     
+    # Fetch QC reports for the scorecard
+    qc_reports = []
+    try:
+        qc_rows = connection.execute(
+            """
+            SELECT report_id, stage, artifact_digest, score, verdict,
+                   findings_json, evaluator_name, created_at
+            FROM product_video_qc_reports
+            WHERE workflow_id = ?
+            ORDER BY created_at ASC
+            """,
+            (workflow_id,),
+        ).fetchall()
+        qc_reports = [
+            {
+                "report_id": r["report_id"],
+                "stage": r["stage"],
+                "artifact_digest": r["artifact_digest"],
+                "score": r["score"],
+                "verdict": r["verdict"],
+                "findings": json.loads(r["findings_json"] or "{}"),
+                "evaluator_name": r["evaluator_name"],
+                "created_at": r["created_at"],
+            }
+            for r in qc_rows
+        ]
+    except sqlite3.OperationalError:
+        pass
+
     # Fetch cost ledger
     budget_ledger = []
     try:
@@ -190,6 +226,8 @@ def _get_workflow_detail(connection: sqlite3.Connection, workflow_id: str) -> di
         "storyboard": agg.get("storyboard"),
         "render_result": agg.get("render_result"),
         "export_result": agg.get("export_result"),
+        "latest_artifact": agg.get("latest_artifact"),
+        "qc_reports": qc_reports,
         "approval_history": approvals,
         "budget_ledger": budget_ledger,
         "qc_authorization": agg.get("qc_authorization"),
@@ -311,4 +349,18 @@ def create_kanban_router(connection: sqlite3.Connection | None = None) -> APIRou
             media_type="text/event-stream",
         )
     
+    @router.post("/rework")
+    async def rework_workflow(
+        request: ApprovalRequest,
+        conn: sqlite3.Connection = Depends(get_connection),
+    ) -> dict[str, Any]:
+        """Request rework on a workflow gate."""
+        if request.action != "rework":
+            raise HTTPException(status_code=400, detail="Only 'rework' action is supported here")
+        if not request.feedback:
+            raise HTTPException(status_code=400, detail="Feedback is required for rework")
+        
+        # TODO: Implement actual rework logic in operator_handler
+        return {"status": "rework_requested", "workflow_id": request.workflow_id}
+
     return router

@@ -49,6 +49,8 @@ from hermes_personal.product_video.handlers.common import (
     _recover_creative_brief,
     _require_configured_execution_binding,
     _resolve_durable_resume_job_id,
+    _confirm_vf_storyboard_write,
+    _locked_research_dossier,
 )
 
 logger = logging.getLogger(__name__)

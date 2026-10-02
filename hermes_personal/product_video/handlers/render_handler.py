@@ -18,11 +18,14 @@ from hermes_personal.product_video.job_contracts import (
 from hermes_personal.product_video.workflow_state import (
     ProductVideoWorkflowState,
 )
+from hermes_personal.product_video.provider_fallback import create_fallback_chain
 
 
 # Import helper functions from common module
 from hermes_personal.product_video.handlers.common import (
     _paid_budget_kwargs,
+    _require_configured_execution_binding,
+    _resolve_durable_resume_job_id,
 )
 
 logger = logging.getLogger(__name__)
@@ -180,22 +183,34 @@ def render_job(self, ctx: JobContext, story_ref: Any, render_params: dict | None
                         "status": "approved",
                     }
         provider_call_started = True
-        result = self.video_client.render_video(
-            story_dict,
-            render_params=params,
+        # Initialize fallback chain (uses repository for attempt recording)
+        fallback_chain = create_fallback_chain(workflow_repository=self.workflow_repository)
+        def _operation(provider_kind: str) -> Any:
+            op_params = dict(params)
+            op_params["provider_kind"] = provider_kind
+            return self.video_client.render_video(
+                story_dict,
+                render_params=op_params,
+                workflow_id=ctx.workflow_id,
+                job_id=ctx.job_id,
+                idempotency_key=ctx.idempotency_key,
+                on_job_accepted=_checkpoint_accepted,
+                heartbeat_fn=ctx.heartbeat_fn,
+                owner_user_id=ctx.owner_user_id,
+                project_id=proj_id,
+                approval_request_id=appr_id,
+            )
+        result = fallback_chain.execute_with_fallback(
+            _operation,
             workflow_id=ctx.workflow_id,
-            job_id=ctx.job_id,
-            idempotency_key=ctx.idempotency_key,
-            on_job_accepted=_checkpoint_accepted,
-            heartbeat_fn=ctx.heartbeat_fn,
-            owner_user_id=ctx.owner_user_id,
-            project_id=proj_id,
-            approval_request_id=appr_id,
+            operation_name="render_video",
+            context={"project_id": proj_id, "owner_user_id": ctx.owner_user_id, "job_id": ctx.job_id, "idempotency_key": ctx.idempotency_key, "approval_request_id": appr_id},
         )
-
+        # result is tuple (render_result, provider_used)
+        render_result, used_provider = result
         if alloc:
             commit_budget(alloc)
-        res = JobSucceeded(artifact_ref=result, next_command={"command": "export_video"})
+        res = JobSucceeded(artifact_ref=render_result, next_command={"command": "export_video"})
         if cache_key:
             self._idempotency_cache[cache_key] = res
         return res

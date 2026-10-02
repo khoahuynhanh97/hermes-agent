@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import re
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from hermes_personal.application.events_api import EventsAPI, create_events_router
 from hermes_personal.application.health_api import HealthAPI, create_health_router
@@ -63,5 +66,19 @@ def create_application(
     app.include_router(events_router)
     app.include_router(turn_router)
     app.include_router(kanban_router)
+
+    # Mount the operator dashboard static assets + entrypoint
+    static_dir = Path(__file__).parent / "static"
+    if static_dir.exists():
+        app.mount("/operator/assets", StaticFiles(directory=static_dir), name="operator-assets")
+
+        @app.get("/operator", include_in_schema=False)
+        @app.get("/dashboard", include_in_schema=False)
+        async def operator_dashboard() -> FileResponse:
+            """Serve the Operator Dashboard HTML entrypoint."""
+            index = static_dir / "dashboard.html"
+            if not index.exists():
+                raise HTTPException(status_code=404, detail="Dashboard assets not built")
+            return FileResponse(index)
 
     return app
