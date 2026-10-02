@@ -276,9 +276,17 @@ def create_kanban_router(connection: sqlite3.Connection | None = None) -> APIRou
     router = APIRouter(prefix="/api/operator", tags=["operator"])
     
     def get_connection() -> sqlite3.Connection:
-        if connection is None:
-            raise HTTPException(status_code=500, detail="Database connection not configured")
-        return connection
+        if connection is not None:
+            return connection
+        try:
+            from hermes_constants import get_hermes_home
+            from hermes_personal.storage.sqlite import connect
+            db_path = get_hermes_home() / "hermes_personal.db"
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            return connect(db_path)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Database connection error: {exc}")
+
     
     @router.get("/kanban")
     async def get_kanban(
