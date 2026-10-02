@@ -71,6 +71,7 @@ def create_application(
     static_dir = Path(__file__).parent / "static"
     if static_dir.exists():
         app.mount("/operator/assets", StaticFiles(directory=static_dir), name="operator-assets")
+        app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
         @app.get("/operator", include_in_schema=False)
         @app.get("/dashboard", include_in_schema=False)
@@ -80,5 +81,14 @@ def create_application(
             if not index.exists():
                 raise HTTPException(status_code=404, detail="Dashboard assets not built")
             return FileResponse(index)
+
+        @app.get("/operator/dashboard.js", include_in_schema=False)
+        @app.get("/dashboard.js", include_in_schema=False)
+        async def operator_dashboard_js() -> FileResponse:
+            """Serve dashboard.js directly for convenience."""
+            js_file = static_dir / "dashboard.js"
+            if not js_file.exists():
+                raise HTTPException(status_code=404, detail="dashboard.js not found")
+            return FileResponse(js_file, media_type="application/javascript")
 
     return app
