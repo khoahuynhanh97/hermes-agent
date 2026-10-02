@@ -669,6 +669,9 @@ def connect(database_path: str | Path) -> sqlite3.Connection:
     connection = sqlite3.connect(database_path, check_same_thread=False)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("PRAGMA busy_timeout=10000")
+    connection.execute("PRAGMA synchronous=NORMAL")
     connection.executescript(SCHEMA)
     _migrate_schema(connection)
     return connection

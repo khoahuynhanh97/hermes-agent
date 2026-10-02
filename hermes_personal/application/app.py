@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import re
-
-from fastapi import FastAPI
+from typing import Any
 
 from fastapi import FastAPI
 
 from hermes_personal.application.events_api import EventsAPI, create_events_router
 from hermes_personal.application.health_api import HealthAPI, create_health_router
+from hermes_personal.application.kanban_api import create_kanban_router
 from hermes_personal.application.middleware import (
     TokenBucketRateLimiter,
     configure_security_middleware,
@@ -31,6 +31,7 @@ def create_application(
     cors_allowed_origins: list[str] | None = None,
     rate_limiter: TokenBucketRateLimiter | None = None,
     enable_security_middleware: bool = True,
+    kanban_connection: Any | None = None,
 ) -> FastAPI:
     """Create and configure the canonical Hermes personal application FastAPI instance."""
     app = FastAPI(
@@ -56,9 +57,11 @@ def create_application(
         normalizers=turn_normalizers,
         authenticator=turn_authenticator,
     )
+    kanban_router = create_kanban_router(connection=kanban_connection)
 
     app.include_router(health_router)
     app.include_router(events_router)
     app.include_router(turn_router)
+    app.include_router(kanban_router)
 
     return app
