@@ -16,7 +16,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from starlette.staticfiles import StaticFiles
 
 from hermes_personal.application.app import create_application
@@ -55,8 +55,13 @@ def compute_static_bundle_digest(directory: Path) -> str:
 
 def verify_static_bundle_digest(directory: Path, expected_digest: str) -> None:
     """Verify the static bundle digest matches expected value, raise if mismatched."""
+    if not directory.exists() or not directory.is_dir():
+        raise ValueError(f"Static bundle directory does not exist or is not a directory: {directory}")
+    index_file = directory / "index.html"
+    if not index_file.exists() or not index_file.is_file():
+        raise ValueError(f"Static bundle directory is missing index.html: {directory}")
     if not DIGEST_REGEX.match(expected_digest):
-        raise ValueError(f"Invalid digest format: {expected_digest}")
+        raise ValueError(f"Malformed static digest: {expected_digest}")
     actual_digest = compute_static_bundle_digest(directory)
     if not hmac.compare_digest(expected_digest, actual_digest):
         raise ValueError(
@@ -69,6 +74,7 @@ def create_proxy_application(
     static_dir: Path | None = None,
     api_key: str = "",
     owner_user_id: str = "local-owner",
+    browser_session_token: str = "",
     static_digest: str | None = None,
 ) -> FastAPI:
     """Create a FastAPI application that proxies requests to the Hermes gateway.
@@ -179,6 +185,37 @@ def create_proxy_application(
     @app.get("/api/artifacts/{artifact_id}")
     async def artifact(artifact_id: str, request: Request):
         return await proxy_buffered(request, f"/api/artifacts/{artifact_id}")
+
+    @app.get("/", response_class=HTMLResponse)
+    async def index():
+        token = browser_session_token or ""
+        owner = owner_user_id or "local-owner"
+
+        base_html = ""
+        if verified_static_dir is not None and (verified_static_dir / "index.html").exists():
+            base_html = (verified_static_dir / "index.html").read_text(encoding="utf-8")
+        else:
+            base_html = "<!DOCTYPE html><html><head></head><body><div id='app'></div></body></html>"
+
+        injection = (
+            f'<script>\n'
+            f'window.__HERMES_SESSION_TOKEN__="{token}";\n'
+            f'window.__HERMES_OWNER_ID__="{owner}";\n'
+            f'document.cookie = "hermes_session={token}; path=/; SameSite=Strict";\n'
+            f'</script>'
+        )
+
+        if "</head>" in base_html:
+            content = base_html.replace("</head>", f"{injection}\n</head>", 1)
+        elif "<body>" in base_html:
+            content = base_html.replace("<body>", f"<body>\n{injection}", 1)
+        else:
+            content = f"{injection}\n{base_html}"
+
+        resp = HTMLResponse(content=content, status_code=200)
+        if token:
+            resp.set_cookie("hermes_session", token, path="/", samesite="strict")
+        return resp
 
     if verified_static_dir is not None:
         app.mount("/", StaticFiles(directory=verified_static_dir, html=True), name="web")

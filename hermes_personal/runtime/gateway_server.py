@@ -370,6 +370,7 @@ def create_gateway_application(
             api_key, owner_user_id, external_subject
         ),
         cors_allowed_origins=allowed_origins,
+        kanban_connection=connection,
     )
 
     @app.get("/healthz", include_in_schema=False)

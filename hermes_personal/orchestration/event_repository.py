@@ -427,7 +427,7 @@ class EventRepository:
             FROM turn_event e
             JOIN turn_execution x ON e.turn_id = x.turn_id
             WHERE x.session_id = ? AND x.status IN ('completed', 'failed')
-            ORDER BY x.created_at, e.sequence
+            ORDER BY x.created_at, x.rowid, e.sequence
             """,
             (session_id,),
         ).fetchall()

@@ -71,12 +71,6 @@ def create_application(
     app.include_router(kanban_router)
     app.include_router(candidate_router)
 
-    @app.get("/", include_in_schema=False)
-    async def root_redirect() -> RedirectResponse:
-        """Redirect root to products catalog."""
-        return RedirectResponse(url="/products")
-
-
     # Mount the operator dashboard static assets + entrypoint
     static_dir = Path(__file__).parent / "static"
     if static_dir.exists():

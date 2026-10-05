@@ -92,11 +92,9 @@ class DailyCandidateService:
                 )
             # Otherwise, remains None to run explicit legacy source_root path
         else:
-            # Production path: strictly requires exchange inbox, never inspects Product-Intelligence internals
-            effective_inbox = self.inbox_root or DEFAULT_EXCHANGE_INBOX
             self._coordinator = ProductVideoCoordinator(
                 connection=self.connection,
-                inbox_root=effective_inbox,
+                inbox_root=self.inbox_root,
                 db_path=self.db_path,
             )
 

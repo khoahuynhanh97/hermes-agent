@@ -27,7 +27,7 @@ def test_dashboard_route_serves_html(client: TestClient) -> None:
     assert response.status_code == 200
     body = response.text
     assert "Hermes Operator" in body
-    assert "/operator/dashboard.js" in body
+    assert "/operator/assets/dashboard.js" in body
 
 
 def test_operator_alias_route_serves_html(client: TestClient) -> None:

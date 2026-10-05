@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from hermes_personal.observability.health import HealthReport, HealthStatus
-from hermes_personal.runtime.startup import StartupReport, StartupStepStatus
+from hermes_personal.runtime.startup import StartupReport, StartupStepRecord, StartupStepStatus
 
 
 @dataclass(frozen=True)

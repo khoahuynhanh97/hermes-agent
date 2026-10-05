@@ -11,7 +11,20 @@ from typing import Any, Callable
 from hermes_personal.integrations.product_intelligence.client import ProductIntelligenceClient
 from hermes_personal.integrations.video_factory.client import VideoFactoryClient
 from hermes_personal.capabilities.snapshots import CatalogSnapshot
-from hermes_personal.workflows.budgets import reserve_budget, commit_budget, release_budget, get_reservation
+import hermes_personal.product_video.handlers as handlers_pkg
+
+def reserve_budget(*args: Any, **kwargs: Any) -> Any:
+    return handlers_pkg.reserve_budget(*args, **kwargs)
+
+def commit_budget(*args: Any, **kwargs: Any) -> Any:
+    return handlers_pkg.commit_budget(*args, **kwargs)
+
+def release_budget(*args: Any, **kwargs: Any) -> Any:
+    return handlers_pkg.release_budget(*args, **kwargs)
+
+def get_reservation(*args: Any, **kwargs: Any) -> Any:
+    return handlers_pkg.get_reservation(*args, **kwargs)
+
 from hermes_personal.workflows.engine import WorkflowEngine
 from hermes_personal.product_video.qc.models import QCStage
 from hermes_personal.product_video.qc.repository import QCReportRepository
@@ -387,7 +400,7 @@ class ProductVideoJobHandlers:
             workflow_id=workflow_id,
             resource_pack=resource_pack,
             product=product_metadata,
-            repo=repo,
+            repo=None,
             attempt_id="preview_qc",
             owner_user_id=owner_user_id,
             project_id=project_id,
@@ -1018,7 +1031,6 @@ class ProductVideoJobHandlers:
             appr_id = kwargs.get("approval_request_id") or (kwargs.get("approval_receipt") or {}).get("approval_request_id")
 
             if self.keyframe_runtime_factory is not None:
-                runtime = self.keyframe_runtime_factory()
                 from hermes_personal.product_video.creative.contracts import ResearchDossier, ScriptScenePlanV2
                 from hermes_personal.product_video.creative.storyboard import (
                     compile_keyframe_requests,
@@ -1044,6 +1056,7 @@ class ProductVideoJobHandlers:
                                 message=f"Stored V2 scene plan failed validation: {exc}",
                             )
                 if dossier and script:
+                    runtime = self.keyframe_runtime_factory()
                     vf_storyboard = self.video_client.create_storyboard(
                         scene_ref,
                         workflow_id=ctx.workflow_id,
