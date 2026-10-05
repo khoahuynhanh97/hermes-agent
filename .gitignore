@@ -236,3 +236,8 @@ native/fts5_cjk/*.so
 /run_worker.bat
 /create_shortcut.vbs
 /launch_gui.vbs
+
+# Local tooling / generated artifacts (never commit)
+.codex-diagram-render/
+scratch/
+workspace/*.mp4

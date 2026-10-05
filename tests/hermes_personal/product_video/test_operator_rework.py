@@ -491,6 +491,13 @@ def test_recover_unknown_keyframe_submission_on_initial_attempt_without_previous
             error_code="PROVIDER_TIMEOUT",
         ),
     )
+    from hermes_personal.integrations.video_factory import keyframe_provider_factory
+
+    monkeypatch.setattr(
+        keyframe_provider_factory,
+        "resolve_keyframe_provider",
+        lambda output_dir: (VertexKeyframeProvider(output_dir=output_dir), "vertex_keyframe"),
+    )
 
     future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
     result = recover_unknown_keyframe_submission(

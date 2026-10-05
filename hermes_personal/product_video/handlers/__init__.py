@@ -1,17 +1,13 @@
-"""Product Video job handlers - modular implementation.
+"""Product Video job handlers.
 
-This package splits the monolithic handlers.py (2,866 lines) into focused modules:
+Layout:
 - common.py: Shared helper functions and config builders
-- _base.py: ProductVideoJobHandlers base class and infrastructure
-- qc_handler.py: QC retry and preview handlers (methods)
-- research_handler.py: Research, resource pack, and lock handlers (methods)
-- creative_handler.py: Creative brief, scene plan, and storyboard handlers (methods)
-- render_handler.py: Video rendering handler (methods)
-- export_handler.py: Video export handler (methods)
+- _base.py: ``ProductVideoJobHandlers`` - the single owner of all job handlers
 - registry.py: Module-level registration and workflow starter functions
 
-All methods are mixed into the ProductVideoJobHandlers class via the _base module.
-Public API and sub-components are re-exported here for 100% backward compatibility.
+Video rendering provider selection (Google Flow Playwright or Vertex AI) lives in
+``integrations/video_factory/server.py`` behind ``video_factory.render_providers``.
+Public API and sub-components are re-exported here for backward compatibility.
 """
 
 from __future__ import annotations

@@ -116,42 +116,27 @@ def create_product_video_topic_handlers(
             from hermes_personal.integrations.video_factory.keyframe_provider import (
                 KeyframeOperationStore,
                 KeyframeRuntime,
-                VertexKeyframeProvider,
             )
-            from hermes_personal.integrations.video_factory.google_flow_keyframe_provider import (
-                GoogleFlowKeyframeProvider,
+            from hermes_personal.integrations.video_factory.keyframe_provider_factory import (
+                resolve_keyframe_provider,
             )
             from hermes_personal.integrations.video_factory.capacity import (
                 ProviderCapacityStore, configured_capacity,
             )
             from hermes_personal.product_video.storage.layout import get_workspace_layout
-            from hermes_cli.config import load_config
 
-            workspace = get_workspace_layout().root
-            keyframe_output = workspace / "keyframes"
+            keyframe_output = get_workspace_layout().root / "keyframes"
 
-            cfg = load_config()
-            vf_cfg = cfg.get("video_factory", {}) if isinstance(cfg, dict) else {}
-            kf_pref = str(vf_cfg.get("keyframe_provider", "google_flow")).strip().lower()
-
-            if kf_pref == "google_flow":
-                flow_provider = GoogleFlowKeyframeProvider.from_config(output_dir=keyframe_output)
-                if flow_provider.is_available():
-                    active_kf_provider = flow_provider
-                    cap_kind = "google_flow"
-                else:
-                    active_kf_provider = VertexKeyframeProvider(output_dir=keyframe_output)
-                    cap_kind = "vertex_keyframe"
-            else:
-                active_kf_provider = VertexKeyframeProvider(output_dir=keyframe_output)
-                cap_kind = "vertex_keyframe"
-
-            keyframe_runtime_factory = lambda: KeyframeRuntime(
-                store=KeyframeOperationStore(workflow_repository.conn),
-                provider=active_kf_provider,
-                capacity_store=ProviderCapacityStore(workflow_repository.conn),
-                capacity_limit=configured_capacity(cap_kind),
-            )
+            def keyframe_runtime_factory() -> KeyframeRuntime:
+                # Resolved per job so a missing Flow session fails that job
+                # (retryable by the operator) instead of blocking gateway start.
+                provider, cap_kind = resolve_keyframe_provider(keyframe_output)
+                return KeyframeRuntime(
+                    store=KeyframeOperationStore(workflow_repository.conn),
+                    provider=provider,
+                    capacity_store=ProviderCapacityStore(workflow_repository.conn),
+                    capacity_limit=configured_capacity(cap_kind),
+                )
         handlers_service = ProductVideoJobHandlers(
             pi_client=pi_client,
             video_client=video_client,

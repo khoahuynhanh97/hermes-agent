@@ -1123,9 +1123,9 @@ def recover_unknown_keyframe_submission(
     authorization: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Reconcile a quarantined keyframe call, then replace only missing frames."""
-    from hermes_personal.integrations.video_factory.keyframe_provider import (
-        KeyframeOperationStore,
-        VertexKeyframeProvider,
+    from hermes_personal.integrations.video_factory.keyframe_provider import KeyframeOperationStore
+    from hermes_personal.integrations.video_factory.keyframe_provider_factory import (
+        resolve_keyframe_provider,
     )
     from hermes_personal.integrations.video_factory.capacity import ProviderCapacityStore
     from hermes_personal.product_video.creative.contracts import ResearchDossier, ScriptScenePlanV2
@@ -1175,7 +1175,7 @@ def recover_unknown_keyframe_submission(
         raise ValueError("No unknown operation belongs to the approved Scene Plan")
 
     store = KeyframeOperationStore(connection)
-    provider = VertexKeyframeProvider(output_dir=get_workspace_layout().root / "keyframes")
+    provider, _ = resolve_keyframe_provider(get_workspace_layout().root / "keyframes")
     missing = []
     for item in matching:
         request = by_operation[item["operation_id"]]

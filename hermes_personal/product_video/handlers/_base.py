@@ -295,15 +295,6 @@ class ProductVideoJobHandlers:
                 message=f"Image QC failed after cleaning: {retry_qc_report.findings.get('recovery_reason', 'unknown')}"
             )
 
-    def _resolve_keyframe_provider(self) -> KeyframeGenerationPort:
-        """Resolve Google Flow Keyframe Provider for storyboard generation."""
-        from hermes_personal.integrations.video_factory.google_flow_keyframe_provider import GoogleFlowKeyframeProvider
-        # Path resolved from hermes config.yaml (standard hermes-personal location)
-        return GoogleFlowKeyframeProvider(
-            profile_path=Path.home() / ".config" / "hermes" / "google-flow-profile",
-            chrome_profile_directory="Default",
-        )
-
 
     def _validate_state_and_version(
         self,
