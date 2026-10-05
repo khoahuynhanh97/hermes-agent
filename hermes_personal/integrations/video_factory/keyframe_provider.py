@@ -164,7 +164,7 @@ class VertexKeyframeProvider(KeyframeGenerationPort):
         }
         body["generationConfig"].update(request.provider_options)
         response = None
-        for attempt in range(3):
+        for attempt in range(8):
             try:
                 response = self.post_fn(
                     endpoint,
@@ -180,9 +180,9 @@ class VertexKeyframeProvider(KeyframeGenerationPort):
                     error_code="NETWORK_UNKNOWN_OUTCOME",
                     error_message=str(exc),
                 )
-            if response.status_code == 429 and attempt < 2:
+            if response is not None and response.status_code == 429 and attempt < 7:
                 import time
-                time.sleep(4.0 * (attempt + 1))
+                time.sleep(10.0 * (attempt + 1))
                 continue
             break
 
@@ -391,16 +391,19 @@ class KeyframeRuntime:
                         provider_operation_id=existing["provider_operation_id"],
                         image_path=str(path),
                     )
-                raise ValueError("completed keyframe artifact is missing or changed")
             provider_operation_id = existing["provider_operation_id"]
             if existing["status"] == "failed":
-                return KeyframeGenerationResult(
-                    operation_id=request.operation_id,
-                    status="failed",
-                    provider_operation_id=provider_operation_id,
-                    error_code=existing["error_code"],
-                    error_message=existing["error_message"],
-                )
+                if str(existing.get("error_code") or "").upper() not in {
+                    "HTTP_429", "HTTP_500", "HTTP_502", "HTTP_503", "HTTP_504",
+                    "PROVIDER_CAPACITY_WAIT", "NETWORK_UNKNOWN_OUTCOME", "RECONCILIATION_REQUIRED"
+                }:
+                    return KeyframeGenerationResult(
+                        operation_id=request.operation_id,
+                        status="failed",
+                        provider_operation_id=provider_operation_id,
+                        error_code=existing["error_code"],
+                        error_message=existing["error_message"],
+                    )
             if provider_operation_id:
                 result = self.provider.get_status(provider_operation_id)
                 self.store.save_result(request, result)

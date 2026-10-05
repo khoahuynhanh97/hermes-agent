@@ -21,13 +21,14 @@ from hermes_constants import get_hermes_home
 from hermes_personal.application.operator_handler import approve_and_advance_workflow
 from hermes_personal.product_video.automation.importer import DEFAULT_EXCHANGE_INBOX
 from hermes_personal.product_video.automation.repository import DailyImportRepository
-from hermes_personal.product_video.candidate_service import DailyCandidateService
 from hermes_personal.product_video.operator_console import render_operator_console_html
 from hermes_personal.storage.sqlite import connect
 
 
 def create_candidate_router(connection: sqlite3.Connection | None = None) -> APIRouter:
     """Create Candidate and Product Discovery API router."""
+    from hermes_personal.product_video.candidate_service import DailyCandidateService
+
     router = APIRouter(tags=["product-discovery"])
 
     def get_connection() -> sqlite3.Connection:

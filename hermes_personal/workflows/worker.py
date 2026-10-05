@@ -87,6 +87,13 @@ def run_worker(
             if _provider_mode == "configured"
             else None
         )
+        if tool_registry is None and _provider_mode == "configured":
+            try:
+                from tools.registry import registry
+                tool_registry = registry
+            except Exception:
+                pass
+
         topic_handlers = create_product_video_topic_handlers(
             workflow_engine=wf_engine,
             workflow_repository=wf_repo,
@@ -178,7 +185,12 @@ def main(argv: list[str] | None = None) -> int:
     from hermes_constants import get_hermes_home
 
     home = get_hermes_home()
-    db_path = Path(args.db_path) if args.db_path else home / "hermes.db"
+    if args.db_path:
+        db_path = Path(args.db_path)
+    elif (home / "hermes_personal.db").exists():
+        db_path = home / "hermes_personal.db"
+    else:
+        db_path = home / "hermes.db"
 
     # Bootstrap configuration and environment secrets
     try:

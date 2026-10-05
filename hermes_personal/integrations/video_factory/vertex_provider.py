@@ -26,7 +26,7 @@ SUPPORTED_ASPECT_RATIOS = frozenset({"9:16", "16:9"})
 SUPPORTED_RESOLUTIONS = frozenset({"720p", "1080p"})
 ALLOWED_DURATIONS = frozenset({4, 6, 8})
 DEFAULT_MODEL = "veo-3.1-generate-001"
-DEFAULT_LOCATION = "us-east4"
+DEFAULT_LOCATION = "us-central1"
 
 
 def mime_for(path: Path) -> str:

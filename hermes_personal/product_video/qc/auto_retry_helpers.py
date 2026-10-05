@@ -7,43 +7,39 @@ from typing import Any
 from hermes_personal.product_video.qc.models import QCReport, QCVerdict
 
 
-def is_cleanable_failure(qc_report: QCReport) -> bool:
-    """Determine if Image QC failure is recoverable via image cleaning (inpainting).
-    
-    Cleanable failures are caused by:
-    - Watermarks / seller branding
-    - Text overlays / promotional banners
-    - Marketplace badges
-    - Shop domain URLs
-    
-    Non-cleanable (terminal) failures:
-    - Missing or corrupted image files
-    - Insufficient image resolution
-    - No eligible images at all (score < 20)
-    - Fundamental product identity issues
-    
-    Args:
-        qc_report: Image QC report with verdict FAIL
-        
-    Returns:
-        True if failure is cleanable via inpainting, False if terminal
-    """
-    # Must be a FAIL verdict
-    if qc_report.verdict != QCVerdict.FAIL:
+def is_cleanable_failure(qc_report: QCReport | dict[str, Any] | Any) -> bool:
+    """Determine if Image QC failure is recoverable via image cleaning (inpainting)."""
+    if qc_report is None:
         return False
-    
+
+    if isinstance(qc_report, dict):
+        verdict = qc_report.get("verdict")
+        score = qc_report.get("score", 0)
+        findings = qc_report.get("findings", {})
+    else:
+        verdict = getattr(qc_report, "verdict", None)
+        score = getattr(qc_report, "score", 0)
+        findings = getattr(qc_report, "findings", {})
+
+    verdict_str = verdict.value if hasattr(verdict, "value") else str(verdict)
+    if verdict_str.lower() != "fail":
+        return False
+
     # Score too low indicates fundamental issues (missing files, corrupted, etc.)
-    if qc_report.score < 20:
+    if score < 20:
         return False
-    
+
+    if not isinstance(findings, dict):
+        findings = {}
+
     # Check recovery actions - "reacquire_references" means we need new images
-    recovery_actions = qc_report.findings.get("recovery_actions", [])
+    recovery_actions = findings.get("recovery_actions", [])
     if "reacquire_references" in recovery_actions:
         return False
-    
+
     # Check if any failed items have cleanable risk flags
-    items = qc_report.findings.get("items", [])
-    failed_items = [it for it in items if not it.get("eligible")]
+    items = findings.get("items", [])
+    failed_items = [it for it in items if isinstance(it, dict) and not it.get("eligible")]
     
     cleanable_risks = {"watermark", "logo", "text_overlay", "banner", "badge", "shop_domain"}
     

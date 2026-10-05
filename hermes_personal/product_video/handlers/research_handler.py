@@ -157,18 +157,23 @@ def resource_pack_job(self, ctx: JobContext, research_result: dict, **kwargs: An
         result_with_qc = dict(result)
         
         if qc_result:
+            qc_verdict = qc_result.get("verdict") if isinstance(qc_result, dict) else (qc_result.verdict.value if hasattr(qc_result.verdict, 'value') else str(qc_result.verdict))
+            qc_score = qc_result.get("score") if isinstance(qc_result, dict) else getattr(qc_result, "score", 0)
+            qc_findings = qc_result.get("findings", {}) if isinstance(qc_result, dict) else getattr(qc_result, "findings", {})
+            if not isinstance(qc_findings, dict):
+                qc_findings = {}
             result_with_qc["_initial_qc_preview"] = {
-                "verdict": qc_result.get("verdict") if isinstance(qc_result, dict) else (qc_result.verdict.value if hasattr(qc_result.verdict, 'value') else str(qc_result.verdict)),
-                "score": qc_result.get("score") if isinstance(qc_result, dict) else qc_result.score,
+                "verdict": qc_verdict,
+                "score": qc_score,
                 "is_cleanable": is_cleanable_failure(qc_result),
                 "findings_summary": {
-                    "eligible_count": len(qc_eligible),
-                    "total_items": len((qc_result.get("findings", {}) if isinstance(qc_result, dict) else qc_result.findings).get("items", [])),
+                    "eligible_count": len(qc_eligible) if qc_eligible is not None else 0,
+                    "total_items": len(qc_findings.get("items", [])),
                 }
             }
             
-            verdict = qc_result.get("verdict") if isinstance(qc_result, dict) else qc_result.verdict
-            if verdict == QCVerdict.FAIL and is_cleanable_failure(qc_result):
+            verdict_str = qc_verdict.value if hasattr(qc_verdict, "value") else str(qc_verdict)
+            if verdict_str.lower() == "fail" and is_cleanable_failure(qc_result):
                 # Cleanable failure - trigger auto-retry with image cleaning
                 res = JobSucceeded(
                     artifact_ref=result_with_qc,
