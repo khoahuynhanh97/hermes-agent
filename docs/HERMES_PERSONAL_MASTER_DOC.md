@@ -443,16 +443,11 @@ Nhằm chấm dứt tình trạng phân mảnh tài liệu do quá trình phát 
 - **`docs/hermes-personal/operations.md`:** Cẩm nang vận hành chi tiết.
 - **`docs/hermes-personal/product-video-runbook.md`:** Sổ tay thao tác chi tiết cho Video Factory.
 
-### 9.2 Nhóm Tài Liệu Di Sản / Đã Bị Thay Thế (Historical Archive / Superseded)
-> ⚠️ **CẢNH BÁO:** Các tài liệu dưới đây được lưu giữ lại làm lịch sử phát triển qua các cổng nghiệm thu (Gates). **TUYỆT ĐỐI KHÔNG ĐƯỢC DÙNG LÀM MỤC TIÊU CÀI ĐẶT HOẶC CĂN CỨ NGHIỆM THU HIỆN TẠI:**
-- Mọi tài liệu thiết kế specs có ngày cũ trong `docs/superpowers/specs/`:
-  - `2026-08-22-hermes-upstream-gateway-rearchitecture-design.md` (Thay thế bởi `docs/architecture.md`)
-  - `2026-09-11-phase-3-daily-product-automation-design.md` (Thay thế bởi `product-video-master-spec.md`)
-  - `2026-09-15-product-video-grounded-content-qc-design.md` (Thay thế bởi `product-video-master-spec.md`)
-  - `2026-09-15-product-video-one-day-mvp-design.md` (Thay thế bởi `product-video-master-spec.md`)
-- Mọi tài liệu gate plans trong `docs/superpowers/plans/`:
-  - Toàn bộ từ `2026-08-22-hermes-gateway-rearchitecture-gate-1.md` đến `gate-7.md`, `program.md`.
-  - Toàn bộ các plan từ 2026-08-28 đến 2026-09-16 (`2026-09-16-product-video-qc-happy-case-closure.md`, `product-lock-readiness.md`, v.v.) $\rightarrow$ Đã được hợp nhất vào `product-video-master-plan.md`.
+### 9.2 Nhóm Tài Liệu Di Sản / Đã Bị Thay Thế (Historical Archive: `docs/old/`)
+> ⚠️ **CẢNH BÁO:** Toàn bộ các tài liệu lịch sử, báo cáo sự cố cũ và các kế hoạch ngày đã được di chuyển tập trung vào thư mục `docs/old/` để tránh gây nhiễu cho luồng phát triển chính. **TUYỆT ĐỐI KHÔNG DÙNG LÀM MỤC TIÊU CÀI ĐẶT HOẶC CĂN CỨ NGHIỆM THU HIỆN TẠI:**
+- **`docs/old/legacy-root/`:** Các tài liệu phân tích và RCA cũ từ thư mục gốc (`billing-lifecycle.md`, `rca-ssl-cacert-post-git-pull.md`, `production-integrity-fixes-2026-09-18.md`).
+- **`docs/old/superpowers-specs/`:** Toàn bộ tài liệu thiết kế specs có ngày cũ (thay thế bởi `docs/architecture.md` và `product-video-master-spec.md`).
+- **`docs/old/superpowers-plans/`:** Toàn bộ các kế hoạch ngày cũ từ Gate 1 - Gate 7 và các plan 2026-08/2026-09 (đã được hợp nhất đầy đủ vào `product-video-master-plan.md`).
 
 ---
 

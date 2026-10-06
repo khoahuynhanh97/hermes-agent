@@ -66,8 +66,9 @@ from hermes_personal.product_video.handlers.common import (
     _locked_research_dossier,
 )
 
-logger = logging.getLogger(__name__)
+from hermes_personal.product_video.schemas import VideoWorkflowAggregate
 
+logger = logging.getLogger(__name__)
 
 
 class ProductVideoJobHandlers:
@@ -128,6 +129,26 @@ class ProductVideoJobHandlers:
         self.workflow_repository = workflow_repository or (workflow_engine.repo if workflow_engine else None)
         self.dispatcher = dispatcher
         self._idempotency_cache: dict[str, JobSucceeded] = {}
+
+    def _load_agg(self, workflow_id: str) -> tuple[VideoWorkflowAggregate, int]:
+        """Load workflow aggregate as Pydantic model and version."""
+        data = self.workflow_repository.get_workflow(workflow_id)
+        if data is None:
+            raise KeyError(f"Workflow {workflow_id} not found")
+        agg_dict, version = data
+        # The persisted aggregate is keyed by workflow_id in its own column and
+        # does not repeat it inline, so seed it before validating.
+        return VideoWorkflowAggregate.model_validate(
+            {"workflow_id": workflow_id, **agg_dict}
+        ), version
+
+    def _save_agg(self, agg: VideoWorkflowAggregate, version: int) -> None:
+        """Save Pydantic model to workflow repository."""
+        self.workflow_repository.commit_workflow(
+            workflow_id=agg.workflow_id,
+            aggregate_json=agg.model_dump_json(),
+            expected_version=version,
+        )
 
     def _resolve_pi_adapter(self, registry: Any | None) -> Any | None:
         effective_registry = registry or _get_global_tool_registry()

@@ -21,7 +21,16 @@ from hermes_personal.storage.sqlite import connect
 from hermes_personal.workflows.repository import WorkflowRepository
 
 
-DEFAULT_SOURCE_ROOT = Path(r"D:\work\Personal\Product-Intelligence\data\daily_runs")
+DEFAULT_SOURCE_ROOT = Path(r"D:\work\hermes-data\product-intelligence-data\daily_runs")
+FALLBACK_SOURCE_ROOT = Path(r"D:\work\Personal\Product-Intelligence\data\daily_runs")
+
+
+def get_default_source_root() -> Path:
+    if DEFAULT_SOURCE_ROOT.exists():
+        return DEFAULT_SOURCE_ROOT
+    if FALLBACK_SOURCE_ROOT.exists():
+        return FALLBACK_SOURCE_ROOT
+    return DEFAULT_SOURCE_ROOT
 
 from hermes_personal.product_video.automation.repository import (
     DailyImportRepository,

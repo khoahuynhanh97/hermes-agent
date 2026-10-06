@@ -146,10 +146,47 @@ function renderDetail(detail) {
   document.getElementById("m-sub").textContent =
     `${detail.state} · v${detail.version} · ${fmtTime(detail.created_at)}`;
 
+  renderPipeline(detail);
   renderDossier(detail);
   renderScenes(detail);
   renderQc(detail);
   renderApprovals(detail);
+}
+
+function renderPipeline(detail) {
+  const container = document.getElementById("m-pipeline");
+  if (!container) return;
+  clear(container);
+
+  const state = String(detail.state || "").toLowerCase();
+  const stages = [
+    { key: "product_lock", label: "1. Product Lock", done: !state.includes("product_lock") && state !== "researching", active: state.includes("product_lock") },
+    { key: "creative_brief", label: "2. Creative Brief", done: !state.includes("product_lock") && !state.includes("brief_approval") && state !== "building_resource_pack", active: state.includes("brief_approval") },
+    { key: "scene_plan", label: "3. Scene Plan", done: state.includes("storyboard") || state.includes("rendering") || state.includes("export") || state.includes("final") || state === "completed", active: state.includes("scene_plan") || state.includes("scene_approval") },
+    { key: "storyboard", label: "4. Storyboard & Cost", done: state.includes("rendering") || state.includes("export") || state.includes("final") || state === "completed", active: state.includes("storyboard") },
+    { key: "rendering", label: "5. Scene Renders (4 Scenes)", done: state.includes("export") || state.includes("final") || state === "completed", active: state.includes("rendering") || state.includes("waiting_for_operator") },
+    { key: "composite", label: "6. Final Composite Video", done: state === "completed", active: state.includes("final_approval") || state.includes("exporting") },
+  ];
+
+  stages.forEach((st, idx) => {
+    const node = el("div", "flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-medium transition");
+    if (st.done) {
+      node.className += " bg-emerald-500/15 border border-emerald-500/30 text-emerald-300";
+      node.innerHTML = `<span>🟢</span> <span>${st.label}</span>`;
+    } else if (st.active) {
+      node.className += " bg-amber-500/20 border border-amber-500/40 text-amber-300 animate-pulse";
+      node.innerHTML = `<span>🟡</span> <span>${st.label}</span>`;
+    } else {
+      node.className += " bg-slate-800/60 border border-slate-700/50 text-slate-500";
+      node.innerHTML = `<span>⚪</span> <span>${st.label}</span>`;
+    }
+    container.appendChild(node);
+
+    if (idx < stages.length - 1) {
+      const arrow = el("span", "text-slate-600 font-bold text-sm select-none", "➔");
+      container.appendChild(arrow);
+    }
+  });
 }
 
 function renderDossier(detail) {
@@ -190,6 +227,9 @@ function renderScenes(detail) {
   const plan = detail.scene_plan || {};
   const storyboard = detail.storyboard || detail.latest_artifact || {};
   const scenes = plan.scenes || storyboard.scenes || storyboard.generated_keyframes || [];
+  const sceneOps = Array.isArray(detail.scene_operations) ? detail.scene_operations : [];
+  const opsByOrder = {};
+  sceneOps.forEach(op => { opsByOrder[op.scene_order] = op; });
 
   if (!Array.isArray(scenes) || scenes.length === 0) {
     grid.appendChild(el("p", "text-xs text-slate-600 col-span-full", "No scenes yet."));
@@ -197,23 +237,89 @@ function renderScenes(detail) {
   }
 
   scenes.forEach((scene, index) => {
-    const card = el("div", "rounded-lg bg-slate-800/60 border border-slate-700 p-3 space-y-1.5");
-    const image = scene.image_url || scene.keyframe_url || scene.thumbnail_url;
-    if (image) {
-      const img = el("img", "w-full h-20 rounded object-cover");
-      img.src = image;
-      img.alt = scene.scene_id || `scene-${index + 1}`;
-      img.loading = "lazy";
-      card.appendChild(img);
+    const sceneOrder = index + 1;
+    const op = opsByOrder[sceneOrder];
+    const card = el("div", "rounded-xl bg-slate-900 border border-slate-700 p-3 space-y-2 flex flex-col justify-between");
+    
+    // Top media container (video if output exists or image keyframe)
+    const mediaBox = el("div", "w-full rounded-lg overflow-hidden bg-slate-950 aspect-[9/16] relative flex items-center justify-center");
+    
+    if (op && op.output_path && op.status === "completed") {
+      const video = document.createElement("video");
+      video.className = "w-full h-full object-cover rounded-lg";
+      video.src = `/api/artifacts/${encodeURIComponent(op.output_path)}`;
+      video.controls = true;
+      video.preload = "metadata";
+      mediaBox.appendChild(video);
+    } else {
+      const image = scene.image_url || scene.keyframe_url || scene.thumbnail_url;
+      if (image) {
+        const img = el("img", "w-full h-full object-cover");
+        img.src = image;
+        img.alt = scene.scene_id || `Scene ${sceneOrder}`;
+        img.loading = "lazy";
+        mediaBox.appendChild(img);
+      } else {
+        mediaBox.appendChild(el("span", "text-xs text-slate-600 font-mono", `Scene ${sceneOrder}`));
+      }
     }
-    const title = scene.scene_id || scene.frame_id || `Scene ${index + 1}`;
-    card.appendChild(el("p", "text-xs font-semibold text-slate-200", title));
+
+    // Status pill
+    if (op) {
+      const pill = el("span", "absolute top-2 right-2 px-2 py-0.5 rounded text-[10px] font-bold shadow");
+      if (op.status === "completed") pill.className += " bg-emerald-600 text-white";
+      else if (op.status === "running" || op.status === "submitting") pill.className += " bg-blue-600 text-white animate-pulse";
+      else if (op.status === "failed") pill.className += " bg-red-600 text-white";
+      else pill.className += " bg-slate-700 text-slate-300";
+      pill.textContent = `${op.status} (att ${op.attempt})`;
+      mediaBox.appendChild(pill);
+    }
+
+    card.appendChild(mediaBox);
+
+    // Metadata
+    const metaBox = el("div", "space-y-1");
+    const title = scene.scene_id || scene.frame_id || `Scene #${sceneOrder}`;
+    const headerRow = el("div", "flex items-center justify-between");
+    headerRow.appendChild(el("p", "text-xs font-bold text-slate-200", title));
     const duration = scene.duration || scene.duration_seconds;
-    if (duration) card.appendChild(el("span", "text-[10px] px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300", `${duration}s`));
-    if (scene.main_action) card.appendChild(el("p", "text-[11px] text-slate-400", scene.main_action));
-    if (scene.prompt) card.appendChild(el("p", "text-[11px] text-slate-500 line-clamp-3", scene.prompt));
+    if (duration) headerRow.appendChild(el("span", "text-[10px] px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300", `${duration}s`));
+    metaBox.appendChild(headerRow);
+
+    if (scene.main_action) metaBox.appendChild(el("p", "text-[11px] text-slate-300 line-clamp-2", scene.main_action));
+    if (scene.prompt) metaBox.appendChild(el("p", "text-[10px] text-slate-500 line-clamp-2 italic", scene.prompt));
+    card.appendChild(metaBox);
+
+    // Scene re-render action button
+    const actionBtn = el("button", "w-full py-1.5 rounded-lg bg-slate-800 hover:bg-sky-600 text-slate-200 hover:text-white text-xs font-semibold transition flex items-center justify-center gap-1 border border-slate-700 hover:border-sky-500");
+    actionBtn.innerHTML = `<span>🔄</span> <span>Tạo lại Scene #${sceneOrder}</span>`;
+    actionBtn.onclick = () => promptSceneReRender(detail.workflow_id, sceneOrder, scene.prompt);
+    card.appendChild(actionBtn);
+
     grid.appendChild(card);
   });
+}
+
+async function promptSceneReRender(workflowId, sceneOrder, currentPrompt) {
+  const customPrompt = prompt(`Tạo lại Scene #${sceneOrder}\nNhập prompt điều chỉnh (hoặc để trống để dùng prompt gốc):`, currentPrompt || "");
+  if (customPrompt === null) return; // User cancelled
+
+  try {
+    toast(`Đang yêu cầu re-render Scene #${sceneOrder}...`);
+    const res = await api(`/api/operator/workflow/${encodeURIComponent(workflowId)}/scene/re-render`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        workflow_id: workflowId,
+        scene_order: sceneOrder,
+        custom_prompt: customPrompt || undefined,
+      }),
+    });
+    toast(`✅ Đã kích hoạt re-render Scene #${sceneOrder}!`);
+    await openWorkflow(workflowId);
+  } catch (error) {
+    toast(`Lỗi re-render: ${error.message}`, true);
+  }
 }
 
 function verdictClass(verdict) {

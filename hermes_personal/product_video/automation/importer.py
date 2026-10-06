@@ -21,7 +21,9 @@ from .contracts import (
     compute_product_key,
 )
 
-DEFAULT_EXCHANGE_INBOX = Path(r"D:\work\Personal\hermes-product-video-exchange\inbox")
+DEFAULT_EXCHANGE_INBOX = Path(r"D:\work\hermes-data\product-intelligence-data\inbox")
+FALLBACK_EXCHANGE_INBOX = Path(r"D:\work\hermes-agent-data\product-intelligence\inbox")
+LEGACY_EXCHANGE_INBOX = Path(r"D:\work\Personal\hermes-product-video-exchange\inbox")
 _AMBIGUOUS_VARIANT = re.compile(r"\b\d+\s*[a-zA-Z]*\s*/\s*\d+", re.IGNORECASE)
 _URL_LIKE_NAME = re.compile(r"^[^\s/]+\.[a-z]{2,}(?:\.[a-z]{2,})?/", re.IGNORECASE)
 _PRICE_LIKE_MODEL = re.compile(r"^\d+(?:[.,]\d+)?\s*(?:k|tr|đ|vnd)$", re.IGNORECASE)
@@ -38,6 +40,17 @@ def _identity_words(value: str) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", normalized))
 
 
+def get_default_exchange_inbox() -> Path:
+    """Resolve exchange inbox root with fallback to legacy path."""
+    if DEFAULT_EXCHANGE_INBOX.exists():
+        return DEFAULT_EXCHANGE_INBOX
+    if FALLBACK_EXCHANGE_INBOX.exists():
+        return FALLBACK_EXCHANGE_INBOX
+    if LEGACY_EXCHANGE_INBOX.exists():
+        return LEGACY_EXCHANGE_INBOX
+    return DEFAULT_EXCHANGE_INBOX
+
+
 class ExchangeImporter:
     """Reads and validates versioned immutable exchange batches from inbox."""
 
@@ -46,7 +59,7 @@ class ExchangeImporter:
             self.inbox_root = Path(inbox_root)
         else:
             env_inbox = os.environ.get("HERMES_EXCHANGE_INBOX")
-            self.inbox_root = Path(env_inbox) if env_inbox else DEFAULT_EXCHANGE_INBOX
+            self.inbox_root = Path(env_inbox) if env_inbox else get_default_exchange_inbox()
 
     def find_latest_ready_batch(self, target_date: date | None = None) -> Path:
         """Locate the latest batch directory containing a valid READY signal file."""

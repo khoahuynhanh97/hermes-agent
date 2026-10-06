@@ -13,8 +13,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from hermes_personal.product_video.schemas import VideoWorkflowAggregate
 from hermes_personal.product_video import ProductVideoWorkflowState
-from hermes_personal.application.operator_handler import approve_and_advance_workflow
+from hermes_personal.application.operator_handler import (
+    approve_and_advance_workflow,
+    resume_video_scene_after_qc_failure,
+)
+from hermes_personal.integrations.video_factory.scene_renderer import SceneRenderOperationStore
 
 
 class ApprovalRequest(BaseModel):
@@ -26,6 +31,14 @@ class ApprovalRequest(BaseModel):
     qc_authorization: dict[str, Any] | None = None
     qc_max_cost_usd: float | None = None
     render_provider_kind: str | None = None
+
+
+class SceneReRenderRequest(BaseModel):
+    """Request body to trigger re-rendering of a single scene."""
+    workflow_id: str
+    scene_order: int = Field(..., ge=1, le=10, description="1-indexed scene order (e.g. 1, 2, 3, 4)")
+    provider_kind: str | None = Field(None, description="Optional provider kind (e.g. google_flow, vertex_veo)")
+    custom_prompt: str | None = Field(None, description="Optional prompt override for this scene retry")
 
 
 def _get_kanban_cards(connection: sqlite3.Connection, owner_user_id: str | None = None) -> dict[str, list[dict[str, Any]]]:
@@ -128,7 +141,9 @@ def _get_workflow_detail(connection: sqlite3.Connection, workflow_id: str) -> di
     if not row:
         raise ValueError(f"Workflow {workflow_id} not found")
     
-    agg = json.loads(row["aggregate_json"])
+    # Use Pydantic model for validation and clean serialization
+    agg_dict = json.loads(row["aggregate_json"])
+    agg = VideoWorkflowAggregate.model_validate(agg_dict)
     
     # Fetch approval history (table may not exist in all environments)
     approvals = []
@@ -212,26 +227,56 @@ def _get_workflow_detail(connection: sqlite3.Connection, workflow_id: str) -> di
     except sqlite3.OperationalError:
         pass
     
-    return {
-        "workflow_id": workflow_id,
+    # Fetch scene operations (rendered clips status per scene)
+    scene_operations = []
+    try:
+        render_result = agg_dict.get("render_result") or {}
+        batch_id = render_result.get("render_id") or ""
+        if batch_id:
+            scene_rows = connection.execute(
+                """
+                SELECT operation_id, scene_id, scene_order, attempt, status,
+                       output_path, provider_kind, updated_at
+                FROM video_factory_scene_operation
+                WHERE render_batch_id = ?
+                ORDER BY scene_order ASC, attempt DESC
+                """,
+                (batch_id,),
+            ).fetchall()
+            seen_scenes: set[int] = set()
+            for r in scene_rows:
+                order = r["scene_order"]
+                if order not in seen_scenes:
+                    seen_scenes.add(order)
+                    scene_operations.append({
+                        "operation_id": r["operation_id"],
+                        "scene_id": r["scene_id"],
+                        "scene_order": order,
+                        "attempt": r["attempt"],
+                        "status": r["status"],
+                        "output_path": r["output_path"],
+                        "provider_kind": r["provider_kind"],
+                        "updated_at": r["updated_at"],
+                    })
+    except sqlite3.OperationalError:
+        pass
+    
+    # Return the validated model as a dictionary
+    return agg.model_dump(
+        include={
+            "workflow_id", "state", "owner_user_id", "created_at",
+            "research_dossier", "creative_brief", "scene_plan", "storyboard",
+            "render_result", "export_result", "qc_authorization",
+            "pending_approval_id", "pending_approval_gate"
+        }
+    ) | {
         "version": row["version"],
-        "state": agg.get("state"),
-        "owner_user_id": agg.get("owner_user_id"),
-        "created_at": agg.get("created_at"),
-        "research_dossier": agg.get("research_dossier"),
-        "creative_brief": agg.get("creative_brief"),
-        "scene_plan": agg.get("scene_plan"),
-        "storyboard": agg.get("storyboard"),
-        "render_result": agg.get("render_result"),
-        "export_result": agg.get("export_result"),
-        "latest_artifact": agg.get("latest_artifact"),
         "qc_reports": qc_reports,
         "approval_history": approvals,
         "budget_ledger": budget_ledger,
-        "qc_authorization": agg.get("qc_authorization"),
-        "pending_approval_id": agg.get("pending_approval_id"),
-        "pending_approval_gate": agg.get("pending_approval_gate"),
+        "scene_operations": scene_operations,
     }
+
 
 
 async def _event_stream(connection: sqlite3.Connection, owner_user_id: str | None = None) -> AsyncGenerator[str, None]:
@@ -368,5 +413,65 @@ def create_kanban_router(connection: sqlite3.Connection | None = None) -> APIRou
         
         # TODO: Implement actual rework logic in operator_handler
         return {"status": "rework_requested", "workflow_id": request.workflow_id}
+
+    @router.post("/workflow/{workflow_id}/scene/re-render")
+    async def re_render_scene(
+        workflow_id: str,
+        request: SceneReRenderRequest,
+        conn: sqlite3.Connection = Depends(get_connection),
+    ) -> dict[str, Any]:
+        """Granular scene re-render endpoint. Rerenders a single scene and resumes batch."""
+        if workflow_id != request.workflow_id:
+            raise HTTPException(status_code=400, detail="Mismatched workflow_id in path and body")
+        
+        try:
+            scene_store = SceneRenderOperationStore(conn)
+            result = resume_video_scene_after_qc_failure(
+                connection=conn,
+                scene_store=scene_store,
+                workflow_id=workflow_id,
+                owner_user_id="local-owner",
+                scene_order=request.scene_order,
+                provider_kind=request.provider_kind,
+            )
+            return {"ok": True, "result": result}
+        except (KeyError, ValueError) as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @router.get("/product/{product_key}/workflows")
+    async def get_product_workflows(
+        product_key: str,
+        conn: sqlite3.Connection = Depends(get_connection),
+    ) -> dict[str, Any]:
+        """List all video workflows associated with a product (up to 10 videos)."""
+        try:
+            rows = conn.execute(
+                """
+                SELECT workflow_id, aggregate_json, version
+                FROM workflow
+                WHERE json_extract(aggregate_json, '$.source_context.product_key') = ?
+                   OR workflow_id LIKE ?
+                ORDER BY json_extract(aggregate_json, '$.created_at') ASC
+                LIMIT 10
+                """,
+                (product_key, f"%{product_key}%"),
+            ).fetchall()
+
+            workflows = []
+            for r in rows:
+                agg = json.loads(r["aggregate_json"])
+                workflows.append({
+                    "workflow_id": r["workflow_id"],
+                    "state": agg.get("state"),
+                    "version": r["version"],
+                    "created_at": agg.get("created_at"),
+                    "video_url": (agg.get("latest_artifact") or {}).get("video_url") or (agg.get("export_result") or {}).get("video_path"),
+                    "thumbnail_url": (agg.get("latest_artifact") or {}).get("thumbnail_url"),
+                })
+            return {"ok": True, "product_key": product_key, "workflows": workflows}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
     return router

@@ -9,7 +9,7 @@ from hermes_cli.plugins import PluginManager
 from hermes_personal.runtime.cli import handle_start, setup_start_parser
 from hermes_personal.runtime.config import RuntimeConfig
 from hermes_personal.runtime.plugin import register as register_start_plugin
-from hermes_personal.runtime.readiness import StartupReport, StartupStepRecord, StartupStepStatus
+from hermes_personal.runtime.startup import StartupReport, StartupStepRecord, StartupStepStatus
 
 
 def test_setup_start_parser_defines_exact_flags_and_choices():

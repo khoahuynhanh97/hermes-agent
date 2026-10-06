@@ -10,7 +10,9 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_VIDEO_AI_HUB = Path(r"D:\work\VideoAI")
+DEFAULT_VIDEO_AI_HUB = Path(r"D:\work\hermes-data\video-ai-data")
+FALLBACK_VIDEO_AI_HUB = Path(r"D:\work\hermes-agent-data\VideoAI")
+LEGACY_VIDEO_AI_HUB = Path(r"D:\work\VideoAI")
 
 
 def get_video_ai_hub_root() -> Path:
@@ -34,6 +36,12 @@ def get_video_ai_hub_root() -> Path:
     except Exception:
         pass
     
+    if DEFAULT_VIDEO_AI_HUB.exists():
+        return DEFAULT_VIDEO_AI_HUB
+    if FALLBACK_VIDEO_AI_HUB.exists():
+        return FALLBACK_VIDEO_AI_HUB
+    if LEGACY_VIDEO_AI_HUB.exists():
+        return LEGACY_VIDEO_AI_HUB
     return DEFAULT_VIDEO_AI_HUB
 
 

@@ -15,7 +15,16 @@ from .importer import DEFAULT_EXCHANGE_INBOX, publish_daily_run_to_exchange
 from .repository import DailyImportRepository
 
 
-DEFAULT_SOURCE_ROOT = Path(r"D:\work\Personal\Product-Intelligence\data\daily_runs")
+DEFAULT_SOURCE_ROOT = Path(r"D:\work\hermes-data\product-intelligence-data\daily_runs")
+FALLBACK_SOURCE_ROOT = Path(r"D:\work\Personal\Product-Intelligence\data\daily_runs")
+
+
+def get_default_source_root() -> Path:
+    if DEFAULT_SOURCE_ROOT.exists():
+        return DEFAULT_SOURCE_ROOT
+    if FALLBACK_SOURCE_ROOT.exists():
+        return FALLBACK_SOURCE_ROOT
+    return DEFAULT_SOURCE_ROOT
 
 
 def publish_daily_batch(

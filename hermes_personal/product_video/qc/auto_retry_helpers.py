@@ -32,34 +32,32 @@ def is_cleanable_failure(qc_report: QCReport | dict[str, Any] | Any) -> bool:
     if not isinstance(findings, dict):
         findings = {}
 
-    # Check recovery actions - "reacquire_references" means we need new images
-    recovery_actions = findings.get("recovery_actions", [])
-    if "reacquire_references" in recovery_actions:
-        return False
-
     # Check if any failed items have cleanable risk flags
     items = findings.get("items", [])
     failed_items = [it for it in items if isinstance(it, dict) and not it.get("eligible")]
-    
     cleanable_risks = {"watermark", "logo", "text_overlay", "banner", "badge", "shop_domain"}
-    
+
+    cleanable_count = 0
     for item in failed_items:
         if not isinstance(item, dict):
             continue
-        
-        findings = item.get("findings", {})
-        if not isinstance(findings, dict):
+        findings_item = item.get("findings", {})
+        if not isinstance(findings_item, dict):
             continue
-            
-        risk_flags = findings.get("risk_flags", [])
+        risk_flags = findings_item.get("risk_flags", [])
         if not isinstance(risk_flags, list):
             continue
-        
-        item_risks = set(risk_flags)
-        if item_risks & cleanable_risks:
-            return True  # Found at least one cleanable issue
-    
-    return False
+        if set(risk_flags) & cleanable_risks:
+            cleanable_count += 1
+
+    # Check recovery actions - if reacquire_references is present without any cleanable items, it's non-cleanable
+    recovery_actions = findings.get("recovery_actions", [])
+    if "reacquire_references" in recovery_actions:
+        eligible_count = len([it for it in items if isinstance(it, dict) and it.get("eligible")])
+        if eligible_count + cleanable_count < 2 or cleanable_count == 0:
+            return False
+
+    return cleanable_count > 0
 
 
 def extract_artifacts_from_qc(qc_report: QCReport) -> list[dict[str, Any]]:

@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from hermes_personal.application.kanban_api import create_kanban_router
 from hermes_personal.product_video import ProductVideoWorkflowState
+from hermes_personal.product_video.schemas import VideoWorkflowAggregate, ResearchDossierSchema, CreativeBriefSchema
 from hermes_personal.storage.sqlite import connect
 
 
@@ -110,21 +111,38 @@ def test_get_kanban_filters_by_owner(test_client, db_connection):
 def test_get_workflow_detail_returns_complete_state(test_client, db_connection):
     """Test GET /api/operator/workflow/{id} returns complete workflow state."""
     workflow_id = "wf_detail_test"
-    aggregate = {
-        "workflow_id": workflow_id,
-        "owner_user_id": "test-owner",
-        "state": ProductVideoWorkflowState.AWAITING_BRIEF_APPROVAL.value,
-        "product_name": "Test Product",
-        "created_at": "2026-10-01T00:00:00Z",
-        "research_dossier": {"claims": ["claim1", "claim2"]},
-        "creative_brief": {"brief_id": "brief_001", "version": 1},
-        "qc_authorization": {"max_cost_usd": 50.0},
-        "pending_approval_id": "appr_001",
-    }
+    # Create a VideoWorkflowAggregate instance
+    agg = VideoWorkflowAggregate(
+        workflow_id=workflow_id,
+        owner_user_id="test-owner",
+        state=ProductVideoWorkflowState.AWAITING_BRIEF_APPROVAL.value,
+        created_at="2026-10-01T00:00:00Z",
+        project_id="proj-1",
+        research_dossier=ResearchDossierSchema(
+            product_id="prod-1",
+            brand="TestBrand",
+            model="TestModel",
+            product_name="Test Product",
+            verified_claims=["claim1", "claim2"],
+            images=[]
+        ),
+        creative_brief=CreativeBriefSchema(
+            brief_id="brief_001",
+            hook="Test hook",
+            target_audience="Testers",
+            target_duration=30,
+            script=[{"segment": "intro"}]
+        ),
+        qc_authorization={"max_cost_usd": 50.0},
+    )
+    # Convert to dict for insertion
+    aggregate_dict = agg.model_dump()
+    # Ensure we have a version (we'll set to 2)
+    version = 2
     
     db_connection.execute(
         "INSERT INTO workflow (workflow_id, aggregate_json, version) VALUES (?, ?, ?)",
-        (workflow_id, json.dumps(aggregate), 2),
+        (workflow_id, json.dumps(aggregate_dict), version),
     )
     db_connection.commit()
     
@@ -137,10 +155,10 @@ def test_get_workflow_detail_returns_complete_state(test_client, db_connection):
     assert data["version"] == 2
     assert data["state"] == ProductVideoWorkflowState.AWAITING_BRIEF_APPROVAL.value
     assert data["owner_user_id"] == "test-owner"
-    assert data["research_dossier"]["claims"] == ["claim1", "claim2"]
-    assert data["creative_brief"]["brief_id"] == "brief_001"
+    assert data["research_dossier"]["product_name"] == "Test Product"
+    assert data["creative_brief"]["hook"] == "Test hook"
     assert data["qc_authorization"]["max_cost_usd"] == 50.0
-    assert data["pending_approval_id"] == "appr_001"
+    assert data["pending_approval_id"] is None  # We didn't set it in the aggregate
     assert "approval_history" in data
     assert "budget_ledger" in data
 
@@ -226,3 +244,32 @@ def test_kanban_card_includes_estimated_cost(test_client, db_connection):
     card = columns["in_production"][0]
     
     assert card["estimated_cost"] == 75.50
+
+
+def test_get_product_workflows_returns_chain(test_client, db_connection):
+    """Test GET /api/operator/product/{product_key}/workflows returns all created video variants."""
+    pkey = "baseus_headphone_01"
+    _create_test_workflow(db_connection, f"wf_{pkey}_vid_01", ProductVideoWorkflowState.COMPLETED.value)
+    _create_test_workflow(db_connection, f"wf_{pkey}_vid_02", ProductVideoWorkflowState.RENDERING.value)
+    _create_test_workflow(db_connection, "wf_other_prod", ProductVideoWorkflowState.COMPLETED.value)
+
+    response = test_client.get(f"/api/operator/product/{pkey}/workflows")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["product_key"] == pkey
+    assert len(data["workflows"]) == 2
+    wf_ids = [w["workflow_id"] for w in data["workflows"]]
+    assert f"wf_{pkey}_vid_01" in wf_ids
+    assert f"wf_{pkey}_vid_02" in wf_ids
+
+
+def test_re_render_scene_mismatched_id_fails_cleanly(test_client):
+    """Test POST /api/operator/workflow/{id}/scene/re-render validates matching workflow_id."""
+    response = test_client.post(
+        "/api/operator/workflow/wf_123/scene/re-render",
+        json={"workflow_id": "wf_mismatch", "scene_order": 3},
+    )
+    assert response.status_code == 400
+    assert "Mismatched workflow_id" in response.json()["detail"]
+

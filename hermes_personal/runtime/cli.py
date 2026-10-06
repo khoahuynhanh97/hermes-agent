@@ -114,3 +114,15 @@ def handle_start(args: argparse.Namespace) -> int:
 
     exit_code = supervisor.run()
     return exit_code
+
+
+def main() -> int:
+    """Main CLI entry point for hermes_personal.runtime.cli."""
+    parser = argparse.ArgumentParser(description="Hermes Personal runtime supervisor")
+    setup_start_parser(parser)
+    args = parser.parse_args()
+    return handle_start(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

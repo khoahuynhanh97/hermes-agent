@@ -391,17 +391,20 @@ def render_operator_console_html(initial_candidates: list[dict[str, Any]] | None
                 <span class="text-xs text-slate-300 font-medium">Chọn tạo</span>
               </label>
               <button onclick="startSingleProduct('${{safePkey}}')" class="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded shadow transition">
-                Tạo Video
+                Tạo Video #1
               </button>
             </div>
           `;
         }} else if (isLock) {{
           actionAreaHtml = `
-            <div class="pt-3 border-t border-[var(--border)] flex justify-end">
-              <button onclick="openProductLockReview('${{safeWfId}}', '${{safeAppId}}')" class="w-full py-1.5 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white text-xs font-bold rounded-lg shadow transition flex items-center justify-center gap-1.5">
+            <div class="pt-3 border-t border-[var(--border)] flex items-center justify-between gap-2">
+              <button onclick="openProductLockReview('${{safeWfId}}', '${{safeAppId}}')" class="flex-1 py-1.5 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white text-xs font-bold rounded-lg shadow transition flex items-center justify-center gap-1.5">
                 <span>🔍</span>
-                <span>Review Product Lock</span>
+                <span>Review Lock</span>
               </button>
+              <a href="/dashboard" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg text-xs font-medium border border-slate-700">
+                Kanban
+              </a>
             </div>
           `;
         }} else if (isInvalid) {{
@@ -412,16 +415,34 @@ def render_operator_console_html(initial_candidates: list[dict[str, Any]] | None
           `;
         }} else if (isInProd) {{
           actionAreaHtml = `
-            <div class="pt-3 border-t border-[var(--border)] flex items-center justify-between text-xs text-slate-400">
-              <span>Workflow: <code class="text-blue-400 font-mono text-[10px]">${{safeWfId || '-'}}</code></span>
-              <span class="text-blue-400 font-medium">Researching...</span>
+            <div class="pt-3 border-t border-[var(--border)] space-y-2 text-xs">
+              <div class="flex items-center justify-between text-slate-400">
+                <span>Workflow: <code class="text-blue-400 font-mono text-[10px]">${{safeWfId || '-'}}</code></span>
+                <span class="text-blue-400 font-medium animate-pulse">In Production</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <a href="/dashboard" class="flex-1 py-1 text-center bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/30 rounded text-[11px] font-semibold transition">
+                  📊 Xem Pipeline Node
+                </a>
+              </div>
             </div>
           `;
         }} else if (isCompleted) {{
           actionAreaHtml = `
-            <div class="pt-3 border-t border-[var(--border)] flex items-center justify-between text-xs text-emerald-400">
-              <span>Đã xuất bản video</span>
-              <span class="text-[10px] font-mono">${{safeWfId || ''}}</span>
+            <div class="pt-3 border-t border-[var(--border)] space-y-2 text-xs">
+              <div class="flex items-center justify-between text-emerald-400">
+                <span>✅ Đã xuất bản video</span>
+                <span class="text-[10px] font-mono">${{safeWfId || ''}}</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <a href="/dashboard" class="flex-1 py-1 text-center bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 rounded text-[11px] font-semibold transition">
+                  🎬 Xem Video
+                </a>
+                <button onclick="startSingleProduct('${{safePkey}}')" title="Tạo thêm 1 video phiên bản mới (Angle/Hook khác)" class="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-[11px] font-semibold transition flex items-center gap-1">
+                  <span>➕</span>
+                  <span>Tạo Video Tiếp</span>
+                </button>
+              </div>
             </div>
           `;
         }}

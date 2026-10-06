@@ -53,6 +53,14 @@
     </div>
 
     <div class="px-6 py-5 space-y-6">
+      <!-- Visual Pipeline Stepper (n8n-style graph) -->
+      <section class="rounded-xl bg-slate-950/60 border border-slate-800 p-4">
+        <h3 class="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3 flex items-center gap-2">
+          <span>⚡</span> Workflow Execution Graph
+        </h3>
+        <div id="m-pipeline" class="flex flex-wrap items-center gap-2 text-xs"></div>
+      </section>
+
       <!-- Grounded dossier -->
       <section>
         <h3 class="text-sm font-semibold text-slate-300 mb-2">📚 Grounded Dossier &amp; Script</h3>
@@ -61,8 +69,11 @@
 
       <!-- Scene / keyframe grid -->
       <section>
-        <h3 class="text-sm font-semibold text-slate-300 mb-2">🎞️ Keyframes &amp; Scenes</h3>
-        <div id="m-scenes" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"></div>
+        <div class="flex items-center justify-between mb-2">
+          <h3 class="text-sm font-semibold text-slate-300">🎞️ Keyframes &amp; Scenes Studio</h3>
+          <span class="text-[11px] text-slate-500">Xem video từng scene &amp; chọn render lại scene lỗi</span>
+        </div>
+        <div id="m-scenes" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3"></div>
       </section>
 
       <!-- QC scorecard -->

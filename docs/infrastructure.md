@@ -113,6 +113,28 @@ timed out.
   logs.
 - Test restore procedures with event replay and workflow version checks.
 
+## Centralized Data Storage Hub (`D:\work\hermes-data`)
+
+The local persistent storage layout is canonically consolidated under `D:\work\hermes-data`:
+
+```text
+D:\work\hermes-data\
+├── product-intelligence-data/   # Scraped products, daily runs, and exchange inbox
+│   ├── daily_runs/              # Daily crawls and raw media
+│   └── inbox/                   # READY exchange batches for Video Factory
+├── video-ai-data/               # Final video deliverables hub (index.html, MP4s)
+├── hermes-knowledge-data/       # Knowledge base, Obsidian vault, approved lessons
+│   ├── obsidian/                # Wikilink markdown notes
+│   └── database/                # Approved lessons, index.json
+└── system/                      # Internal runtime storage (isolated from business media)
+    ├── db/                      # hermes.db, video_factory.sqlite
+    ├── workspaces/              # Render scratch workspaces
+    ├── artifacts/               # Package artifacts
+    └── backups/                 # Database snapshots
+```
+
+Runtime code (`video_hub.py`, `importer.py`, `publisher.py`, `daily_importer.py`) dynamically reads from `D:\work\hermes-data` with transparent fallback guards to legacy paths.
+
 ## Known runtime gaps
 
 The MCP runner, durable worker, and Telegram runner now have importable entry

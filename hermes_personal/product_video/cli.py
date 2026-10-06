@@ -768,13 +768,29 @@ def cmd_approve(args: argparse.Namespace) -> int:
         # 2. Gate 4 Paid Render Cost Guard
         if gate_name == "AwaitingStoryboardApproval" or gate_name == ProductVideoWorkflowState.AWAITING_STORYBOARD_APPROVAL.value:
             if not getattr(args, "authorize_cost", False):
-                print(
-                    "\n[LỖI XÁC NHẬN CHI PHÍ] Cổng phê duyệt Storyboard (Gate 4) sẽ kích hoạt quá trình render video có trả phí (GPU/Vertex AI).\n"
-                    "Bắt buộc phải có sự đồng ý của operator.\n"
-                    "Vui lòng chạy lại lệnh với cờ '--authorize-cost' để xác nhận ủy quyền chi phí.",
-                    file=sys.stderr,
-                )
-                return 1
+                # Interactive prompt if running in interactive terminal
+                confirmed = False
+                if sys.stdin.isatty():
+                    try:
+                        print(
+                            "\n⚠️  [XÁC NHẬN CHI PHÍ RENDER] Cổng Gate 4 (Storyboard) sẽ kích hoạt quá trình render video có trả phí (GPU/Vertex AI).\n"
+                            "    - Hạn mức tiêu chuẩn: ~$1.50 - $2.00 / video.\n"
+                        )
+                        choice = input("👉 Bạn có đồng ý ủy quyền thanh toán và tiếp tục render không? [y/N]: ").strip().lower()
+                        if choice in ("y", "yes", "co", "có", " đồng ý", "ok"):
+                            confirmed = True
+                            setattr(args, "authorize_cost", True)
+                    except (KeyboardInterrupt, EOFError):
+                        confirmed = False
+
+                if not confirmed:
+                    print(
+                        "\n[LỖI XÁC NHẬN CHI PHÍ] Cổng phê duyệt Storyboard (Gate 4) sẽ kích hoạt quá trình render video có trả phí (GPU/Vertex AI).\n"
+                        "Bắt buộc phải có sự đồng ý của operator.\n"
+                        "Vui lòng chạy lại lệnh với cờ '--authorize-cost' để xác nhận ủy quyền chi phí.",
+                        file=sys.stderr,
+                    )
+                    return 1
 
         print(f"[*] Đang phê duyệt và kích hoạt bước tiếp theo cho: {target_id} (Cổng: {gate_name or 'N/A'})...")
         approval_payload: dict[str, Any] = {}

@@ -56,7 +56,17 @@ The Product Video pipeline has its own canonical specification and implementatio
 | [Product Video Master Spec](superpowers/specs/product-video-master-spec.md) | Architecture, contracts, state machine, QC policy, budget model, export schema |
 | [Product Video Master Plan](superpowers/plans/product-video-master-plan.md) | Phased implementation roadmap (P0-A → P0-B → P0 live → P0-C hardening) |
 
-> **Historical files** in `docs/superpowers/specs/` and `docs/superpowers/plans/` dated before 2026-09-16 are preserved for reference but are superseded by the canonical docs above. Do not use them as implementation targets.
+> **Archive note**: All historical specs, plans, and legacy RCA documents prior to 2026-09-16 have been moved to [`docs/old/`](old/) (`legacy-root/`, `superpowers-plans/`, `superpowers-specs/`) to maintain a clean context and avoid drift. They are preserved for audit purposes only and should not be used as implementation targets.
+
+## Centralized Data Storage Hub
+
+Persistent data, deliverables, and knowledge bases are centralized at `D:\work\hermes-data` (with graceful workspace fallback):
+- `product-intelligence-data/`: Daily scans (`daily_runs/`) and exchange inbox (`inbox/`).
+- `video-ai-data/`: Generated video deliverables, composites, captions, and catalog (`index.html`).
+- `hermes-knowledge-data/`: Governed learning artifacts and Obsidian notes.
+- `system/`: SQLite database files, operational workspaces, and backups.
+
+See [Infrastructure](infrastructure.md) for full layout and configuration details.
 
 ## Current implementation boundary
 

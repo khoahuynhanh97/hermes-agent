@@ -4,6 +4,7 @@ import json
 import sqlite3
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -339,7 +340,7 @@ def test_cli_approve_cost_guard_gate4(tmp_path: Path, capsys) -> None:
     )
     conn.close()
 
-    # 1. Attempt approve without --authorize-cost -> MUST FAIL with code 1
+    # 1. Attempt approve without --authorize-cost (non-interactive) -> MUST FAIL with code 1
     code_no_auth = main([
         "--db-path", str(db_path),
         "approve", req_id,
@@ -349,16 +350,16 @@ def test_cli_approve_cost_guard_gate4(tmp_path: Path, capsys) -> None:
     assert "LỖI XÁC NHẬN CHI PHÍ" in err_out.err
     assert "--authorize-cost" in err_out.err
 
-    # 2. Attempt approve with --authorize-cost in fake mode -> Advances successfully
-    code_with_auth = main([
-        "--db-path", str(db_path),
-        "approve", req_id,
-        "--authorize-cost",
-        "--provider-mode", "fake",
-    ])
-    assert code_with_auth == 0
-    out = capsys.readouterr().out
-    assert "PHÊ DUYỆT THÀNH CÔNG" in out
+    # 1b. Interactive approve prompt answered 'y' -> Advances successfully
+    with patch("sys.stdin.isatty", return_value=True), patch("builtins.input", return_value="y"):
+        code_interactive = main([
+            "--db-path", str(db_path),
+            "approve", req_id,
+            "--provider-mode", "fake",
+        ])
+    assert code_interactive == 0
+    out_interactive = capsys.readouterr().out
+    assert "PHÊ DUYỆT THÀNH CÔNG" in out_interactive
 
 
 def test_cli_status_and_caption_completed(tmp_path: Path, capsys) -> None:
